@@ -1,0 +1,25 @@
+{
+  "filters": {
+    "comments": true
+  },
+  "rules": {
+    "preset-ja-technical-writing": {
+      "sentence-length": { "max": 120 },
+      "max-kanji-continuous-len": { "max": 8 },
+      "no-exclamation-question-mark": false,
+      "ja-no-mixed-period": false,
+      "no-doubled-joshi": { "min_interval": 1, "strict": false, "allow": ["も", "や", "か"] },
+      "ja-no-weak-phrase": false,
+      "ja-no-successive-word": true,
+      "no-mix-dearu-desumasu": {
+        "preferInHeader": "",
+        "preferInBody": "である",
+        "preferInList": "である",
+        "strict": false
+      }
+    },
+    "@textlint-ja/preset-ai-writing": {
+      "ai-tech-writing-guideline": false
+    }
+  }
+}

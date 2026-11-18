@@ -1,0 +1,13 @@
+# Paths whose Markdown files are in English only and need no Japanese
+# translation (ADR-0003). One entry per line: an entry that ends in "/" is a
+# directory, any other entry is a pattern for the whole path (Go path.Match).
+
+# Instructions for tools.
+.claude/
+.github/
+.vale/
+# A CLAUDE.md only imports the AGENTS.md next to it.
+CLAUDE.md
+
+# Generated.
+CHANGELOG.md

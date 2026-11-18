@@ -1,0 +1,14 @@
+# lychee checks links in Markdown. `make check` runs it offline (links between
+# files); `make check-all` also follows links that leave the repository.
+max_concurrency = 16
+max_retries = 2
+timeout = 20
+accept = ["200..=299", "429"]
+exclude = [
+  '^https?://localhost',
+  '^https?://127\.0\.0\.1',
+  '^https?://example\.(com|org)',
+  # The MySQL manual answers 403 to every automated client, so its links
+  # cannot be checked.
+  '^https://dev\.mysql\.com/',
+]

@@ -1,0 +1,31 @@
+# yamllint finds what Prettier does not: duplicate keys, ambiguous values, and
+# odd structure. Layout rules follow Prettier so the two never disagree.
+extends: default
+
+rules:
+  # Prettier owns line width; long strings and URLs stay on one line.
+  line-length: disable
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  indentation:
+    spaces: 2
+    indent-sequences: true
+  # `on:` in GitHub Actions workflows is a key, not a boolean.
+  truthy:
+    check-keys: false
+  octal-values: enable
+  quoted-strings:
+    quote-type: double
+    required: only-when-needed
+    # A string that holds double quotes, such as an ETag, is written in single
+    # quotes, as Prettier writes it.
+    allow-quoted-quotes: true
+    # A time of day such as "09:00" stays quoted: YAML 1.1 parsers read the
+    # bare form as a number in base 60.
+    extra-allowed:
+      - ^[0-9]{2}:[0-9]{2}$

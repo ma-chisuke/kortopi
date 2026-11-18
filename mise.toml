@@ -1,0 +1,53 @@
+# Every tool version is pinned here; mise.lock records the checksums.
+# Ecosystem packages are pinned by their own lockfiles:
+#   npm tools    -> package.json + pnpm-lock.yaml
+#   Python tools -> pyproject.toml + uv.lock
+#   Go tools     -> tools/go.mod (`tool` directives)
+# See ADR-0004 and ADR-0005.
+min_version = "2026.11.0"
+
+[settings]
+# Install only what mise.lock describes: same URL and checksum everywhere.
+locked = true
+lockfile_platforms = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"]
+
+[tools]
+# Runtimes. Node and Python run the linters of the documents and the
+# configuration files; kortopi itself is Go only.
+go = "1.27.4"
+node = "26.13.1"
+python = "3.14.10"
+
+# Package managers
+pnpm = "12.21.0"
+uv = "0.13.8"
+
+# Go
+golangci-lint = "2.15.0"
+
+# Shell
+shellcheck = "0.11.0"
+shfmt = "3.14.1"
+
+# GitHub Actions
+actionlint = "1.7.12"
+zizmor = "1.32.0"
+ghalint = "1.6.0"
+pinact = "5.0.2"
+
+# Security
+trivy = "0.76.2"
+gitleaks = "8.30.1"
+
+# Prose, spelling, and repository hygiene
+vale = "3.27.0"
+lychee = "0.24.2"
+typos = "1.52.2"
+taplo = "0.10.0"
+editorconfig-checker = "4.0.2"
+
+# Git hooks, coverage, and scripting
+lefthook = "2.2.2"
+"aqua:k1LoW/octocov" = "0.83.5"
+jq = "1.8.2"
+gh = "2.104.0"

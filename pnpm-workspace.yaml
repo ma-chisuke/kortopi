@@ -1,0 +1,20 @@
+# pnpm settings for the whole repository. See ADR-0005.
+
+# Supply chain: wait three days before a new release can be installed, pin exact
+# versions, refuse dependencies that are not from the registry, and refuse a
+# package whose publisher trust got weaker than in an earlier release.
+minimumReleaseAge: 4320
+saveExact: true
+blockExoticSubdeps: true
+trustPolicy: no-downgrade
+
+# Dependency build scripts do not run unless a package is listed in allowBuilds.
+strictDepBuilds: true
+
+# Security fixes that a direct dependency has not picked up yet. Remove an
+# entry when the dependency itself requires a fixed version.
+overrides:
+  # textlint 15.8.0 requires glob 13, which has CVE-2026-118773; glob 13 in
+  # turn requires minimatch 10, which has CVE-2026-118764.
+  glob: 14.0.6
+  minimatch@10: 11.0.8

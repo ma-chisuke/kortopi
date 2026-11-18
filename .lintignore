@@ -1,0 +1,19 @@
+# Paths that no check looks at: third-party files kept in the repository, and
+# files that a tool generates. One git pathspec per line.
+# tools/scripts/files.sh applies this list to every check.
+
+# Third-party
+.vale/styles/Google
+.claude/skills/japanese-tech-writing
+
+# Lockfiles. A pathspec without a wildcard matches at the root only.
+mise.lock
+pnpm-lock.yaml
+uv.lock
+go.sum
+*/go.sum
+
+# Generated
+CHANGELOG.md
+docs/generated
+*.gen.go

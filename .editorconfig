@@ -1,0 +1,34 @@
+# https://editorconfig.org
+# shfmt reads this file too, so shell style lives here and nowhere else.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.go]
+indent_style = tab
+indent_size = unset
+
+[{go.mod,go.sum}]
+indent_style = tab
+indent_size = unset
+
+[{Makefile,*.mk}]
+indent_style = tab
+indent_size = unset
+
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+shell_variant = bash
+binary_next_line = true
+switch_case_indent = true
+space_redirects = true
+
+[*.py]
+indent_size = 4

@@ -1,0 +1,16 @@
+# Normalize every text file to LF, on every platform.
+* text=auto eol=lf
+
+# Lockfiles and generated files: collapsed in pull request diffs.
+mise.lock linguist-generated
+pnpm-lock.yaml linguist-generated
+uv.lock linguist-generated
+go.sum linguist-generated
+*.gen.go linguist-generated
+docs/generated/** linguist-generated
+docs/adr/README.md linguist-generated
+docs/adr/README.ja.md linguist-generated
+
+# Third-party files kept in the repository.
+.vale/styles/Google/** linguist-vendored
+.claude/skills/japanese-tech-writing/** linguist-vendored

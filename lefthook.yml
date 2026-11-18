@@ -1,0 +1,22 @@
+# Git hooks for people. Agents get the same checks from .claude/settings.json.
+# The hooks call make, so a hook and CI cannot disagree. The one exception is
+# commit-msg, which runs the script that also checks pull request titles in CI.
+min_version: 2.2.0
+
+pre-commit:
+  jobs:
+    - name: format staged files
+      run: CHECK_SCOPE=staged make --no-print-directory fmt
+      stage_fixed: true
+    - name: check staged files
+      run: CHECK_SCOPE=staged make --no-print-directory check
+
+commit-msg:
+  jobs:
+    - name: conventional commit message
+      run: tools/scripts/commit-msg.sh {1}
+
+pre-push:
+  jobs:
+    - name: check
+      run: make --no-print-directory check

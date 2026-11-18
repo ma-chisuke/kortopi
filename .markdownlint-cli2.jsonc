@@ -1,0 +1,15 @@
+// markdownlint-cli2 configuration. Which files are checked is decided by the
+// Makefile (tools/scripts/files.sh), not here.
+{
+  "config": {
+    "default": true,
+    // One sentence or one paragraph per line; line width is not checked.
+    "MD013": false,
+    // An ADR repeats headings such as "Pros and Cons" under each option.
+    "MD024": { "siblings_only": true },
+    // Tables are written compactly and are not padded to equal widths.
+    "MD060": false,
+  },
+  "noBanner": true,
+  "noProgress": true,
+}

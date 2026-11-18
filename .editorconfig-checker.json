@@ -1,0 +1,8 @@
+{
+  "Verbose": false,
+  "Disable": {
+    "MaxLineLength": true,
+    "IndentSize": true
+  },
+  "Exclude": ["LICENSE"]
+}

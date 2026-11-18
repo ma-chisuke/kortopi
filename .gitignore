@@ -1,0 +1,33 @@
+# Dependencies and virtual environments
+node_modules/
+.venv/
+
+# Build and test output
+/bin/
+dist/
+coverage/
+*.out
+
+# Caches written by the tooling
+.cache/
+
+# Local-only configuration and secrets
+.env
+.env.*
+!.env.example
+mise.local.toml
+mise.local.lock
+lefthook-local.yml
+
+# Agent workspaces
+.claude/settings.local.json
+.claude/worktrees/
+
+# Scratch space
+/tmp/
+
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

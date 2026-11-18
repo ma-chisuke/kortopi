@@ -1,0 +1,21 @@
+# octocov reports test coverage. `make coverage` writes the profiles and
+# `make coverage-report` runs octocov. https://github.com/k1LoW/octocov
+# Nothing leaves GitHub: no datastore, no badge, and no links to octocov.dev.
+coverage:
+  paths:
+    - coverage/go.out
+  exclude:
+    - "**/*.gen.go"
+# Measuring the time needs read access to the Actions API; coverage does not.
+testExecutionTime:
+  if: false
+# Only on a pull_request event: after a merge, the push to main would comment
+# on the closed pull request.
+comment:
+  if: github.event_name == 'pull_request'
+  updatePrevious: true
+  hideFooterLink: true
+summary:
+  if: true
+  hideFooterLink: true
+viewer: none

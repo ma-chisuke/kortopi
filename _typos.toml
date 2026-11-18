@@ -1,0 +1,13 @@
+# typos finds misspellings in every file. Which files are checked is decided
+# by the Makefile (tools/scripts/files.sh).
+[default]
+locale = "en-us"
+extend-ignore-re = [
+  # Hashes and other long hexadecimal strings.
+  "\\b[0-9a-f]{32,}\\b",
+  # Pseudo-versions of Go modules end in a commit hash.
+  "v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-z.]*[0-9]{14}-[0-9a-f]{12}",
+]
+
+[default.extend-words]
+ND = "ND"

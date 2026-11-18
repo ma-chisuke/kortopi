@@ -1,0 +1,22 @@
+# gitleaks looks for secrets with its default rules. Directories that git
+# ignores hold dependencies and caches, and are skipped.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Dependencies and caches that git ignores"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)\.cache/''',
+  '''(^|/)\.git/''',
+  '''(^|/)\.claude/worktrees/''',
+  '''(^|/)tmp/''',
+]
+
+[[allowlists]]
+description = "The marker that records which version of the English file a translation matches (ADR-0003)"
+regexTarget = "line"
+regexes = [
+  '''<!-- i18n-source: \S+ sha256:[0-9a-f]{64} -->''',
+]

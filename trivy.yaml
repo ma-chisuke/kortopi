@@ -1,0 +1,62 @@
+# Trivy settings shared by every scan. https://trivy.dev/latest/docs/references/configuration/config-file/
+severity:
+  - MEDIUM
+  - HIGH
+  - CRITICAL
+
+# A finding must be something that can be acted on. A vulnerability that has
+# no fixed version yet cannot be fixed by an update, and it would fail every
+# pull request until its maintainers release one. So Trivy reports a
+# vulnerability from the day a fix exists; Renovate then opens the update at
+# once. Until then, Dependabot alerts on GitHub list it, and govulncheck
+# (`make vuln-go`) still fails when Go code that is called is affected.
+vulnerability:
+  ignore-unfixed: true
+
+# kortopi is distributed under MIT. A dependency under a strong copyleft or
+# a source-available license must not become part of its binary, so the
+# license scan fails on the licenses in `forbidden`
+# (Trivy rates them CRITICAL, and `make scan-deps` fails on CRITICAL only).
+# Weak copyleft (LGPL, MPL) is allowed: it covers the library itself, not the
+# code that uses it.
+#
+# A license must be in one list only. Trivy's default `restricted` list holds
+# the GPL family; with GPL in both lists, Trivy picked one of the two at
+# random, and the scan missed a GPL dependency in one run out of five. So
+# `restricted` is spelled out here without the licenses that are forbidden.
+license:
+  full: false
+  forbidden:
+    - AGPL-1.0
+    - AGPL-3.0
+    - GPL-1.0
+    - GPL-2.0
+    - GPL-3.0
+    - OSL-1.0
+    - OSL-1.1
+    - OSL-2.0
+    - OSL-2.1
+    - OSL-3.0
+    - QPL-1.0
+    - Sleepycat
+    - SSPL-1.0
+    - BUSL-1.1
+    - CC-BY-NC-1.0
+    - CC-BY-NC-2.0
+    - CC-BY-NC-2.5
+    - CC-BY-NC-3.0
+    - CC-BY-NC-4.0
+    - CC-BY-NC-ND-4.0
+    - CC-BY-NC-SA-4.0
+    - Commons-Clause
+  restricted:
+    - LGPL-2.0
+    - LGPL-2.1
+    - LGPL-3.0
+    - GPL-2.0-with-classpath-exception
+    - GPL-2.0-with-GCC-exception
+    - GPL-3.0-with-GCC-exception
+    - CC-BY-ND-4.0
+    - CC-BY-SA-4.0
+    - NPL-1.0
+    - NPL-1.1
