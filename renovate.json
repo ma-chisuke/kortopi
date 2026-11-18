@@ -1,0 +1,96 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Dependency updates for every pinned version in the repository; see docs/guides/github-settings.md.",
+    "Weekly, three days after a release, with Conventional Commit messages (build(deps): ...).",
+    "Patch, digest, and pin updates merge themselves when the required check passes; people review minor and major updates.",
+    "Security fixes skip the schedule."
+  ],
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(build)",
+    "schedule:weekly",
+    ":maintainLockFilesMonthly",
+    "helpers:pinGitHubActionDigestsToSemver",
+    "customManagers:githubActionsVersions"
+  ],
+  "dependencyDashboard": true,
+  "semanticCommits": "enabled",
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "platformAutomerge": true,
+  "postUpdateOptions": ["gomodTidy"],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "description": "Security fixes are proposed at once, outside the weekly schedule.",
+    "schedule": ["at any time"],
+    "labels": ["dependencies", "security"]
+  },
+  "customManagers": [
+    {
+      "description": "The lefthook schema that `make check-all` validates lefthook.yml against follows the lefthook version in mise.toml.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^make/repo\\.mk$/"],
+      "matchStrings": [
+        "raw\\.githubusercontent\\.com/evilmartians/lefthook/(?<currentValue>v\\d+\\.\\d+\\.\\d+)/schema\\.json"
+      ],
+      "depNameTemplate": "lefthook",
+      "packageNameTemplate": "evilmartians/lefthook",
+      "datasourceTemplate": "github-releases"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Patch, digest, and pin updates merge themselves once the required check passes.",
+      "matchUpdateTypes": ["patch", "digest", "pin", "pinDigest"],
+      "automerge": true
+    },
+    {
+      "description": "One pull request a week for the patch updates of each ecosystem.",
+      "matchManagers": ["mise"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "mise tools (patch)"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "npm packages (patch)"
+    },
+    {
+      "matchManagers": ["pep621"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "Python packages (patch)"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "digest", "pinDigest"],
+      "groupName": "GitHub Actions (patch)"
+    },
+    {
+      "description": "The textlint packages are released together.",
+      "matchPackageNames": ["textlint", "/^textlint-/", "/^@textlint(-ja)?\\//"],
+      "groupName": "textlint"
+    },
+    {
+      "description": "The go directive of every go.mod moves with the Go in mise.toml; Makefile sets GOTOOLCHAIN=local.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "rangeStrategy": "bump"
+    },
+    {
+      "matchDatasources": ["golang-version"],
+      "groupName": "Go"
+    },
+    {
+      "description": "pnpm in mise.toml, packageManager in package.json, and pnpm-lock.yaml name the same version.",
+      "matchDepNames": ["pnpm"],
+      "groupName": "pnpm"
+    },
+    {
+      "description": "lefthook in mise.toml and the schema URL in make/repo.mk name the same version.",
+      "matchDepNames": ["lefthook"],
+      "groupName": "lefthook"
+    }
+  ]
+}

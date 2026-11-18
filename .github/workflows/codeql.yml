@@ -1,0 +1,89 @@
+# CodeQL code scanning, in place of the default setup (which stays off).
+# The languages follow the code: `make codeql-languages` lists the ones that
+# have source files, because CodeQL fails on a language without any.
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Every Monday, for new queries and new advisories.
+    - cron: 27 3 * * 1
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # renovate: datasource=github-releases depName=jdx/mise extractVersion=^v(?<version>.+)$
+  MISE_VERSION: 2026.11.8
+
+jobs:
+  languages:
+    name: languages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.languages.outputs.matrix }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # make needs mise on the PATH; the target itself uses no tool.
+      - name: Install mise
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
+          cache: false
+      # The assignment fails the step when make fails; an argument of echo would not.
+      - name: make codeql-languages
+        id: languages
+        run: |
+          matrix="$(make --no-print-directory codeql-languages)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    name: analyze (${{ matrix.language }})
+    needs: languages
+    if: needs.languages.outputs.matrix != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # A private repository needs contents and actions as well.
+    permissions:
+      security-events: write # upload the results to code scanning
+      contents: read
+      actions: read # read the workflow run that the results belong to
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.languages.outputs.matrix) }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Go is built with the toolchain that mise.lock pins, not the one on the runner.
+      - name: Install Go
+        if: matrix.language == 'go'
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: go
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+      - name: Analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:${{ matrix.language }}

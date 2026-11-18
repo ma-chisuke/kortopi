@@ -1,0 +1,165 @@
+# The checks of the repository. Every step calls a make target, the same one
+# that people and agents run, so CI and a local run cannot disagree.
+# The ruleset of main requires the job `check` alone; it waits for every other
+# job, so adding a job never changes the ruleset.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+# A new run on the same branch or pull request cancels the older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The version of mise itself. mise.toml and mise.lock pin every other tool.
+  # renovate: datasource=github-releases depName=jdx/mise extractVersion=^v(?<version>.+)$
+  MISE_VERSION: 2026.11.8
+
+jobs:
+  # `make check` over every file, within its time budget.
+  fast:
+    name: fast
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The commit and its first parent, which CHECK_BASE names.
+          fetch-depth: 2
+      - name: Install mise and the tools in mise.lock
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
+      - name: Restore the dependency and build caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.local/share/pnpm/store
+            ~/.cache/uv
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/go/pkg/mod
+          key: deps-${{ runner.os }}-${{ hashFiles('mise.lock', 'pnpm-lock.yaml', 'uv.lock', '**/go.sum') }}
+          restore-keys: deps-${{ runner.os }}-
+      - name: make setup
+        run: make setup
+      - name: make check
+        run: make check
+        env:
+          # Every file is in scope; the base is the first parent
+          # (tools/scripts/merge-base.sh).
+          CHECK_BASE: HEAD^1
+      # The title becomes the commit message on main; report it even when
+      # `make check` failed.
+      - name: make lint-pr-title
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: make lint-pr-title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+
+  # `make check-all`: the fast checks and the slow ones that use the network
+  # or PostgreSQL, which the tests start in containers on the Docker of the
+  # runner. On a pull request it checks the files that the pull request
+  # changes; on main it checks every file.
+  full:
+    name: full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit of a pull request and its first parent, the base
+          # branch, which CHECK_BASE names.
+          fetch-depth: 2
+      - name: Install mise and the tools in mise.lock
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
+      - name: Restore the dependency and build caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.local/share/pnpm/store
+            ~/.cache/uv
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/go/pkg/mod
+          key: deps-${{ runner.os }}-${{ hashFiles('mise.lock', 'pnpm-lock.yaml', 'uv.lock', '**/go.sum') }}
+          restore-keys: deps-${{ runner.os }}-
+      - name: make setup
+        run: make setup
+      - name: make check-all
+        run: make check-all
+        env:
+          CHECK_SCOPE: ${{ github.event_name == 'pull_request' && 'changed' || 'all' }}
+          CHECK_BASE: HEAD^1
+          # lychee follows links to GitHub, and anonymous requests from a
+          # shared runner are rate-limited.
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # Test coverage, reported in the job summary and, on a pull request, in a
+  # comment. A pull request from a fork gets a read-only token from GitHub, so
+  # octocov skips the comment there and writes only the summary.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write # octocov comments the report on the pull request
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Go and octocov
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install_args: go aqua:k1LoW/octocov
+      - name: Restore the Go caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-${{ hashFiles('mise.lock', '**/go.sum') }}
+          restore-keys: go-${{ runner.os }}-
+      # The tests run without the token; only octocov gets it.
+      - name: make coverage
+        run: make coverage
+      - name: make coverage-report
+        run: make coverage-report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # The one required status check.
+  check:
+    name: check
+    if: always()
+    needs:
+      - fast
+      - full
+      - coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fail when a job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
