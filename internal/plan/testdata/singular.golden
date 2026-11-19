@@ -1,0 +1,5 @@
+app.plans (upsert, key: id)
+  + id=1  name=Basic
+  1 to insert, 0 to update
+
+Plan: 1 to insert, 0 to update, 0 to delete in 1 table.

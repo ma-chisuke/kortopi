@@ -1,0 +1,4 @@
+app.rooms: known after the schema is applied (3 declared rows)
+
+Plan: 0 to insert, 0 to update, 0 to delete in 1 table.
+Known after the schema is applied: 1 table.

@@ -1,0 +1,7 @@
+app.prices (sync, key: plan, currency)
+  + plan=gold  currency=EUR  amount=27.00
+  ~ plan=gold  currency=USD  amount: 29.00 -> 30.00
+  - plan=gold  currency=GBP
+  1 to insert, 1 to update, 1 to delete
+
+Plan: 1 to insert, 1 to update, 1 to delete in 1 table.

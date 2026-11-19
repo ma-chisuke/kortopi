@@ -1,0 +1,7 @@
+app.rooms (insert, key: id)
+  column floor: known after the schema is applied
+  no changes
+
+Plan: 0 to insert, 0 to update, 0 to delete in 2 tables.
+Known after the schema is applied: 1 column.
+1 table without changes is not shown.
