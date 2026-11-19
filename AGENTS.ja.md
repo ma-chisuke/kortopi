@@ -29,6 +29,7 @@
 | `tools/` | このリポジトリのチェックと生成器（独立した Go のモジュールとスクリプト）。ここにあるものはバイナリに入らない。 |
 | `make/` | make のターゲット。分野ごとに1ファイル。 |
 | `docs/adr/` | 決定の記録。 |
+| `docs/reference/` | kortopi の利用者に向けたページ。宣言のファイル、値の比べ方、各コマンドを説明する。 |
 | `docs/guides/` | 繰り返す作業のやり方。`.claude/skills/` のスキルはこれに従う。 |
 | `.claude/` | Claude Code のフック・スキル・サブエージェント。 |
 
@@ -44,4 +45,4 @@
 - **GitHub Actions。** ワークフローのステップは、チェックアウトと mise の準備のあとは `make` だけを呼ぶ。Action はコミット SHA で固定する。（ADR-0004、ADR-0005）
 - **禁止。** `.env` を読まない。force push をしない。`main` に push しない。
 
-<!-- i18n-source: AGENTS.md sha256:276bb7dc5c4a9fa4b4043ae3056762588146f452096438d60b91ef9c55b8eebb -->
+<!-- i18n-source: AGENTS.md sha256:6fa68d414fa8742de32c4547e3741acfbdcb1954587ca24b354e0d05b24c405d -->

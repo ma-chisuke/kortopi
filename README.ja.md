@@ -8,6 +8,7 @@ kortopi は、PostgreSQL のマスタテーブルの行を宣言的に管理す�
 
 > [!NOTE]
 > kortopi は開発中で、まだリリースがない。
+> `kortopi plan` は動く。`apply` と `export` は、まだできていない。
 > このページは最初の版の設計を説明する。詳細と理由は[決定の記録](docs/adr/README.ja.md)にある。
 
 ## 何をするか
@@ -26,10 +27,57 @@ data/
 ```
 
 - **宣言**では、行を CSV のファイルか、SQL の `INSERT ... VALUES` 文で書く。`pg_dump --column-inserts` の出力は、そのまま宣言になる。
-- **plan** では、kortopi がデータベースを読み、テーブルごとに `INSERT`・`UPDATE`・`DELETE` の文を出す。適用のあとにもう一度実行すると、変更なしになる。
+- **plan** では、kortopi がデータベースを読み、テーブルごとに挿入・更新・削除する行を出す。適用のあとにもう一度実行すると、変更なしになる。
 - **apply** では、計画を1つのトランザクションで、外部キーの順に適用する。
 - **export** では、今あるデータベースの行を宣言として書き出す。
 - **ずれの検査**では、データベースと宣言が違うことを、終了コードで CI や定期実行に知らせる。
+
+## 試す
+
+まだリリースがないので、このリポジトリからバイナリをビルドする。[mise](https://mise.jdx.dev/) が要る。
+
+```sh
+make setup    # 固定した道具と依存を入れる
+make build    # bin/kortopi をビルドする
+```
+
+データベースに、行を2つ持つテーブルがあるとする。
+
+```sql
+CREATE TABLE facility.room_types (code text PRIMARY KEY, name text NOT NULL, capacity integer NOT NULL);
+INSERT INTO facility.room_types VALUES ('single', 'Single', 1), ('twin', 'Twin', 2);
+```
+
+このテーブルが持つべき行を、`data/facility/room_types.csv` に宣言する。
+
+```csv
+code,name,capacity
+single,Single,1
+twin,Twin,3
+suite,Suite,4
+```
+
+接続先を libpq の環境変数で渡して、計画を立てる。
+
+```sh
+PGHOST=db.example.test PGUSER=planner PGDATABASE=app bin/kortopi plan --dir data
+```
+
+```text
+facility.room_types (upsert, key: code)
+  + code=suite  name=Suite  capacity=4
+  ~ code=twin  capacity: 2 -> 3
+  1 to insert, 1 to update
+
+Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
+```
+
+計画は、データベースの何も変えていない。
+このテーブルには設定がないので、主キーで行を照合し、削除をしないモード `upsert` を使う。
+
+- [宣言のファイル](docs/reference/declaration.ja.md)：データのディレクトリ、CSV と SQL のファイル、`kortopi.toml`。
+- [値の比べ方](docs/reference/comparison.ja.md)：宣言の値が保存されている値と等しくなる条件を、型ごとに示す。
+- [kortopi plan](docs/reference/plan.ja.md)：フラグ、接続、出力、終了コード。
 
 ## どう動くか
 
@@ -78,4 +126,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:315e05a7546b950d62fa666db3610651e01364db2c02986242e6594050331eee -->
+<!-- i18n-source: README.md sha256:8f2e9afb0654821847c61f2463c1c7c433ff1074f7c7d88890ae4d29a77ff3ba -->

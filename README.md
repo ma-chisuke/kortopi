@@ -8,6 +8,7 @@ It does for rows what a declarative schema tool does for a schema.
 
 > [!NOTE]
 > kortopi is under development and has no release yet.
+> `kortopi plan` works. `apply` and `export` are not built yet.
 > This page describes the design of the first version. The [decision records](docs/adr/README.md) hold the details and the reasons.
 
 ## What it does
@@ -26,10 +27,57 @@ data/
 ```
 
 - **Declare** rows in CSV files or in SQL `INSERT ... VALUES` statements. The output of `pg_dump --column-inserts` is a valid declaration.
-- **Plan**: kortopi reads the database and prints the `INSERT`, `UPDATE`, and `DELETE` statements for each table. A second run after an apply prints no changes.
+- **Plan**: kortopi reads the database and prints, for each table, the rows to insert, update, and delete. A second run after an apply prints no changes.
 - **Apply** the plan in one transaction, in the order of the foreign keys.
 - **Export** the rows of an existing database as a declaration.
 - **Detect drift**: an exit status tells CI or a scheduled job that the database and the declaration differ.
+
+## Try it
+
+There is no release yet, so build the binary from this repository. You need [mise](https://mise.jdx.dev/).
+
+```sh
+make setup    # install the pinned tools and the dependencies
+make build    # build bin/kortopi
+```
+
+Say that the database has a table with two rows:
+
+```sql
+CREATE TABLE facility.room_types (code text PRIMARY KEY, name text NOT NULL, capacity integer NOT NULL);
+INSERT INTO facility.room_types VALUES ('single', 'Single', 1), ('twin', 'Twin', 2);
+```
+
+Declare the rows that the table should hold in `data/facility/room_types.csv`:
+
+```csv
+code,name,capacity
+single,Single,1
+twin,Twin,3
+suite,Suite,4
+```
+
+Then plan, with the connection in the environment variables of libpq:
+
+```sh
+PGHOST=db.example.test PGUSER=planner PGDATABASE=app bin/kortopi plan --dir data
+```
+
+```text
+facility.room_types (upsert, key: code)
+  + code=suite  name=Suite  capacity=4
+  ~ code=twin  capacity: 2 -> 3
+  1 to insert, 1 to update
+
+Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
+```
+
+The plan changed nothing in the database.
+The table has no settings, so it matches rows by its primary key and uses mode `upsert`, which never deletes.
+
+- [Declaration files](docs/reference/declaration.md): the data directory, CSV and SQL files, and `kortopi.toml`.
+- [How values are compared](docs/reference/comparison.md): when a declared value equals a stored one, type by type.
+- [kortopi plan](docs/reference/plan.md): the flags, the connection, the output, and the exit statuses.
 
 ## How it behaves
 

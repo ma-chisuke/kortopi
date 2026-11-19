@@ -154,3 +154,37 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | copyleft | コピーレフト |
 | patent grant | 特許の許諾 |
 | notice (of a license) | 表示 |
+| pending table, pending column (that wait for a schema change) | 適用待ちのテーブル、適用待ちの列 |
+| savepoint | セーブポイント |
+| snapshot (of a transaction) | スナップショット |
+| isolation level | 分離レベル |
+| setting (of a session) | 設定 |
+| equality, equality operator (of a type) | 等価性、等価演算子 |
+| operator class | 演算子クラス |
+| type cast | キャスト |
+| type modifier | 型修飾子 |
+| domain (a type) | ドメイン |
+| identity column | 識別列 |
+| generated column | 生成列 |
+| partitioned table | パーティションテーブル |
+| inherit (from a table) | 継承する |
+| text form (of a value) | テキスト表現 |
+| byte order mark | バイトオーダーマーク |
+| extension (of PostgreSQL) | 拡張 |
+| extension (of a filename) | 拡張子 |
+| symbolic link | シンボリックリンク |
+| standby | スタンバイ |
+| interrupt | 割り込み |
+| standard output, standard error | 標準出力、標準エラー出力 |
+| count line (of a table in a plan) | 件数の行 |
+| summary (at the end of a plan) | 要約 |
+| golden file, golden test | ゴールデンファイル、ゴールデンテスト |
+| escape (of a character in a printed value) | エスケープ |
+| row-level security, policy (of row-level security) | 行単位セキュリティ、ポリシー |
+| owner (of a table) | 所有者 |
+| connection string | 接続文字列 |
+| driver (of a database) | ドライバー |
+| module (of Go), indirect dependency | モジュール、間接の依存 |
+| container runtime | コンテナの実行環境 |
+| B-tree ordering (of a type) | B-tree の順序 |
+| nondeterministic collation | 非決定的な照合順序 |
