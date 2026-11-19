@@ -38,6 +38,15 @@
       "depNameTemplate": "lefthook",
       "packageNameTemplate": "evilmartians/lefthook",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "The PostgreSQL images of the integration tests, pinned by tag and digest.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^internal/postgres/pgtest/images\\.go$/"],
+      "matchStrings": [
+        "\"(?<depName>postgres):(?<currentValue>[0-9.]+)@(?<currentDigest>sha256:[0-9a-f]{64})\""
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
@@ -91,6 +100,16 @@
       "description": "lefthook in mise.toml and the schema URL in make/repo.mk name the same version.",
       "matchDepNames": ["lefthook"],
       "groupName": "lefthook"
+    },
+    {
+      "description": "The PostgreSQL images of the integration tests move together, each within its major version: a major version is added and removed by hand (ADR-0019).",
+      "matchFileNames": ["internal/postgres/pgtest/images.go"],
+      "groupName": "PostgreSQL test images"
+    },
+    {
+      "matchFileNames": ["internal/postgres/pgtest/images.go"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
     }
   ]
 }
