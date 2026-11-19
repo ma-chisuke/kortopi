@@ -26,4 +26,4 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0018](ADR-0018-guard-deletions.md) | Guard deletions with a mode, an explicit flag, a limit, and reference counts | accepted | 2026-11-19 |
 | [ADR-0019](ADR-0019-postgresql-first-with-database-specific-parts-in-one-place.md) | Support PostgreSQL first, and keep the database-specific parts in one place | accepted | 2026-11-19 |
 | [ADR-0020](ADR-0020-runnable-sql-instead-of-generated-migrations.md) | Print the plan as runnable SQL instead of generating versioned migrations | accepted | 2026-11-19 |
-| [ADR-0021](ADR-0021-cli-with-subcommands.md) | Shape the CLI as subcommands | proposed | 2026-11-19 |
+| [ADR-0021](ADR-0021-cli-with-subcommands.md) | Shape the CLI as subcommands | accepted | 2026-11-19 |

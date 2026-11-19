@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-19
 ---
 
@@ -81,7 +81,7 @@ The flags are parsed with the `flag` package of the Go standard library. No libr
 ### Confirmation
 
 - Tests of the command line confirm the subcommands, that a flag of one subcommand is rejected by another, and the three exit statuses. They arrive with the implementation of each command.
-- Until this record is accepted, `kortopi version` is the only command, and its tests are in `cmd/kortopi`.
+- Until those commands arrive, `kortopi version` is the only command, and its tests are in `cmd/kortopi`.
 
 ## Pros and Cons of the Options
 

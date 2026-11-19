@@ -26,6 +26,6 @@
 | [ADR-0018](ADR-0018-guard-deletions.ja.md) | 削除に、モード・明示のフラグ・上限・参照の件数という安全策を設ける | accepted | 2026-11-19 |
 | [ADR-0019](ADR-0019-postgresql-first-with-database-specific-parts-in-one-place.ja.md) | まず PostgreSQL に対応し、データベースごとに違う部分は1か所にまとめる | accepted | 2026-11-19 |
 | [ADR-0020](ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md) | 版管理のマイグレーションを生成する代わりに、計画をそのまま流せる SQL として出力する | accepted | 2026-11-19 |
-| [ADR-0021](ADR-0021-cli-with-subcommands.ja.md) | CLI をサブコマンドの形にする | proposed | 2026-11-19 |
+| [ADR-0021](ADR-0021-cli-with-subcommands.ja.md) | CLI をサブコマンドの形にする | accepted | 2026-11-19 |
 
-<!-- i18n-source: README.md sha256:f90adcc72c261bedc7ccfc34858cb5cb00b5d2d3b16861973fa33bcecc6a167c -->
+<!-- i18n-source: README.md sha256:faaf4b4afbe754f5f5b7c32dd610bb68b61bb479ba5c1754579808c1d544b086 -->
