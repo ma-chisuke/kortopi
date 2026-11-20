@@ -51,7 +51,8 @@ var settingsStatements = []string{
 // rows by the match key with the equality of the plan, each key value cast
 // to the type of its column. Rows stand one on each line. With step.Comment,
 // every line is a comment.
-func (s *Session) WriteStatements(ctx context.Context, w io.Writer, step script.Step) error {
+func (s *Session) WriteStatements(ctx context.Context, w io.Writer, step script.Step) (err error) {
+	defer s.explainWait(ctx, &err)
 	statements, err := s.statements(ctx, step)
 	if err != nil {
 		return err

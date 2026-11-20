@@ -104,6 +104,76 @@ func TestOptionsConnConfig(t *testing.T) {
 	}
 }
 
+// The variables of libpq that the reference names beyond the host, the port,
+// the user, the database, and the password reach the settings of the
+// connection: PGCONNECT_TIMEOUT, PGOPTIONS, PGAPPNAME, PGSERVICE with
+// PGSERVICEFILE, PGSSLMODE, and the files of the certificates. Nothing
+// connects.
+func TestLibpqVariables(t *testing.T) {
+	clearLibpqEnvironment(t)
+	t.Setenv("PGHOST", "envhost")
+	t.Setenv("PGDATABASE", "app")
+	t.Setenv("PGUSER", "deployer")
+	t.Setenv("PGSSLMODE", "disable")
+
+	t.Setenv("PGCONNECT_TIMEOUT", "3")
+	t.Setenv("PGOPTIONS", "-c lock_timeout=10s -c statement_timeout=60s")
+	t.Setenv("PGAPPNAME", "deploy-rows")
+	cfg, err := Options{}.connConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnectTimeout.Seconds() != 3 {
+		t.Errorf("PGCONNECT_TIMEOUT: ConnectTimeout = %v", cfg.ConnectTimeout)
+	}
+	if got := cfg.RuntimeParams["options"]; got != "-c lock_timeout=10s -c statement_timeout=60s" {
+		t.Errorf("PGOPTIONS: options = %q", got)
+	}
+	if got := cfg.RuntimeParams["application_name"]; got != "deploy-rows" {
+		t.Errorf("PGAPPNAME: application_name = %q", got)
+	}
+	if cfg.TLSConfig != nil || len(cfg.Fallbacks) != 0 {
+		t.Errorf("PGSSLMODE=disable: TLS %v, %d fallbacks", cfg.TLSConfig != nil, len(cfg.Fallbacks))
+	}
+
+	t.Setenv("PGSSLMODE", "require")
+	if cfg, err := (Options{}).connConfig(); err != nil || cfg.TLSConfig == nil || len(cfg.Fallbacks) != 0 {
+		t.Errorf("PGSSLMODE=require: %v", err)
+	}
+	t.Setenv("PGSSLMODE", "verify-full")
+	t.Setenv("PGSSLROOTCERT", filepath.Join(t.TempDir(), "no-root.crt"))
+	if _, err := (Options{}).connConfig(); err == nil || !strings.Contains(err.Error(), "no-root.crt") {
+		t.Errorf("PGSSLROOTCERT that does not exist: %v", err)
+	}
+	t.Setenv("PGSSLROOTCERT", "")
+	t.Setenv("PGSSLMODE", "require")
+	t.Setenv("PGSSLCERT", filepath.Join(t.TempDir(), "no-client.crt"))
+	t.Setenv("PGSSLKEY", filepath.Join(t.TempDir(), "no-client.key"))
+	if _, err := (Options{}).connConfig(); err == nil || !strings.Contains(err.Error(), "no-client.") {
+		t.Errorf("PGSSLCERT and PGSSLKEY that do not exist: %v", err)
+	}
+	t.Setenv("PGSSLCERT", "")
+	t.Setenv("PGSSLKEY", "")
+	t.Setenv("PGSSLMODE", "disable")
+
+	services := filepath.Join(t.TempDir(), "pg_service.conf")
+	if err := os.WriteFile(services, []byte("[facility]\nhost=servicehost\nport=6543\nuser=facility_owner\ndbname=servicedb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PGHOST", "")
+	t.Setenv("PGDATABASE", "")
+	t.Setenv("PGUSER", "")
+	t.Setenv("PGSERVICEFILE", services)
+	t.Setenv("PGSERVICE", "facility")
+	cfg, err = Options{}.connConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "servicehost" || cfg.Port != 6543 || cfg.User != "facility_owner" || cfg.Database != "servicedb" {
+		t.Errorf("PGSERVICE: %s:%d %s %s", cfg.Host, cfg.Port, cfg.User, cfg.Database)
+	}
+}
+
 func TestTemporaryError(t *testing.T) {
 	for _, tt := range []struct {
 		apply bool

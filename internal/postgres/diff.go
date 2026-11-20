@@ -42,7 +42,8 @@ const maxFlaggedRows = 5
 //
 // When the table has rows to delete, Diff also counts the rows of other
 // tables that reference them (ADR-0018).
-func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
+func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableDiff, err error) {
+	defer s.explainWait(ctx, &err)
 	if s.export {
 		return plan.TableDiff{}, errExport
 	}
@@ -285,7 +286,8 @@ func repeated(names []string) (string, bool) {
 // counts the rows of its INSERT statements. A CSV file is loaded into a
 // temporary table of text columns, so PostgreSQL reads it as it would read
 // the file of an existing table.
-func (s *Session) CountRows(ctx context.Context, table declaration.Table) (int, error) {
+func (s *Session) CountRows(ctx context.Context, table declaration.Table) (_ int, err error) {
+	defer s.explainWait(ctx, &err)
 	if s.export {
 		return 0, errExport
 	}
@@ -307,7 +309,7 @@ func (s *Session) CountRows(ctx context.Context, table declaration.Table) (int, 
 		return 0, err
 	}
 	var n int64
-	err := s.savepoint(ctx, false, func(tx pgx.Tx) error {
+	err = s.savepoint(ctx, false, func(tx pgx.Tx) error {
 		temp := s.nextTemp()
 		if err := s.create(ctx, tx, table, createTextSQL(temp, table.Columns)); err != nil {
 			return err

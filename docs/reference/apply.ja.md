@@ -231,6 +231,7 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
+- `PGOPTIONS='-c lock_timeout=10s'` のようにロックのタイムアウトを設定する。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[kortopi plan](plan.ja.md#接続の設定)）。接続の設定は計画と同じである。
 - 失敗した apply は何も変えない。宣言かデータベースを直して、もう一度実行する。
 
 ### スキーマごとの apply
@@ -377,4 +378,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:8f1c7f055ff24aa21ac63238ecf237fc8a555fe4f803c3e0a1015e856c61a30b -->
+<!-- i18n-source: apply.md sha256:6bc82696620a0b97d6097c17feb49bca773201b3403e4c219af41fcd13f33122 -->

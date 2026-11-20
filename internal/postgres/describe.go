@@ -122,7 +122,8 @@ var relationKinds = map[string]string{
 // key, and its unique keys. A name that belongs to a relation other than an
 // ordinary or a partitioned table is an error. Names are matched exactly, as
 // they are written.
-func (s *Session) Describe(ctx context.Context, names []declaration.TableName) (map[declaration.TableName]plan.TableInfo, error) {
+func (s *Session) Describe(ctx context.Context, names []declaration.TableName) (_ map[declaration.TableName]plan.TableInfo, err error) {
+	defer s.explainWait(ctx, &err)
 	metas, err := s.describe(ctx, names)
 	if err != nil {
 		return nil, err

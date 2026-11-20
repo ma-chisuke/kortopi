@@ -280,7 +280,10 @@ func (s *Session) waitForLock(ctx context.Context, database string) error {
 	}
 	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1)", int64(lockKey)); err != nil {
 		_ = tx.Rollback(ctx)
-		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+		if ctx.Err() != nil {
+			return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+		}
+		return waitForLockError(database, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("wait for another apply on database %q: %w", database, err)

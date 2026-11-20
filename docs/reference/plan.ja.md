@@ -81,6 +81,39 @@ kortopi: the database of the connection looks like a connection string, which ma
 kortopi: connect to the database: failed to connect to ...
 ```
 
+### 接続の設定
+
+ホスト・ポート・ユーザー・データベース・パスワードのほかに、kortopi は次の libpq の環境変数を受け付ける。読むのは kortopi のドライバーである。
+
+| 変数 | 用途 |
+|---|---|
+| `PGPASSFILE` | パスワードファイル。既定は `~/.pgpass` で、ホスト・ポート・データベース・ユーザーごとに1行を持つ。 |
+| `PGSERVICE`、`PGSERVICEFILE` | サービスファイルのサービス。サービスファイルの既定は `~/.pg_service.conf` で、接続のすべての設定を持てる。 |
+| `PGSSLMODE` | `disable`・`allow`・`prefer`（既定）・`require`・`verify-ca`・`verify-full` のどれか。 |
+| `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。 |
+| `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。 |
+| `PGAPPNAME` | セッションの `application_name`。`pg_stat_activity` に表示される。既定は `kortopi` である。 |
+| `PGOPTIONS` | セッションの設定。`-c lock_timeout=10s` や `-c statement_timeout=5min` のように `-c name=value` の形で書く。 |
+
+`PGOPTIONS` の設定は、kortopi が固定する設定を変えない（[値の比べ方](comparison.ja.md#セッションの設定)）。
+kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
+
+`ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
+kortopi にはこのための独自の設定がない。`PGOPTIONS` で `lock_timeout` を設定する。
+
+```sh
+PGOPTIONS='-c lock_timeout=10s' kortopi apply --dir data
+```
+
+待ちが上限に達すると、実行は止まり、何も変わらない。起きたことはエラーが示す。
+
+```text
+kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: nothing was changed: run the plan again once that session has released the lock
+```
+
+`statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、同じ種類のエラーを出す。
+デプロイのときの実行には、毎回ロックのタイムアウトを設定する。そこでは、待っている実行がデプロイ全体を止めてしまうからである。
+
 ## セッションに要るもの
 
 計画は宣言の行を一時テーブルに読み込み、宣言したすべてのテーブルを読む。そのため、セッションには書き込みのできることが求められる。
@@ -495,4 +528,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:374d9cae915b946f28be92503e840927f7f77c2b6c0f98c341704cb471cb6e98 -->
+<!-- i18n-source: plan.md sha256:c05a0537d5f174bdc5f3dc4f75b90dae0b3947ef025949cf4c56d27bdfb18e55 -->

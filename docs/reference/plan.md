@@ -81,6 +81,39 @@ A connection that fails stops the plan, with the error of the driver:
 kortopi: connect to the database: failed to connect to ...
 ```
 
+### Connection settings
+
+Besides the host, the port, the user, the database, and the password, kortopi takes these variables of libpq, which its driver reads:
+
+| Variable | Use |
+|---|---|
+| `PGPASSFILE` | The password file, `~/.pgpass` by default, with a line for each host, port, database, and user. |
+| `PGSERVICE`, `PGSERVICEFILE` | A service of the service file, `~/.pg_service.conf` by default, which may hold every setting of the connection. |
+| `PGSSLMODE` | `disable`, `allow`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. |
+| `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. |
+| `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it. |
+| `PGAPPNAME` | The `application_name` of the session, which `pg_stat_activity` shows: `kortopi` by default. |
+| `PGOPTIONS` | Settings of the session, written as `-c name=value`, such as `-c lock_timeout=10s` and `-c statement_timeout=5min`. |
+
+A setting in `PGOPTIONS` does not change a setting that kortopi pins ([How values are compared](comparison.md#the-settings-of-the-session)).
+kortopi pins them inside its transaction, after the session has started, so `-c TimeZone=Asia/Tokyo` or `-c search_path=app` changes nothing in a plan.
+
+A plan and an apply wait without limit, and without a word, while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`.
+kortopi has no setting of its own for this: set `lock_timeout` in `PGOPTIONS`.
+
+```sh
+PGOPTIONS='-c lock_timeout=10s' kortopi apply --dir data
+```
+
+When the wait reaches the limit, the run stops, nothing is changed, and the error says what happened:
+
+```text
+kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: nothing was changed: run the plan again once that session has released the lock
+```
+
+`statement_timeout` ends a statement that runs too long, for whatever reason, with an error of the same kind.
+Set a lock timeout for every run at deploy time, where a run that waits holds up the deployment.
+
 ## What the session needs
 
 A plan loads the declared rows into temporary tables, so its session must be able to write, and it reads every declared table.

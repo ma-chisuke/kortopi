@@ -231,6 +231,7 @@ Apply the schema first, with the tool that changes your schema, and the rows sec
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.
+- Set a lock timeout, such as `PGOPTIONS='-c lock_timeout=10s'`, so that an apply does not wait without limit for a lock that another session holds ([kortopi plan](plan.md#connection-settings)). The settings of the connection are those of a plan.
 - A failed apply changes nothing. Fix the declaration or the database, and run it again.
 
 ### One apply for each schema
