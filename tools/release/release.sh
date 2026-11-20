@@ -263,8 +263,9 @@ cmd_publish() {
 cmd_verify() {
   local version=$1
   check_version "$version"
-  local repo tmp
+  local repo
   repo=$(repository)
+  # Global, not local: the trap runs after the function has returned.
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   gh release download "$version" --repo "$repo" --dir "$tmp"
