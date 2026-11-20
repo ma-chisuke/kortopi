@@ -102,7 +102,8 @@ func TestRunExport(t *testing.T) {
 			wantFiles: map[string]string{"facility/rooms.csv": "id,name\n"},
 			wantCode:  exitError,
 			wantStderr: "kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: " +
-				"an export never writes every table of a database; to refresh the tables that DIR declares, name them with --table or their schemas with --schema, and add --overwrite\n",
+				"an export never writes every table of a database: to refresh the tables that the data directory DIR declares, add --overwrite, " +
+				"and name them, as in --table facility.rooms, or name their schemas, as in --schema facility\n",
 		},
 		{
 			name:        "a schema, in CSV",

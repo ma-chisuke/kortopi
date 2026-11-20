@@ -184,8 +184,11 @@ kortopi: data/facility/room_types.csv: table facility.room_types is declared in 
 Without `--table` and `--schema`, in a directory that declares tables, the error says how to refresh them:
 
 ```text
-kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database; to refresh the tables that data declares, name them with --table or their schemas with --schema, and add --overwrite
+kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: to refresh the tables that the data directory data declares, add --overwrite, and name them, as in --table facility.room_types --table facility.rooms, or name their schemas, as in --schema facility
 ```
+
+The error names the declared tables and their schemas as flags, up to four of each, and counts the others.
+In the current directory, it says "the current directory".
 
 A refresh does not replace:
 

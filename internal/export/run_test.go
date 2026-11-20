@@ -338,8 +338,9 @@ func TestRunErrors(t *testing.T) {
 			name: "nothing named, with tables declared",
 			decl: []declaration.Table{rooms, {Name: tn("billing.plans"), Columns: []string{"id"}, Format: sql, File: "seed.sql"}},
 			opts: Options{Format: csv},
-			want: "name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database; " +
-				"to refresh the tables that DIR declares, name them with --table or their schemas with --schema, and add --overwrite",
+			want: "name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: " +
+				"to refresh the tables that the data directory DIR declares, add --overwrite, and name them, as in --table facility.rooms --table billing.plans, " +
+				"or name their schemas, as in --schema facility --schema billing",
 		},
 		{
 			name: "a schema that does not exist",
@@ -452,6 +453,25 @@ func TestRunErrors(t *testing.T) {
 				t.Errorf("files =\n%v\nwant them unchanged:\n%v", got, before)
 			}
 		})
+	}
+}
+
+// An export that names nothing, in the current directory that declares many
+// tables, says how to refresh them with the flags that it takes, and counts
+// the tables after the first few.
+func TestCheckNamesTheDeclaredTables(t *testing.T) {
+	t.Parallel()
+
+	var tables []declaration.Table
+	for _, name := range []string{"a.t1", "a.t2", "a.t3", "b.t4", "b.t5", "c.t6", "d.t7", "e.t8"} {
+		tables = append(tables, declaration.Table{Name: tn(name), Columns: []string{"id"}, Format: declaration.CSV, File: strings.Replace(name, ".", "/", 1) + ".csv"})
+	}
+	err := Check(&declaration.Declaration{Dir: ".", Tables: tables}, Options{Format: declaration.CSV})
+	want := "name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: " +
+		"to refresh the tables that the current directory declares, add --overwrite, and name them, as in --table a.t1 --table a.t2 --table a.t3 --table b.t4, and 4 more tables, " +
+		"or name their schemas, as in --schema a --schema b --schema c --schema d, and 1 more schema"
+	if err == nil || err.Error() != want {
+		t.Errorf("Check() = %v, want\n%s", err, want)
 	}
 }
 

@@ -184,8 +184,11 @@ kortopi: data/facility/room_types.csv: table facility.room_types is declared in 
 テーブルを宣言しているディレクトリで `--table` も `--schema` もなければ、エラーはそれらを書き出し直す方法を示す。
 
 ```text
-kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database; to refresh the tables that data declares, name them with --table or their schemas with --schema, and add --overwrite
+kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: to refresh the tables that the data directory data declares, add --overwrite, and name them, as in --table facility.room_types --table facility.rooms, or name their schemas, as in --schema facility
 ```
+
+エラーは、宣言済みのテーブルとそのスキーマをフラグの形で挙げる。それぞれ4つまでとし、残りは数で示す。
+カレントディレクトリでは「the current directory」と示す。
 
 書き出し直しは、次のファイルを置き換えない。
 
@@ -401,4 +404,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:21e0840b1e727bde6898f6e8a1e08c238ded8e10d4e96d49cd8813e45bc45f5e -->
+<!-- i18n-source: export.md sha256:3e4bf467875ed80c6d0b49640ac6d77c01314e317120ddfe820eb6e23b593941 -->

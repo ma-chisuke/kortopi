@@ -201,7 +201,37 @@ func nothingNamed(decl *declaration.Declaration) error {
 	if len(decl.Tables) == 0 {
 		return errors.New(msg)
 	}
-	return fmt.Errorf("%s; to refresh the tables that %s declares, name them with --table or their schemas with --schema, and add --overwrite", msg, decl.Dir)
+	dir := "the data directory " + decl.Dir
+	if decl.Dir == "." || decl.Dir == "" {
+		dir = "the current directory"
+	}
+	var tables, schemas []string
+	for _, t := range decl.Tables {
+		tables = append(tables, "--table "+t.Name.String())
+		if s := "--schema " + t.Name.Schema; !slices.Contains(schemas, s) {
+			schemas = append(schemas, s)
+		}
+	}
+	return fmt.Errorf("%s: to refresh the tables that %s declares, add --overwrite, and name them, as in %s, or name their schemas, as in %s",
+		msg, dir, someFlags(tables, "table", "tables"), someFlags(schemas, "schema", "schemas"))
+}
+
+// maxFlags is the number of flags that a message writes out before it
+// counts the rest.
+const maxFlags = 4
+
+// someFlags joins flags as a command line takes them, and counts those after
+// the first few, as one more table or n more tables.
+func someFlags(flags []string, one, many string) string {
+	if len(flags) <= maxFlags {
+		return strings.Join(flags, " ")
+	}
+	rest := len(flags) - maxFlags
+	noun := many
+	if rest == 1 {
+		noun = one
+	}
+	return fmt.Sprintf("%s, and %d more %s", strings.Join(flags[:maxFlags], " "), rest, noun)
 }
 
 // tablesOf returns the tables that opts name, sorted and each once. A schema
