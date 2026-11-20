@@ -14,6 +14,7 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
+	"github.com/ma-chisuke/kortopi/internal/script"
 )
 
 // Before it deletes, an apply counts the references again, with its own
@@ -198,6 +199,15 @@ func TestDeferWithAConstraintOfTheSameName(t *testing.T) {
 			}
 			if err := s.Defer(t.Context(), []apply.ForeignKey{{Name: "y_x", Table: y, References: x, Deferrable: true}}); err != nil {
 				t.Errorf("Defer of a name of its own: %v", err)
+			}
+			// The statement of a script checks the names in the same way.
+			p := db.session(t, t.TempDir())
+			err = p.WriteStatements(t.Context(), &strings.Builder{}, script.Step{Kind: script.Defer, Keys: []apply.ForeignKey{
+				{Name: "y_x", Table: y, References: x, Deferrable: true},
+				{Name: "link", Table: x, References: y, Deferrable: true},
+			}})
+			if err == nil || err.Error() != want {
+				t.Errorf("WriteStatements of Defer: %v\nwant %s", err, want)
 			}
 		})
 	}

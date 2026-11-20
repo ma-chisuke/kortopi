@@ -32,6 +32,11 @@ type Options struct {
 	// apply.Database. Without it, the session is for a plan, and writes
 	// nothing.
 	Apply bool
+	// Export opens a session that only reads, for an export: a READ ONLY
+	// transaction that needs no TEMPORARY privilege and creates nothing, so
+	// it also runs on a standby. It implements export.Database. Apply and
+	// Export exclude each other.
+	Export bool
 	// Wait gets one line when an apply waits for another apply to finish. It
 	// may be nil.
 	Wait io.Writer
@@ -75,8 +80,10 @@ type Session struct {
 	dir  string
 	// apply is true for a session of an apply. loaded holds the declared
 	// rows that Diff loaded for it, and committed is true after Commit.
-	apply     bool
-	loaded    map[declaration.TableName]*loadedTable
+	apply  bool
+	loaded map[declaration.TableName]*loadedTable
+	// export is true for a session of an export, which only reads.
+	export    bool
 	committed bool
 	// deletesChecked is true after the privileges of the deletions were
 	// checked.
@@ -164,6 +171,9 @@ func (o Options) connString() string {
 // the database, and starts the transaction of the plan or the apply. Unlike
 // Connect, it reads no environment variable, so tests use it.
 func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Session, error) {
+	if opts.Apply && opts.Export {
+		return nil, errors.New("a session is for an apply or for an export, not for both")
+	}
 	cfg = cfg.Copy()
 	// Describe each query in an unnamed statement, so the session prepares
 	// no statement that outlives a query.
@@ -177,7 +187,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	}
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
-		apply: opts.Apply, loaded: make(map[declaration.TableName]*loadedTable),
+		apply: opts.Apply, export: opts.Export, loaded: make(map[declaration.TableName]*loadedTable),
 	}
 	if err := s.begin(ctx, opts.Wait); err != nil {
 		_ = conn.Close(ctx)
@@ -205,7 +215,11 @@ const lockKey = 0x6b6f72746f7069
 func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	waited := false
 	for {
-		tx, err := s.conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+		options := pgx.TxOptions{IsoLevel: pgx.RepeatableRead}
+		if s.export {
+			options.AccessMode = pgx.ReadOnly
+		}
+		tx, err := s.conn.BeginTx(ctx, options)
 		if err != nil {
 			return fmt.Errorf("begin the transaction of the %s: %w", s.work(), err)
 		}
@@ -247,6 +261,10 @@ func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("set the settings of the session: %w", err)
 	}
+	if err := s.tx.QueryRow(ctx, "SELECT CURRENT_USER::pg_catalog.text, pg_catalog.current_database()::pg_catalog.text").
+		Scan(&s.role, &s.databaseName); err != nil {
+		return fmt.Errorf("read the role of the session: %w", err)
+	}
 	if s.apply {
 		return s.checkReplicationRole(ctx)
 	}
@@ -287,19 +305,30 @@ func (s *Session) checkReplicationRole(ctx context.Context) error {
 	return nil
 }
 
-// work returns what the session is for, plan or apply, for messages.
+// DatabaseName returns the name of the database of the session, as
+// current_database() gives it when the session begins: the name only, with
+// no host, user, or password, for the header of a script.
+func (s *Session) DatabaseName() string {
+	return s.databaseName
+}
+
+// work returns what the session is for, plan, apply, or export, for
+// messages.
 func (s *Session) work() string {
-	if s.apply {
+	switch {
+	case s.apply:
 		return "apply"
+	case s.export:
+		return "export"
 	}
 	return "plan"
 }
 
-// needs returns "a plan" or "an apply", for messages that say what the
-// session needs.
+// needs returns "a plan", "an apply", or "an export", for messages that say
+// what the session needs.
 func (s *Session) needs() string {
-	if s.apply {
-		return "an apply"
+	if s.apply || s.export {
+		return "an " + s.work()
 	}
 	return "a plan"
 }

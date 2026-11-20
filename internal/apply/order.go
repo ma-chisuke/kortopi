@@ -11,30 +11,81 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
 
-// order returns the tables in the order in which an apply inserts and
-// updates their rows, so that a referenced table comes before the tables
-// that reference it; deletions run in the reverse order (ADR-0017). Ties are
-// broken by schema and then by name, so the order is the same on every run.
+// Order is the order in which an apply writes the tables of a run, and what
+// it defers. A script of the plan writes in the same order (ADR-0020).
+type Order struct {
+	// Tables are the tables in the order in which their rows are inserted
+	// and updated, so that a referenced table comes before the tables that
+	// reference it. Deletions run in the reverse order.
+	Tables []declaration.TableName
+	// Deferred are the foreign keys to defer to the commit, sorted by the
+	// referencing table and then by name.
+	Deferred []ForeignKey
+	// Cycles are the cycles that no order can serve: an apply refuses them.
+	Cycles []Cycle
+}
+
+// Cycle is a cycle of foreign keys that are not deferrable, two or more of
+// whose tables have rows to write. Their statements depend on each other in
+// both directions, so no order of them can be right for every row.
+type Cycle struct {
+	// Tables are the tables of the cycle, sorted.
+	Tables []declaration.TableName
+	// Keys are the foreign keys of the cycle, sorted by the referencing
+	// table and then by name.
+	Keys []ForeignKey
+	// Writing are the tables of the cycle that have rows to write.
+	Writing []declaration.TableName
+}
+
+// Error says what the cycle is and what to change.
+func (c Cycle) Error() string {
+	return fmt.Sprintf("tables %s reference each other through foreign keys that are not deferrable, %s, and tables %s have rows to write, so no order of these tables can write their changes: declare one of these foreign keys DEFERRABLE",
+		joinAnd(tableNames(c.Tables)), joinAnd(c.KeyNames()), joinAnd(tableNames(c.Writing)))
+}
+
+// KeyNames returns each foreign key of the cycle as its quoted name and its
+// table, such as "a_b" of a.a.
+func (c Cycle) KeyNames() []string {
+	names := make([]string, len(c.Keys))
+	for i, k := range c.Keys {
+		names[i] = strconv.Quote(k.Name) + " of " + k.Table.String()
+	}
+	return names
+}
+
+// tableNames returns the names of tables as strings.
+func tableNames(tables []declaration.TableName) []string {
+	names := make([]string, len(tables))
+	for i, t := range tables {
+		names[i] = t.String()
+	}
+	return names
+}
+
+// Arrange returns the order in which an apply writes the tables of a run
+// (ADR-0017, ADR-0026). A referenced table comes before the tables that
+// reference it; ties are broken by schema and then by name, so the order is
+// the same on every run.
 //
 // It also returns the foreign keys to defer to the commit: the deferrable
 // keys of a cycle of two or more tables in which two or more tables have
-// rows to write. They are sorted by the referencing table and then by name.
-// In any cycle, a deferrable key does not order the tables. Nothing else is
-// deferred: PostgreSQL checks a key that is not deferred at the end of each
-// statement, which is all that the statements of one table need, also for a
-// key from a table to itself. And SET CONSTRAINTS acts on every constraint of
-// that name in the schema, so a deferral that is not needed could fail for an
-// unrelated table.
+// rows to write. In any cycle, a deferrable key does not order the tables.
+// Nothing else is deferred: PostgreSQL checks a key that is not deferred at
+// the end of each statement, which is all that the statements of one table
+// need, also for a key from a table to itself. And SET CONSTRAINTS acts on
+// every constraint of that name in the schema, so a deferral that is not
+// needed could fail for an unrelated table.
 //
 // writes holds the tables that have rows to write. A cycle that is left when
-// the deferrable keys are set aside is an error when two or more of its
-// tables have rows to write: their statements depend on each other in both
-// directions, so no order of them can be right for every row. When only one
-// table of such a cycle writes, the others do not change, so any order works,
-// and a reference that its rows break is the ordinary error of the database.
+// the deferrable keys are set aside is returned in Cycles when two or more
+// of its tables have rows to write; its tables are then placed by name. When
+// only one table of such a cycle writes, the others do not change, so any
+// order works, and a reference that its rows break is the ordinary error of
+// the database.
 //
 // Keys that name a table outside tables do not affect the order.
-func order(tables []declaration.TableName, keys []ForeignKey, writes map[declaration.TableName]bool) ([]declaration.TableName, []ForeignKey, error) {
+func Arrange(tables []declaration.TableName, keys []ForeignKey, writes map[declaration.TableName]bool) Order {
 	names := slices.Clone(tables)
 	slices.SortFunc(names, compareNames)
 	names = slices.Compact(names)
@@ -89,40 +140,50 @@ func order(tables []declaration.TableName, keys []ForeignKey, writes map[declara
 
 	g = graph{nodes: len(names), edges: kept}
 	left := g.components()
-	var errs []error
+	var o Order
 	for c, members := range left.members {
 		if writers(members) > 1 {
-			errs = append(errs, cycleError(names, keys, kept, left.of, c, writes))
+			o.Cycles = append(o.Cycles, cycleOf(names, keys, kept, left.of, c, writes))
 		}
 	}
-	if len(errs) > 0 {
-		return nil, nil, errors.Join(errs...)
-	}
-
-	var deferred []ForeignKey
 	for i, k := range keys {
 		if deferKey[i] {
-			deferred = append(deferred, k)
+			o.Deferred = append(o.Deferred, k)
 		}
 	}
-	sorted := make([]declaration.TableName, 0, len(names))
+	o.Tables = make([]declaration.TableName, 0, len(names))
 	for _, c := range g.sortComponents(left) {
 		for _, n := range left.members[c] {
-			sorted = append(sorted, names[n])
+			o.Tables = append(o.Tables, names[n])
 		}
 	}
-	return sorted, deferred, nil
+	slices.SortFunc(o.Cycles, func(a, b Cycle) int { return compareNames(a.Tables[0], b.Tables[0]) })
+	return o
 }
 
-// cycleError returns the error for the cycle of component c, whose keys are
-// all not deferrable, and two or more of whose tables have rows to write.
-func cycleError(names []declaration.TableName, keys []ForeignKey, edges []edge, of []int, c int, writes map[declaration.TableName]bool) error {
-	var tables, writing, constraints []string
+// order returns the order of Arrange for an apply, which refuses every
+// cycle that Arrange finds.
+func order(tables []declaration.TableName, keys []ForeignKey, writes map[declaration.TableName]bool) ([]declaration.TableName, []ForeignKey, error) {
+	o := Arrange(tables, keys, writes)
+	if len(o.Cycles) > 0 {
+		errs := make([]error, len(o.Cycles))
+		for i, c := range o.Cycles {
+			errs[i] = c
+		}
+		return nil, nil, errors.Join(errs...)
+	}
+	return o.Tables, o.Deferred, nil
+}
+
+// cycleOf returns the cycle of component c, whose keys are all not
+// deferrable.
+func cycleOf(names []declaration.TableName, keys []ForeignKey, edges []edge, of []int, c int, writes map[declaration.TableName]bool) Cycle {
+	var cycle Cycle
 	for n, comp := range of {
 		if comp == c {
-			tables = append(tables, names[n].String())
+			cycle.Tables = append(cycle.Tables, names[n])
 			if writes[names[n]] {
-				writing = append(writing, names[n].String())
+				cycle.Writing = append(cycle.Writing, names[n])
 			}
 		}
 	}
@@ -134,10 +195,9 @@ func cycleError(names []declaration.TableName, keys []ForeignKey, edges []edge, 
 	}
 	slices.Sort(inCycle)
 	for _, i := range inCycle {
-		constraints = append(constraints, strconv.Quote(keys[i].Name)+" of "+keys[i].Table.String())
+		cycle.Keys = append(cycle.Keys, keys[i])
 	}
-	return fmt.Errorf("tables %s reference each other through foreign keys that are not deferrable, %s, and tables %s have rows to write, so no order of these tables can write their changes: declare one of these foreign keys DEFERRABLE",
-		joinAnd(tables), joinAnd(constraints), joinAnd(writing))
+	return cycle
 }
 
 // joinAnd joins items as a list in a sentence: "a", "a and b", "a, b, and c".

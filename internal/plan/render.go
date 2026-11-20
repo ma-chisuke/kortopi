@@ -114,11 +114,11 @@ func Render(w io.Writer, p *Plan) error {
 // writeTable writes the block of one table.
 func writeTable(b *strings.Builder, t *Table) error {
 	if t.PendingTable {
-		fmt.Fprintf(b, "%s: %s (%s)\n", formatTable(t.Name), pendingMark, count(t.DeclaredRows, "declared row", "declared rows"))
+		fmt.Fprintf(b, "%s: %s (%s)\n", FormatTable(t.Name), pendingMark, count(t.DeclaredRows, "declared row", "declared rows"))
 		return nil
 	}
 
-	b.WriteString(formatTable(t.Name))
+	b.WriteString(FormatTable(t.Name))
 	b.WriteString(" (")
 	b.WriteString(string(t.Mode))
 	if len(t.Key) > 0 {
@@ -127,13 +127,13 @@ func writeTable(b *strings.Builder, t *Table) error {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(formatName(k))
+			b.WriteString(FormatName(k))
 		}
 	}
 	b.WriteString(")\n")
 
 	for _, c := range t.PendingColumns {
-		fmt.Fprintf(b, "  column %s: %s\n", formatName(c), pendingMark)
+		fmt.Fprintf(b, "  column %s: %s\n", FormatName(c), pendingMark)
 	}
 	for _, r := range t.Diff.Inserts {
 		if len(r.Key) != len(t.Key) || len(r.Values) != len(t.Compare) {
@@ -148,7 +148,7 @@ func writeTable(b *strings.Builder, t *Table) error {
 		}
 		fields := pairs(t.Key, u.Key)
 		for _, c := range u.Changes {
-			fields = append(fields, formatName(c.Column)+": "+formatValue(c.Old)+" -> "+formatValue(c.New))
+			fields = append(fields, FormatName(c.Column)+": "+formatValue(c.Old)+" -> "+formatValue(c.New))
 		}
 		writeLine(b, '~', fields)
 	}
@@ -160,7 +160,7 @@ func writeTable(b *strings.Builder, t *Table) error {
 	}
 	for _, r := range t.Diff.References {
 		b.WriteString("    ")
-		b.WriteString(formatReference(r, len(t.Diff.Deletes)))
+		b.WriteString(FormatReference(r, len(t.Diff.Deletes)))
 		b.WriteString("\n")
 	}
 
@@ -179,7 +179,7 @@ func writeTable(b *strings.Builder, t *Table) error {
 	return nil
 }
 
-// formatReference returns the line of a foreign key that points at rows to
+// FormatReference returns the line of a foreign key that points at rows to
 // delete: how many rows reference them, the referencing table, its columns,
 // and the constraint, and what the action ON DELETE of the key does while
 // those rows still reference a row to delete (ADR-0018). The run may delete
@@ -187,12 +187,12 @@ func writeTable(b *strings.Builder, t *Table) error {
 // in that state, not that it will happen. deleting is the number of rows to
 // delete. When the role may not read the referencing table, the line says so
 // instead of a count.
-func formatReference(r Reference, deleting int) string {
+func FormatReference(r Reference, deleting int) string {
 	columns := make([]string, len(r.Columns))
 	for i, c := range r.Columns {
-		columns[i] = formatName(c)
+		columns[i] = FormatName(c)
 	}
-	source := formatTable(r.Table) + " (" + strings.Join(columns, ", ") + "), " + formatName(r.Constraint)
+	source := FormatTable(r.Table) + " (" + strings.Join(columns, ", ") + "), " + FormatName(r.Constraint)
 	subject, verb, target := "these rows", "reference", "them"
 	switch {
 	case r.Unreadable:
@@ -240,7 +240,7 @@ func writeLine(b *strings.Builder, mark byte, fields []string) {
 func pairs(names []string, values []Value) []string {
 	fields := make([]string, len(names))
 	for i, n := range names {
-		fields[i] = formatName(n) + "=" + formatValue(values[i])
+		fields[i] = FormatName(n) + "=" + formatValue(values[i])
 	}
 	return fields
 }
@@ -253,9 +253,11 @@ func count(n int, singular, plural string) string {
 	return strconv.Itoa(n) + " " + plural
 }
 
-// formatTable returns the name of a table as a plan prints it.
-func formatTable(n declaration.TableName) string {
-	return formatName(n.Schema) + "." + formatName(n.Name)
+// FormatTable returns the name of a table as a plan prints it: in double
+// quotes with the escapes of Go, for each part that has a character that the
+// layout uses or that does not print, so that the name never breaks a line.
+func FormatTable(n declaration.TableName) string {
+	return FormatName(n.Schema) + "." + FormatName(n.Name)
 }
 
 // formatValue returns a value as a plan prints it.
@@ -269,8 +271,10 @@ func formatValue(v Value) string {
 	return v.Text
 }
 
-// formatName returns the name of a schema, a table, or a column as a plan prints it.
-func formatName(s string) string {
+// FormatName returns the name of a schema, a table, or a column as a plan
+// prints it: in double quotes with the escapes of Go when it has a character
+// that the layout uses or that does not print.
+func FormatName(s string) string {
 	if s == "" || needsQuotes(s, " =\"'.,:()") {
 		return strconv.Quote(s)
 	}

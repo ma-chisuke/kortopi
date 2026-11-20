@@ -31,13 +31,18 @@ func TestNoSecretInOutput(t *testing.T) {
 		{name: "host variable", env: map[string]string{"PGHOST": url}},
 		{name: "user variable", env: map[string]string{"PGUSER": "app password=" + secret}},
 	}
-	for _, command := range []string{"plan", "apply"} {
+	for _, command := range []string{"plan", "apply", "export"} {
 		for _, tt := range tests {
 			t.Run(command+" "+tt.name, func(t *testing.T) {
 				for k, v := range tt.env {
 					t.Setenv(k, v)
 				}
 				args := append([]string{command, "--dir", dir}, tt.args...)
+				if command == "export" {
+					// An export that names nothing fails before it reads the
+					// settings of the connection.
+					args = append(args, "--schema", "app")
+				}
 				// Every case fails before a connection is made: on a flag, or on
 				// the settings of the connection.
 				code, stdout, stderr := runTest(t, args, connectPostgres)

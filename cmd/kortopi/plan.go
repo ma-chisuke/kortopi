@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 
 	"github.com/ma-chisuke/kortopi/internal/plan"
+	"github.com/ma-chisuke/kortopi/internal/script"
 )
 
 // planOnlyFlags is the help of the flags that only plan has.
-const planOnlyFlags = "  --exit-code       exit with status 2 when the plan is not empty\n"
+const planOnlyFlags = "  --format <name>   text (the default), or sql: print the plan as SQL\n" +
+	"                    statements that run as they are\n" +
+	"  --exit-code       exit with status 2 when the plan is not empty\n"
 
 // planFlags lists the flags of plan, for its help.
 var planFlags = sourceFlags("plan") + planOnlyFlags + connectionFlags
@@ -42,6 +46,8 @@ var planHelp = "usage: kortopi plan [flags]\n" +
 // planOptions are the flags of plan.
 type planOptions struct {
 	common
+	// sql is true for --format sql.
+	sql      bool
 	exitCode bool
 }
 
@@ -54,12 +60,21 @@ func runPlan(ctx context.Context, args []string, e env) int {
 	if err != nil {
 		return flagError(e, err, planHelp, planUsage)
 	}
-	p, err := makePlan(ctx, o, e.connect)
+	var sql *bytes.Buffer
+	if o.sql {
+		sql = &bytes.Buffer{}
+	}
+	p, err := makePlan(ctx, o, e.connect, sql)
 	if err != nil {
 		printError(e.stderr, interrupted(ctx, err, errInterrupted))
 		return exitError
 	}
-	if err := plan.Render(e.stdout, p); err != nil {
+	if sql != nil {
+		_, err = e.stdout.Write(sql.Bytes())
+	} else {
+		err = plan.Render(e.stdout, p)
+	}
+	if err != nil {
 		printError(e.stderr, fmt.Errorf("write the plan: %w", err))
 		return exitError
 	}
@@ -82,14 +97,27 @@ func parsePlan(args []string) (planOptions, error) {
 func planFlagSet(o *planOptions) *flag.FlagSet {
 	fs := newFlagSet("plan")
 	o.define(fs)
+	fs.Func("format", "", func(s string) error {
+		switch s {
+		case "text":
+			o.sql = false
+		case "sql":
+			o.sql = true
+		default:
+			return errors.New("give text or sql")
+		}
+		return nil
+	})
 	fs.BoolVar(&o.exitCode, "exit-code", false, "")
 	return fs
 }
 
 // makePlan reads the declaration and the settings, and only then connects to
 // the database, so that a mistake in a file is reported without a database.
-// The session is closed before makePlan returns, also when ctx is cancelled.
-func makePlan(ctx context.Context, o planOptions, connect connectFunc) (p *plan.Plan, err error) {
+// When sql is not nil, it writes the plan into it as SQL (ADR-0020), which
+// needs the session. The session is closed before makePlan returns, also
+// when ctx is cancelled.
+func makePlan(ctx context.Context, o planOptions, connect connectFunc, sql *bytes.Buffer) (p *plan.Plan, err error) {
 	decl, settings, err := load(o.common)
 	if err != nil {
 		return nil, err
@@ -103,5 +131,23 @@ func makePlan(ctx context.Context, o planOptions, connect connectFunc) (p *plan.
 			p, err = nil, closeErr
 		}
 	}()
-	return plan.Build(ctx, decl, settings, db)
+	p, err = plan.Build(ctx, decl, settings, db)
+	if err != nil || sql == nil {
+		return p, err
+	}
+	h := script.Header{Dir: decl.Dir}
+	if n, ok := db.(databaseNamer); ok {
+		h.Database = n.DatabaseName()
+	}
+	if err := script.Write(ctx, sql, p, db, h); err != nil {
+		return nil, fmt.Errorf("write the plan as SQL: %w", err)
+	}
+	return p, nil
+}
+
+// databaseNamer is a session that can say the name of its database, for the
+// header of a plan as SQL. The name is all that the header says of the
+// connection.
+type databaseNamer interface {
+	DatabaseName() string
 }

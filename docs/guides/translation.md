@@ -197,3 +197,13 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | set-based statement | 集合単位の文 |
 | phase (of an apply) | 段階 |
 | outcome (of a commit) | 結果 |
+| script (the plan printed as SQL) | スクリプト |
+| statement, keyword (of SQL) | 文、キーワード |
+| string literal, standard string, escape string (`E'...'`) | 文字列リテラル、標準の文字列、エスケープ文字列 |
+| comment (in SQL), header comment (of a script), comment mark | コメント、冒頭のコメント、コメントの印 |
+| refresh (export a declared table again) | 書き出し直す |
+| replace (a file) | 置き換える |
+| temporary file | 一時ファイル |
+| read-only (transaction) | 読み取り専用 |
+| note (a line on standard error) | 注記 |
+| umask | umask |

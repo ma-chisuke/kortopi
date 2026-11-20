@@ -17,6 +17,10 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
+// errExport is the error of a comparison on a session of an export, which
+// only reads and has no temporary tables.
+var errExport = errors.New("the session is for an export, which only reads: open a session for a plan to compare rows")
+
 // maxDuplicates is the number of repeated keys that an error lists.
 const maxDuplicates = 10
 
@@ -39,6 +43,9 @@ const maxFlaggedRows = 5
 // When the table has rows to delete, Diff also counts the rows of other
 // tables that reference them (ADR-0018).
 func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
+	if s.export {
+		return plan.TableDiff{}, errExport
+	}
 	table := req.Table
 	meta, err := s.table(ctx, table.Name)
 	if err != nil {
@@ -55,13 +62,8 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDif
 		return plan.TableDiff{}, err
 	}
 
-	if err := s.checkPrivileges(meta, table); err != nil {
+	if err := s.checkReading(meta, table.Name, table.Columns); err != nil {
 		return plan.TableDiff{}, err
-	}
-	if meta.rowSecurity {
-		return plan.TableDiff{}, fmt.Errorf("table %s has row-level security, so the role %q sees only the rows that its policies allow, "+
-			"and %s would take the others for missing rows: %s as a role with BYPASSRLS, "+
-			"or as the owner of the table if the table does not force row-level security", table.Name, s.role, s.needs(), s.work())
 	}
 
 	var diff plan.TableDiff
@@ -185,14 +187,14 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 // checkPrivileges returns an error when the role of the session may not
 // read the declared columns of the table: a plan reads them, in the
 // statements that compare the rows.
-func (s *Session) checkPrivileges(meta *tableMeta, table declaration.Table) error {
+func (s *Session) checkPrivileges(meta *tableMeta, table declaration.TableName, columns []string) error {
 	if !meta.schemaUsage {
 		return fmt.Errorf("%s needs USAGE on schema %q and SELECT on table %s, and the role %q lacks USAGE on the schema: "+
-			"grant the role USAGE on the schema and SELECT on the table", s.needs(), table.Name.Schema, table.Name, s.role)
+			"grant the role USAGE on the schema and SELECT on the table", s.needs(), table.Schema, table, s.role)
 	}
 	var denied []string
 	declared := 0
-	for _, name := range table.Columns {
+	for _, name := range columns {
 		if col, ok := meta.column(name); ok {
 			declared++
 			if !col.selectable {
@@ -205,10 +207,29 @@ func (s *Session) checkPrivileges(meta *tableMeta, table declaration.Table) erro
 		return nil
 	case len(denied) == declared:
 		return fmt.Errorf("%s needs SELECT on table %s, and the role %q lacks it: grant the role SELECT on the table",
-			s.needs(), table.Name, s.role)
+			s.needs(), table, s.role)
 	}
 	return fmt.Errorf("%s needs SELECT on table %s, and the role %q may not read its column %q: grant the role SELECT on the table",
-		s.needs(), table.Name, s.role, denied[0])
+		s.needs(), table, s.role, denied[0])
+}
+
+// checkReading returns an error when the role of the session may not read
+// columns of the table, or when row-level security would hide rows of the
+// table from it.
+func (s *Session) checkReading(meta *tableMeta, table declaration.TableName, columns []string) error {
+	if err := s.checkPrivileges(meta, table, columns); err != nil {
+		return err
+	}
+	if !meta.rowSecurity {
+		return nil
+	}
+	what := "would take the others for missing rows"
+	if s.export {
+		what = "would leave the others out"
+	}
+	return fmt.Errorf("table %s has row-level security, so the role %q sees only the rows that its policies allow, "+
+		"and %s %s: %s as a role with BYPASSRLS, "+
+		"or as the owner of the table if the table does not force row-level security", table, s.role, s.needs(), what, s.work())
 }
 
 // dateTimeColumns returns the declared columns of table that the real table
@@ -258,6 +279,9 @@ func repeated(names []string) (string, bool) {
 // temporary table of text columns, so PostgreSQL reads it as it would read
 // the file of an existing table.
 func (s *Session) CountRows(ctx context.Context, table declaration.Table) (int, error) {
+	if s.export {
+		return 0, errExport
+	}
 	switch table.Format {
 	case declaration.SQL:
 		n := 0

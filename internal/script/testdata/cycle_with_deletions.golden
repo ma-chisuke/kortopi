@@ -1,0 +1,20 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 0 to insert, 1 to update, 1 to delete in 2 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- Tables geo.cities and geo.regions reference each other through foreign keys that are not deferrable, "cities_region" of geo.cities and "regions_capital" of geo.regions, and tables geo.cities and geo.regions have rows to write.
+-- Because of the deletions, an apply with --allow-delete refuses this; one without it does not. Here the statements
+-- stand in the order of the names of their tables, and once the deletions run, some of them may fail on these
+-- foreign keys whatever the order. Declare one of these foreign keys DEFERRABLE.
+
+-- geo.regions: 1 to update
+UPDATE geo.regions SET 1 columns WHERE (1);
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- geo.cities: 1 to delete
+-- DELETE FROM geo.cities WHERE (10);

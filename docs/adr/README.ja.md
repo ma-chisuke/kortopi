@@ -33,5 +33,7 @@
 | [ADR-0025](ADR-0025-pgx-go-toml-and-test-containers-in-the-root-module.ja.md) | PostgreSQL とは pgx で話し、設定は go-toml で読み、テスト用のサーバーはルートのモジュールの testcontainers-go で起動する | accepted | 2026-11-19 |
 | [ADR-0026](ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md) | apply は1つのスナップショットで、トランザクションのロックのもとで、集合単位の文で実行する | accepted | 2026-11-20 |
 | [ADR-0027](ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) | 削除は `--allow-delete` で許し、`--max-delete` で実行全体を制限し、それを参照する行を数える | accepted | 2026-11-20 |
+| [ADR-0028](ADR-0028-export-named-tables-into-a-file-each.ja.md) | 指定したテーブルだけをテーブルごとのファイルに書き出し、宣言済みのファイルは `--overwrite` のときだけ、その列のまま置き換える | accepted | 2026-11-20 |
+| [ADR-0029](ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md) | 計画を、適用の順に、どのセッションでも同じに読める値で SQL として出力し、削除はコメントにする | accepted | 2026-11-20 |
 
-<!-- i18n-source: README.md sha256:e5f041b05e9d5e69f33b5d08b11599ca37cbcc49fd80e2e2135749041892ce45 -->
+<!-- i18n-source: README.md sha256:b99d40455b057401613a0c7dc5690f265504ba749af873a55786a7333f3ec602 -->

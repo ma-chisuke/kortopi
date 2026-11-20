@@ -12,20 +12,29 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/export"
 	"github.com/ma-chisuke/kortopi/internal/postgres"
+	"github.com/ma-chisuke/kortopi/internal/script"
 )
 
 // This file holds what plan and apply share: the flags of the declaration
 // and of the connection, their help, the reading of the files, the session,
 // and the handling of an interrupt.
 
-// sourceFlags returns the help of --dir and --schema for a command, whose
-// name says what it does with the tables of a schema.
-func sourceFlags(command string) string {
-	return "  --dir <path>      the data directory, which holds the declaration and\n" +
-		"                    kortopi.toml (default: the current directory)\n" +
-		"  --schema <name>   " + command + " only the tables of this schema; repeat the flag for\n" +
+// dirFlag is the help of --dir.
+const dirFlag = "  --dir <path>      the data directory, which holds the declaration and\n" +
+	"                    kortopi.toml (default: the current directory)\n"
+
+// schemaFlag returns the help of --schema for plan and apply, whose name
+// says what the command does with the declared tables of a schema.
+func schemaFlag(command string) string {
+	return "  --schema <name>   " + command + " only the tables of this schema; repeat the flag for\n" +
 		"                    more schemas\n"
+}
+
+// sourceFlags returns the help of --dir and --schema for plan and apply.
+func sourceFlags(command string) string {
+	return dirFlag + schemaFlag(command)
 }
 
 // connectionFlags is the help of the flags of the connection.
@@ -139,6 +148,8 @@ type target struct {
 	// apply opens a session that can write, for an apply. Without it, the
 	// session is for a plan.
 	apply bool
+	// export opens a session that only reads, for an export.
+	export bool
 	// wait gets one line when an apply waits for another apply.
 	wait io.Writer
 }
@@ -146,14 +157,25 @@ type target struct {
 // connectFunc opens a session on the target database. Tests replace it.
 type connectFunc func(ctx context.Context, t target) (session, error)
 
-// session is a session on the target database. Its transaction is rolled back
-// when it closes, unless an apply committed it.
+// session is a session on the target database, for any command: each command
+// uses the methods that it needs. Its transaction is rolled back when it
+// closes, unless an apply committed it.
 type session interface {
 	apply.Database
+	// WriteStatements writes statements of a plan as SQL (script.Database).
+	WriteStatements(ctx context.Context, w io.Writer, step script.Step) error
+	// Tables and Write are what an export needs (export.Database).
+	Tables(ctx context.Context, schemas []string) ([]declaration.TableName, error)
+	Write(ctx context.Context, w io.Writer, req export.Request) (int, error)
 	// Close rolls back the transaction of the session, unless it was
 	// committed, and closes it.
 	Close(ctx context.Context) error
 }
+
+var (
+	_ script.Database = session(nil)
+	_ export.Database = session(nil)
+)
 
 // closeSession closes s with a context of its own, so that the transaction is
 // rolled back and the connection closed also after an interrupt, and bounded
@@ -184,6 +206,7 @@ func connectPostgres(ctx context.Context, t target) (session, error) {
 		Database: t.conn.dbname,
 		Dir:      t.dir,
 		Apply:    t.apply,
+		Export:   t.export,
 		Wait:     t.wait,
 	})
 	if err != nil {

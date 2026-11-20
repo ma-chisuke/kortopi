@@ -1,0 +1,151 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"strings"
+
+	"github.com/ma-chisuke/kortopi/internal/config"
+	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/export"
+	"github.com/ma-chisuke/kortopi/internal/postgres"
+)
+
+// exportOnlyFlags is the help of the flags that only export has.
+const exportOnlyFlags = "  --schema <name>   export every table of this schema; repeat the flag for\n" +
+	"                    more schemas\n" +
+	"  --table <name>    export this table, written as <schema>.<table>; repeat\n" +
+	"                    the flag for more tables\n" +
+	"  --format <name>   csv (the default), or sql: the format of a new file\n" +
+	"  --overwrite       replace the files that declare the exported tables\n"
+
+// exportFlags lists the flags of export, for its help.
+const exportFlags = "  --dir <path>      the data directory to write into, created if it is\n" +
+	"                    missing (default: the current directory)\n" +
+	exportOnlyFlags +
+	connectionFlags
+
+// exportUsage is the short help of export, which follows an error in its
+// flags.
+const exportUsage = "usage: kortopi export [flags]\n" +
+	"\n" +
+	"flags:\n" +
+	exportFlags
+
+// exportHelp is the help of export.
+const exportHelp = "usage: kortopi export [flags]\n" +
+	"\n" +
+	"Write the rows of tables of the database as a declaration: a file for each\n" +
+	"table, <schema>/<table>.csv or .sql in the data directory, which a plan of\n" +
+	"the same rows finds equal. Name the tables with --table or --schema: an\n" +
+	"export never writes every table of a database. A table that a file\n" +
+	"declares already is written again only with --overwrite, into that file,\n" +
+	"in its format, and with its columns. A new file holds every column of its\n" +
+	"table but the generated ones: remove the columns that the declaration\n" +
+	"should not manage. An export only reads the database.\n" +
+	"\n" +
+	"flags:\n" +
+	exportFlags +
+	"\n" +
+	connectionHelp +
+	"\n" +
+	"exit status:\n" +
+	"  0   the files were written\n" +
+	"  1   the export failed; the error names the files that it wrote before\n" +
+	"      it failed\n"
+
+// exportOptions are the flags of export.
+type exportOptions struct {
+	common
+	tables    []declaration.TableName
+	format    declaration.Format
+	overwrite bool
+}
+
+// errExportInterrupted is the first line of the error of an export that an
+// interrupt stopped.
+var errExportInterrupted = errors.New("interrupted: the export was stopped")
+
+// runExport runs `kortopi export`.
+func runExport(ctx context.Context, args []string, e env) int {
+	o, err := parseExport(args)
+	if err != nil {
+		return flagError(e, err, exportHelp, exportUsage)
+	}
+	if err := makeExport(ctx, o, e); err != nil {
+		// After an interrupt the error still says which files were written.
+		if ctx.Err() != nil {
+			printError(e.stderr, errExportInterrupted)
+		}
+		printError(e.stderr, err)
+		return exitError
+	}
+	return exitOK
+}
+
+// parseExport parses the flags of export.
+func parseExport(args []string) (exportOptions, error) {
+	var o exportOptions
+	if err := parse(exportFlagSet(&o), args, "give the data directory with --dir"); err != nil {
+		return exportOptions{}, err
+	}
+	return o, nil
+}
+
+// exportFlagSet returns the flags of export, which parsing writes into o.
+func exportFlagSet(o *exportOptions) *flag.FlagSet {
+	fs := newFlagSet("export")
+	o.define(fs)
+	o.format = declaration.CSV
+	fs.Func("table", "", func(s string) error {
+		schema, name, ok := strings.Cut(s, ".")
+		if !ok || schema == "" || name == "" || strings.Contains(name, ".") {
+			return errors.New("write the table as <schema>.<table>, with one dot")
+		}
+		o.tables = append(o.tables, declaration.TableName{Schema: schema, Name: name})
+		return nil
+	})
+	fs.Func("format", "", func(s string) error {
+		switch s {
+		case "csv":
+			o.format = declaration.CSV
+		case "sql":
+			o.format = declaration.SQL
+		default:
+			return errors.New("give csv or sql")
+		}
+		return nil
+	})
+	fs.BoolVar(&o.overwrite, "overwrite", false, "")
+	return fs
+}
+
+// makeExport reads the settings and the declaration that the data directory
+// holds already, if any, checks the flags against them, and only then
+// connects and exports.
+func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
+	settings, err := config.Load(o.dir)
+	if err != nil {
+		return err
+	}
+	decl, err := declaration.LoadExisting(o.dir, postgres.Parser{})
+	if err != nil {
+		return err
+	}
+	opts := export.Options{Tables: o.tables, Schemas: o.schemas, Format: o.format, Overwrite: o.overwrite, Notes: e.stderr}
+	if err := export.Check(decl, opts); err != nil {
+		return err
+	}
+	db, err := e.connect(ctx, target{conn: o.conn, dir: decl.Dir, export: true})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := closeSession(ctx, db); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	_, err = export.Run(ctx, decl, settings, db, opts, e.stdout)
+	return err
+}

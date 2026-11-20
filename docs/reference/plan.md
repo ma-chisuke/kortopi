@@ -21,6 +21,8 @@ flags:
                     kortopi.toml (default: the current directory)
   --schema <name>   plan only the tables of this schema; repeat the flag for
                     more schemas
+  --format <name>   text (the default), or sql: print the plan as SQL
+                    statements that run as they are
   --exit-code       exit with status 2 when the plan is not empty
   --host <host>     the host of the database server
   --port <port>     the port of the database server
@@ -42,6 +44,8 @@ exit status:
 `--schema` narrows the plan to the declared tables of the named schemas.
 A named schema that declares no table is an error, so a misspelled name cannot narrow the plan to nothing.
 The settings in `kortopi.toml` are still checked against every declared table, also those of the schemas that `--schema` leaves out.
+
+`--format sql` prints the plan as SQL statements instead of text ([Print the plan as SQL](#print-the-plan-as-sql)).
 
 `kortopi plan --help` and `kortopi plan -h` print the same help on standard output.
 
@@ -274,6 +278,144 @@ The name of a schema, a table, or a column prints in quotes in the same way when
 
 The output is plain text with no color, the same in a terminal, in a CI log, and in a file.
 
+## Print the plan as SQL
+
+`kortopi plan --format sql` prints the plan as a script of SQL: the statements that an apply would run, with the values written out, so that they run without kortopi.
+A team that changes its database only through versioned migrations reviews the script and pastes it into a migration.
+The plan is made as for the text, in the same session, and needs nothing more.
+
+The plan of three tables in [Read the output](#read-the-output), as SQL:
+
+```sql
+-- Written by kortopi from the data directory data, against the database app.
+-- It is the difference at the moment of the plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL client_encoding = 'UTF8';
+SET LOCAL lc_monetary = 'C';
+SET LOCAL xmloption = content;
+
+-- catalog.plans: 1 to insert, 1 to update
+INSERT INTO "catalog"."plans" ("code", "name", "price") VALUES
+  ('team', 'Team', '40.00');
+UPDATE ONLY "catalog"."plans" SET "name" = 'Pro Plan', "price" = '25.00' WHERE "code" OPERATOR("pg_catalog".=) 'pro'::"pg_catalog"."text";
+
+-- facility.room_types: 1 to insert, 1 to update
+INSERT INTO "facility"."room_types" ("code", "name", "capacity") VALUES
+  ('suite', 'Suite Room', '4');
+UPDATE ONLY "facility"."room_types" SET "capacity" = '3' WHERE "code" OPERATOR("pg_catalog".=) 'twin'::"pg_catalog"."text";
+
+-- facility.rooms: 1 to insert
+INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
+  ('103', 'suite', NULL);
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- catalog.plans: 1 to delete
+-- DELETE FROM ONLY "catalog"."plans" AS s USING (VALUES
+--   ('legacy'::"pg_catalog"."text")
+-- ) AS d ("code") WHERE s."code" OPERATOR("pg_catalog".=) d."code";
+```
+
+### Read the script
+
+- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan. After the header come the tables and the columns that wait for a schema change, one comment line each.
+- After a comment, three `SET LOCAL` statements pin, until the end of the transaction, the settings that change how a literal of the script reads ([Values in the script](#values-in-the-script)).
+- When an apply would defer foreign keys of a cycle, a `SET CONSTRAINTS ... DEFERRED` follows ([kortopi apply](apply.md#foreign-keys-and-cycles)). When another table of the schema has a constraint of the same name that is not deferrable, the plan fails with the error of an apply ([kortopi apply](apply.md#a-constraint-of-the-same-name)).
+- The tables follow in the order of an apply, from referenced tables to referencing ones, each under a comment line with its counts. A table gets one `INSERT` for its rows to insert, each row on a line of its own, and one `UPDATE` for each row to update, which sets only the columns that differ.
+- The deletions come last, in the reverse order, as comments: one `DELETE` for each table, which lists the keys of its rows one on each line ([Deletions](#deletions)).
+- Every name is in double quotes, because a name that is plain on one version of PostgreSQL can be a keyword on another. An ordinary table has `ONLY`, as in an apply, and a partitioned table does not.
+- A table that waits for a schema change has no statement, and a column that waits for one is left out of the statements of its table.
+
+A plan with nothing to do gives one line:
+
+```sql
+-- No changes: the database matches the declaration, so there is nothing to do.
+```
+
+A plan in which only tables and columns wait for a schema change gives the header and this line:
+
+```sql
+-- There is no statement to run until the schema is applied.
+```
+
+The script has no `BEGIN` and no `COMMIT`: whoever runs it decides the transaction.
+It goes to standard output only when it is whole, so a failed plan prints nothing there.
+`--exit-code` gives the same status as for the text.
+
+### Run the script
+
+Run the script in one transaction, against the database that the plan read, soon after the plan:
+
+```sh
+kortopi plan --dir data --format sql > rows.sql
+psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
+```
+
+`--single-transaction` runs the file in one transaction, and `ON_ERROR_STOP=1` stops at the first error, so that the transaction is rolled back.
+A tool of versioned migrations usually runs each file in a transaction of its own; check that yours does.
+The `SET LOCAL` statements need the transaction: outside one, they only warn.
+`SET LOCAL client_encoding` applies to the statements that the client sends after it as messages of their own, as `psql` does. A client that sends the whole script as one message has had it read in its own encoding already, so it must connect with `client_encoding` set to UTF8, as database drivers usually do.
+
+After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, or nothing.
+
+### Deletions
+
+The deletions are comments: every line of their statements starts with the comment mark `--`.
+An apply deletes these rows only with `--allow-delete` ([kortopi apply](apply.md#the-guards-on-deletions)), so the script deletes them only when you remove the marks.
+The reference lines of the plan stand before the deletions of each table, as comments.
+Read them before you remove the marks: nothing in the script applies `--max-delete`, or counts the references again.
+
+### Values in the script
+
+Every value is a string literal, which PostgreSQL reads by the type of the column that receives it, and NULL is `NULL`.
+A literal reads the same in any session:
+
+- Its text is the value as PostgreSQL prints it in the settings of a plan ([How values are compared](comparison.md#the-settings-of-the-session)), in a form that other settings read the same: a date as `YYYY-MM-DD`, a `timestamptz` with its offset, an interval with a sign on each field that needs one, a `bytea` in hex, and a floating-point number with the shortest text that reads back as the same value.
+- A text without a backslash or a control character is a standard string, `'...'`, which reads the same whatever `standard_conforming_strings` is.
+- Any other text is an escape string, `E'...'`, with its control characters as escapes, so a literal is always one line.
+
+| Value | In the script |
+|---|---|
+| NULL | `NULL` |
+| the empty string | `''` |
+| the text `NULL` | `'NULL'` |
+| `it's` | `'it''s'` |
+| a backslash, `a\b` | `E'a\\b'` |
+| two lines and a tab | `E'two\nlines\tand a tab'` |
+| a `bytea`, `\x6869` | `E'\\x6869'` |
+
+A key that finds a row is cast to the type of its column, with the schema of the type, and compared with the operator that the plan matches rows with, also with its schema, so the row is found as the plan matched it whatever the search path:
+
+```sql
+"code" OPERATOR("pg_catalog".=) 'pro'::"pg_catalog"."text"
+```
+
+Three settings change how a literal reads, and no literal can carry them: `client_encoding` for text that is not ASCII, `lc_monetary` for `money`, and `xmloption` for an `xml` value that is a fragment rather than a whole document.
+The script pins them with `SET LOCAL`, as the plan read the values.
+The tests of kortopi run on servers with only the locales C and en_US, which write `money` the same way, so they show only that pinning `lc_monetary` does no harm there.
+
+A value that is not valid UTF-8, which a database in the encoding `SQL_ASCII` can hold, cannot be written in a UTF-8 script, and is an error:
+
+```text
+kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not valid UTF-8, which the encoding of the database allows: the SQL that kortopi writes is UTF-8, so correct the value in the database
+```
+
+### What the script does not do
+
+The script makes the changes of an apply, in its order, but it does not do what an apply does around its statements:
+
+- It takes no lock, so it does not wait for an apply that runs at the same time.
+- It does not check that each statement changed as many rows as the plan shows. Against a database whose rows differ from the plan, an update or a deletion that finds no row changes nothing, without an error, and an insert can fail on a key. A trigger or a rule that changes what a statement does goes unnoticed.
+- It does not apply `--max-delete`, and it does not count the references again before the deletions.
+- An update sets only the columns that differ, so it needs `UPDATE` on those columns alone, and fires `UPDATE OF` triggers for those columns alone.
+- The order and the deferrals count the deletions, as for an apply with `--allow-delete`, so the script stays in order when you uncomment them.
+- A cycle of foreign keys that an apply refuses is no error. Its tables stand in the order of their names, under a comment that says which foreign keys may make statements fail, and to declare one of them `DEFERRABLE`. When only the deletions make an apply refuse the cycle, the comment says that an apply with `--allow-delete` refuses it and one without it does not.
+
+A declaration whose references hold IDs that differ between environments, such as the UUID of a referenced row, gives a script that runs only where those IDs are the same ([ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md)).
+
 ## Errors
 
 The plan goes to standard output, and errors go to standard error as `kortopi: <message>`, one line for each error.
@@ -285,6 +427,7 @@ kortopi checks in this order:
 2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that the declaration does not name is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
+5. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
 
 [Declaration files](declaration.md#common-mistakes) lists the common mistakes and their messages.
 
@@ -299,6 +442,7 @@ kortopi checks in this order:
 Without `--exit-code`, a plan that shows changes exits with 0, so a pull request that changes master data does not fail on its own plan.
 
 With `--exit-code`, a plan detects drift: any row to insert, update, or delete, and any table or column that waits for a schema change, gives status 2.
+It works the same with `--format sql`.
 A scheduled job that compares the database with the declaration of its main branch tells the three outcomes apart:
 
 ```sh
@@ -313,4 +457,4 @@ esac
 
 The `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), and [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), and [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md).

@@ -1,0 +1,9 @@
+-- Written by kortopi from the data directory "my data\n", against the database "shop\r".
+-- It is the difference at the moment of the plan: 1 to insert, 0 to update, 0 to delete in 1 table.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- geo."bad\nDROP TABLE geo.cities;": 1 to insert
+INSERT INTO geo."bad\nDROP TABLE geo.cities;" (1, n1);

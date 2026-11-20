@@ -29,18 +29,25 @@ var usage = "kortopi manages the rows of PostgreSQL master tables declaratively.
 	"commands:\n" +
 	"  plan      show how the database differs from the declaration\n" +
 	"  apply     change the rows of the database to match the declaration\n" +
+	"  export    write the rows of tables of the database as a declaration\n" +
 	"  version   print the version of kortopi\n" +
 	"  help      print this help, or the help of a command\n" +
 	"\n" +
-	"flags of plan and apply:\n" +
-	sourceFlags("use") +
+	"flags of plan, apply, and export:\n" +
+	dirFlag +
 	connectionFlags +
+	"\n" +
+	"flags of plan and apply:\n" +
+	schemaFlag("use") +
 	"\n" +
 	"flags of plan:\n" +
 	planOnlyFlags +
 	"\n" +
 	"flags of apply:\n" +
 	applyOnlyFlags +
+	"\n" +
+	"flags of export:\n" +
+	exportOnlyFlags +
 	"\n" +
 	connectionHelp
 
@@ -85,6 +92,8 @@ func run(ctx context.Context, args []string, e env) int {
 		return runPlan(ctx, args[1:], e)
 	case "apply":
 		return runApply(ctx, args[1:], e)
+	case "export":
+		return runExport(ctx, args[1:], e)
 	case "version", "--version":
 		return runVersion(args[1:], e)
 	case "help", "--help", "-h":
@@ -118,6 +127,8 @@ func runHelp(args []string, e env) int {
 		_, _ = io.WriteString(e.stdout, planHelp)
 	case len(args) == 1 && args[0] == "apply":
 		_, _ = io.WriteString(e.stdout, applyHelp)
+	case len(args) == 1 && args[0] == "export":
+		_, _ = io.WriteString(e.stdout, exportHelp)
 	case len(args) == 1 && args[0] == "version":
 		_, _ = io.WriteString(e.stdout, versionHelp)
 	default:

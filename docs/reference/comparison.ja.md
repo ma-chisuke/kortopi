@@ -39,6 +39,9 @@ kortopi は、ファイルのテキストをデータベースと比べること
 | `lc_monetary` | `C` | `money` の値は、C ロケールの形で読み、表示する。どの環境でも同じである。 |
 | `row_security` | `off` | 行単位セキュリティのポリシーが絞り込む問い合わせは、少ない行を返さずに失敗する（[kortopi plan](plan.ja.md#セッションに要るもの)）。 |
 
+[kortopi export](export.ja.md) も、これらの設定で値を書く。そのため、計画はそのファイルを同じ値として読み戻す。
+SQL として出力した計画は、設定の違うセッションでも同じに読めるように各値を書く（[スクリプトの値](plan.ja.md#スクリプトの値)）。
+
 ## 型ごとの比べ方
 
 例の1列目は、保存されている値と等しくなる値であり、計画には変更が出ない。
@@ -114,10 +117,9 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 - トリガーと、書き込みの権限
 - データベースにまだないテーブルや列の値
 
-これらは、行を適用したときに見つかる。
+これらは、行を適用したときに見つかる（[kortopi apply](apply.ja.md)）。
 マージの前にこれらを見つける方法は、ADR-0016 にある。CI で、使い捨ての PostgreSQL に新しいスキーマを適用し、続けて行を適用する。
-`kortopi apply` は、まだできていない。
 
 これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md) と [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:1d80c040ef0c79a398cec3dea4772370910df9879ec34dea1c45f58107353ec5 -->
+<!-- i18n-source: comparison.md sha256:4977be8c14a5bf271696b428e4f33522ef732d7375db8fc0fc500be9e2caa6f7 -->
