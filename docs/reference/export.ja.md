@@ -431,7 +431,7 @@ kortopi: tables App.t and app.t would be written to data/App/t.csv and data/app/
 ファイルの名前になれない名前。
 
 ```text
-kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "a/b"."t" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
+kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
 ```
 
 形の誤ったフラグ。
@@ -443,4 +443,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:1add567f4fb354262df0dcd55463828e162096654356db6e143ac5f50e1ff3d4 -->
+<!-- i18n-source: export.md sha256:99bf6c1e6cfe2e249ffd0f629183ae1dc138e0492d245d5de0067ffc0de6acf6 -->

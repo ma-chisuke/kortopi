@@ -333,9 +333,9 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 		for _, part := range []struct{ what, name string }{{"schema", name.Schema}, {"table", name.Name}} {
 			if why := notAFileName(part.name); why != "" {
 				errs = append(errs, fmt.Errorf("table %s cannot get a file of its own: the name of its %s %s, which a file name cannot: "+
-					"declare the table in a SQL file of another name, with one INSERT into %s that names the columns to declare, "+
+					"declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, "+
 					"and export the table with --overwrite to write its rows into that file, or rename the %s",
-					quotedName(name), part.what, why, quotedName(name), part.what))
+					quotedName(name), part.what, why, part.what))
 			}
 		}
 		for _, c := range info.Columns {
@@ -444,17 +444,12 @@ func partitions(dir string, names []declaration.TableName, infos map[declaration
 	return errs
 }
 
-// quotedName writes the name of a table as an INSERT of a SQL file writes
-// it, each part in double quotes, so that a message shows a space or a
-// separator in it, and the user can copy it. A name with a control
-// character prints with the escapes of Go instead, so that the message stays
-// one line.
+// quotedName writes the name of a table with each part in double quotes,
+// with the escapes of Go, as plan.FormatName quotes a name that it must
+// quote, so that a separator, a space, or a control character in a name
+// that cannot be a file shows without ambiguity.
 func quotedName(name declaration.TableName) string {
-	if strings.ContainsFunc(name.Schema+name.Name, unicode.IsControl) {
-		return strconv.Quote(name.Schema) + "." + strconv.Quote(name.Name)
-	}
-	quote := func(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
-	return quote(name.Schema) + "." + quote(name.Name)
+	return strconv.Quote(name.Schema) + "." + strconv.Quote(name.Name)
 }
 
 // notAFileName says why name cannot be a part of a path on every file

@@ -431,7 +431,7 @@ kortopi: tables App.t and app.t would be written to data/App/t.csv and data/app/
 A name that cannot be a file:
 
 ```text
-kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "a/b"."t" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
+kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
 ```
 
 A flag in a wrong form:
