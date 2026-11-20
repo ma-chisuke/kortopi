@@ -776,6 +776,41 @@ case_scan_deps__license() {
   passes
 }
 
+# The release build (make check-all): a module that is compiled into kortopi
+# and has no license file fails it, because the release could not carry the
+# license. The module is a local replacement, so nothing is downloaded. The
+# real modules pass.
+case_test_release() {
+  put third_party/nolicense/go.mod << 'EOF'
+module example.com/nolicense
+
+go 1.22
+EOF
+  put_go third_party/nolicense/nolicense.go << 'EOF'
+// Package nolicense is a fixture of the self-test: a module without a license.
+package nolicense
+
+// Name returns the name of the module.
+func Name() string {
+    return "nolicense"
+}
+EOF
+  printf '\nrequire example.com/nolicense v0.0.0\n\nreplace example.com/nolicense => ./third_party/nolicense\n' >> "$COPY/go.mod"
+  put_go cmd/kortopi/selftest.go << 'EOF'
+package main
+
+import "example.com/nolicense"
+
+var _ = nolicense.Name
+EOF
+  fails 'notices/no-license-file'
+  prints 'example.com/nolicense v0.0.0 => ./third_party/nolicense'
+  run git checkout -q -- go.mod
+  drop cmd/kortopi/selftest.go
+  drop third_party
+  passes
+}
+
 # ---------------------------------------------------------------------------
 # The runner.
 

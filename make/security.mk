@@ -11,8 +11,9 @@ export TRIVY_SKIP_VERSION_CHECK := true
 # from asking a credential helper, which can block without a terminal.
 TRIVY_ENV := DOCKER_CONFIG=$(CURDIR)/.cache/trivy-docker-config
 TRIVY_REPORT := --quiet --exit-code 1 --format template --template @tools/trivy/findings.tpl
-# Directories that hold no source of this repository.
-TRIVY_SKIP := --skip-dirs .venv --skip-dirs .cache --skip-dirs .claude/worktrees --skip-dirs tmp
+# Directories that hold no source of this repository: dependencies, caches,
+# and the release archives (dist/).
+TRIVY_SKIP := --skip-dirs .venv --skip-dirs .cache --skip-dirs .claude/worktrees --skip-dirs tmp --skip-dirs dist
 
 # Dependencies in every lockfile. Downloads the vulnerability database, so it
 # runs in check-all.

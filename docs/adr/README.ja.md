@@ -35,5 +35,6 @@
 | [ADR-0027](ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) | 削除は `--allow-delete` で許し、`--max-delete` で実行全体を制限し、それを参照する行を数える | accepted | 2026-11-20 |
 | [ADR-0028](ADR-0028-export-named-tables-into-a-file-each.ja.md) | 指定したテーブルだけをテーブルごとのファイルに書き出し、宣言済みのファイルは `--overwrite` のときだけ、その列のまま置き換える | accepted | 2026-11-20 |
 | [ADR-0029](ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md) | 計画を、適用の順に、どのセッションでも同じに読める値で SQL として出力し、削除はコメントにする | accepted | 2026-11-20 |
+| [ADR-0030](ADR-0030-release-reproducible-archives-with-attested-provenance.ja.md) | main 上のタグから再現できるアーカイブをリリースし、サードパーティの表示と構成証明した来歴を添える | accepted | 2026-11-20 |
 
-<!-- i18n-source: README.md sha256:b99d40455b057401613a0c7dc5690f265504ba749af873a55786a7333f3ec602 -->
+<!-- i18n-source: README.md sha256:f7c008ccc53626b83683f115a47ab21012d1faf871e2b34709c07fd67b3eb9ec -->

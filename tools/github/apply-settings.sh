@@ -22,6 +22,12 @@ topics=(cli database declarative go golang master-data postgresql reference-data
 ruleset_name=main
 actions_app_id=15368
 
+# The ruleset of the tags that start a release (.github/workflows/release.yml):
+# only an administrator of the repository, the role with ID 5, may create,
+# move, or delete one.
+tag_ruleset_name=release-tags
+admin_role_id=5
+
 usage() {
   sed -n '5,12p' "$0" | sed 's/^# \{0,1\}//'
 }
@@ -180,6 +186,14 @@ desired="$(jq -cS . "$tmp/workflow.json")"
 settle actions.workflow_permissions "$current" "$desired" \
   api_with PUT "repos/$repo/actions/permissions/workflow" "$tmp/workflow.json"
 
+# Immutable releases: once a release is published, nobody can change its
+# assets or move its tag, and GitHub signs an attestation of the release.
+# GitHub answers 404 when they are off.
+if ! current="$(gh api "repos/$repo/immutable-releases" --jq 'if .enabled then "enabled" else "disabled" end' 2> /dev/null)"; then
+  current=disabled
+fi
+settle releases.immutable "$current" enabled gh api --method PUT "repos/$repo/immutable-releases"
+
 # The ruleset of the default branch: changes arrive by pull request only, with
 # a linear history, after the check `check` passed; no force push, no deletion.
 cat > "$tmp/ruleset.json" << EOF
@@ -236,17 +250,48 @@ ruleset_summary='{
       required_status_checks: (.required_status_checks | map({context, integration_id}) | sort_by(.context))})}
     else {} end)] | sort_by(.type))
 }'
-desired="$(jq -cS "$ruleset_summary" "$tmp/ruleset.json")"
-ruleset_id="$(gh api "repos/$repo/rulesets?includes_parents=false" \
-  --jq "map(select(.name == \"$ruleset_name\" and .target == \"branch\")) | first | .id // empty")"
-if [ -n "$ruleset_id" ]; then
-  current="$(gh api "repos/$repo/rulesets/$ruleset_id" | jq -cS "$ruleset_summary")"
-  settle "ruleset.$ruleset_name" "$current" "$desired" \
-    api_with PUT "repos/$repo/rulesets/$ruleset_id" "$tmp/ruleset.json"
-else
-  settle "ruleset.$ruleset_name" absent "$desired" \
-    api_with POST "repos/$repo/rulesets" "$tmp/ruleset.json"
-fi
+
+# Report, and with --apply create or replace, the ruleset in a file, found by
+# its name and target.
+# Usage: settle_ruleset <file>
+settle_ruleset() {
+  local file="$1" name target desired id current
+  name="$(jq -r .name "$file")"
+  target="$(jq -r .target "$file")"
+  desired="$(jq -cS "$ruleset_summary" "$file")"
+  id="$(gh api "repos/$repo/rulesets?includes_parents=false&targets=$target" \
+    --jq "map(select(.name == \"$name\" and .target == \"$target\")) | first | .id // empty")"
+  if [ -n "$id" ]; then
+    current="$(gh api "repos/$repo/rulesets/$id" | jq -cS "$ruleset_summary")"
+    settle "ruleset.$name" "$current" "$desired" api_with PUT "repos/$repo/rulesets/$id" "$file"
+  else
+    settle "ruleset.$name" absent "$desired" api_with POST "repos/$repo/rulesets" "$file"
+  fi
+}
+settle_ruleset "$tmp/ruleset.json"
+
+# The ruleset of the tags that start a release: only an administrator creates,
+# moves, or deletes a tag v*, so that nobody else can start a release. After
+# a release is published, immutable releases also keep its tag in place.
+cat > "$tmp/tag-ruleset.json" << EOF
+{
+  "name": "$tag_ruleset_name",
+  "target": "tag",
+  "enforcement": "active",
+  "bypass_actors": [
+    { "actor_type": "RepositoryRole", "actor_id": $admin_role_id, "bypass_mode": "always" }
+  ],
+  "conditions": {
+    "ref_name": { "include": ["refs/tags/v*"], "exclude": [] }
+  },
+  "rules": [
+    { "type": "creation" },
+    { "type": "update", "parameters": { "update_allows_fetch_and_merge": false } },
+    { "type": "deletion" }
+  ]
+}
+EOF
+settle_ruleset "$tmp/tag-ruleset.json"
 
 if [ "$differ" -eq 0 ]; then
   echo "apply-settings: every setting matches"

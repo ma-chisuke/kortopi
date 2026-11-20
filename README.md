@@ -33,6 +33,42 @@ data/
 - **Export** the rows of named tables of an existing database as a declaration, a file for each table, which a plan then finds equal to the database.
 - **Detect drift**: `kortopi plan --exit-code` exits with 2 when the database and the declaration differ, for CI or a scheduled job.
 
+## Install
+
+Releases appear on the [releases page](https://github.com/ma-chisuke/kortopi/releases). Until the first one, build kortopi from this repository, as [Try it](#try-it) shows.
+Each release has an archive for Linux, macOS, and Windows, each on amd64 and arm64, and a checksum file.
+An archive holds the binary, the license, this README, and the notices of the third-party software compiled into the binary.
+
+Check an archive before you run what it holds. With [gh](https://cli.github.com/), for Linux on amd64:
+
+```sh
+version=vX.Y.Z    # the release to install
+gh release download "$version" --repo ma-chisuke/kortopi \
+  --pattern "kortopi_${version}_linux_amd64.tar.gz" --pattern "kortopi_${version}_checksums.txt"
+sha256sum --check --ignore-missing "kortopi_${version}_checksums.txt"
+gh attestation verify "kortopi_${version}_linux_amd64.tar.gz" --repo ma-chisuke/kortopi \
+  --signer-workflow ma-chisuke/kortopi/.github/workflows/release.yml --source-ref "refs/tags/$version"
+tar -xzf "kortopi_${version}_linux_amd64.tar.gz"
+"kortopi_${version}_linux_amd64/kortopi" version
+```
+
+- `sha256sum --check` shows that the download is complete. On macOS without `sha256sum`, run `shasum -a 256 --check --ignore-missing` instead.
+- `gh attestation verify` shows that the release workflow of this repository built the archive on GitHub Actions, from the tag of the version. The checksum file comes from the same place as the archives, so only this check shows who built them.
+- `gh release verify-asset "$version" <file> --repo ma-chisuke/kortopi` shows that a file is an asset of that release, as published.
+- Anyone can build a release again from its tag and get the same bytes, as the [release guide](docs/guides/release.md#build-a-published-release-again) shows.
+
+The binaries are not signed for macOS. If macOS refuses to run one that a browser downloaded, remove the quarantine with `xattr -d com.apple.quarantine kortopi`.
+
+To build a release from source with your own Go, run `go install`:
+
+```sh
+CGO_ENABLED=0 go install github.com/ma-chisuke/kortopi/cmd/kortopi@vX.Y.Z
+```
+
+`kortopi version` then prints the version from the module.
+Such a binary is not the one in the release, and has no attestation.
+`CGO_ENABLED=0` builds it as the release does: with cgo, which Go turns on when it finds a C compiler, the build also compiles a C parser that kortopi never calls.
+
 ## Try it
 
 There is no release yet, so build the binary from this repository. You need [mise](https://mise.jdx.dev/).

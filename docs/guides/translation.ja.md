@@ -207,5 +207,19 @@
 | read-only（トランザクションが） | 読み取り専用 |
 | note（標準エラー出力の1行） | 注記 |
 | umask | umask |
+| release（kortopi の）, pre-release | リリース、プレリリース |
+| tag（Git の） | タグ |
+| archive（リリースの） | アーカイブ |
+| checksum, checksum file | チェックサム、チェックサムのファイル |
+| attestation, artifact attestation | 構成証明、アーティファクトの構成証明 |
+| build provenance | ビルドの来歴 |
+| artifact（ワークフローの実行の） | アーティファクト |
+| immutable release（GitHub の） | 変更不可リリース |
+| reproducible（ビルドが） | 再現できる |
+| third-party software | サードパーティのソフトウェア |
+| build information（Go のバイナリの） | ビルド情報 |
+| module cache（Go の） | モジュールキャッシュ |
+| sign, signature | 署名する、署名 |
+| administrator（リポジトリの） | 管理者 |
 
-<!-- i18n-source: translation.md sha256:538cebfc6715238c1d0eb6f37c863feb3a1d5de2bcc3abfd599256339a0ed51e -->
+<!-- i18n-source: translation.md sha256:af5bf61b7badf056a1d0ff037a008ce82952d0e764fc83d43fd863f8f252ed4a -->

@@ -33,6 +33,42 @@ data/
 - **export** では、今あるデータベースの指定したテーブルの行を、テーブルごとのファイルに宣言として書き出す。計画は、それをデータベースと等しいと判断する。
 - **ずれの検査**では、データベースと宣言が違えば `kortopi plan --exit-code` が終了コード 2 で終わり、それを CI や定期実行に知らせる。
 
+## インストールする
+
+リリースは[リリースのページ](https://github.com/ma-chisuke/kortopi/releases)に並ぶ。最初のリリースまでは、[試す](#試す)のとおり、このリポジトリから kortopi をビルドする。
+各リリースには、Linux・macOS・Windows のそれぞれについて amd64 と arm64 のアーカイブがあり、チェックサムのファイルが1つ付く。
+アーカイブには、バイナリ、ライセンス、この README、バイナリに組み込まれたサードパーティのソフトウェアの表示が入っている。
+
+アーカイブの中身を実行する前に、アーカイブを確かめる。[gh](https://cli.github.com/) を使い、Linux の amd64 なら次のとおりである。
+
+```sh
+version=vX.Y.Z    # インストールするリリース
+gh release download "$version" --repo ma-chisuke/kortopi \
+  --pattern "kortopi_${version}_linux_amd64.tar.gz" --pattern "kortopi_${version}_checksums.txt"
+sha256sum --check --ignore-missing "kortopi_${version}_checksums.txt"
+gh attestation verify "kortopi_${version}_linux_amd64.tar.gz" --repo ma-chisuke/kortopi \
+  --signer-workflow ma-chisuke/kortopi/.github/workflows/release.yml --source-ref "refs/tags/$version"
+tar -xzf "kortopi_${version}_linux_amd64.tar.gz"
+"kortopi_${version}_linux_amd64/kortopi" version
+```
+
+- `sha256sum --check` で、ダウンロードが欠けていないことがわかる。`sha256sum` のない macOS では、代わりに `shasum -a 256 --check --ignore-missing` を実行する。
+- `gh attestation verify` で、このリポジトリのリリースのワークフローが、そのバージョンのタグから GitHub Actions 上でアーカイブをビルドしたことがわかる。チェックサムのファイルはアーカイブと同じ場所から来るので、誰がビルドしたかを示せるのはこの検証だけである。
+- `gh release verify-asset "$version" <file> --repo ma-chisuke/kortopi` で、ファイルがそのリリースのアセットとして公開されたとおりであることがわかる。
+- 誰でもタグからリリースをもう一度ビルドして、同じバイトを得られる。手順は[リリースのガイド](docs/guides/release.ja.md#公開したリリースをもう一度ビルドする)にある。
+
+バイナリには macOS のための署名がない。ブラウザーでダウンロードしたバイナリの実行を macOS が拒むときは、`xattr -d com.apple.quarantine kortopi` で隔離の属性を外す。
+
+自分の Go でリリースをソースからビルドするには、`go install` を実行する。
+
+```sh
+CGO_ENABLED=0 go install github.com/ma-chisuke/kortopi/cmd/kortopi@vX.Y.Z
+```
+
+このとき `kortopi version` は、モジュールのバージョンを出力する。
+こうしてできたバイナリはリリースのものとは別物で、構成証明を持たない。
+`CGO_ENABLED=0` を付けると、リリースと同じようにビルドできる。Go は C コンパイラーを見つけると cgo を有効にし、そのときのビルドは kortopi が呼ばない C のパーサもコンパイルする。
+
 ## 試す
 
 まだリリースがないので、このリポジトリからバイナリをビルドする。[mise](https://mise.jdx.dev/) が要る。
@@ -165,4 +201,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:1494ae65db9d2222262349e34ae9d551e7eb78c180766e0f1eac64efa87fda9c -->
+<!-- i18n-source: README.md sha256:b48c94122108fe49c88e625881fd275a63bd8e41115ff792dbe9b7226b423abe -->
