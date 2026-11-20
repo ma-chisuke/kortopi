@@ -64,6 +64,12 @@ kortopi plan --dir data
 There is no flag for the password, so that it never appears in the arguments of a process.
 Give it in `PGPASSWORD`, in the password file, or in the service file.
 
+kortopi needs the name of the database. Unlike `psql`, it does not take the name of the user for it: without `--dbname`, `PGDATABASE`, or `dbname` in the service, it stops before it connects.
+
+```text
+kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names
+```
+
 `--host`, `--user`, and `--dbname`, and the variables `PGHOST`, `PGUSER`, and `PGDATABASE`, take a name, not a connection string: a value that holds `://` or `=` is an error.
 Such a value could hold a password, and libpq would read it as a name and repeat it in the error of a failed connection.
 The error does not repeat the value:
@@ -75,11 +81,21 @@ kortopi: the database of the connection looks like a connection string, which ma
 
 No error of a flag repeats the value that was typed.
 
-A connection that fails stops the plan, with the error of the driver:
+A variable that the driver cannot read is named, and its value is not repeated:
 
 ```text
-kortopi: connect to the database: failed to connect to ...
+kortopi: read the connection settings: the port is not a number from 1 to 65535: correct PGPORT, or the port of the service that PGSERVICE names
+kortopi: read the connection settings: the SSL mode is not one that libpq knows: set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full
 ```
+
+A connection that fails stops the plan, with the cause that the driver gives:
+
+```text
+kortopi: connect to the database: failed to connect to `user=app database=app`: 127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
+```
+
+- With `sslmode` `prefer`, the default, the driver tries TLS first, and then without it. The refusal of TLS by a server without TLS is left out, because the second attempt gives the cause.
+- When the server refuses the password and no password was given, in `PGPASSWORD`, in the password file, or in the service, the error adds `: no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names`. The server answers a missing password and a wrong one alike, so without that line, the password was given and is wrong, or the user cannot log in with it.
 
 ### Connection settings
 

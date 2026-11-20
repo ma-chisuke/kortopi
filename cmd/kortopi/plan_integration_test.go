@@ -246,6 +246,45 @@ func TestPlanCommandConnectionErrors(t *testing.T) {
 		}
 	})
 
+	// With sslmode prefer, the default, the driver first tries TLS, which
+	// the server of the tests refuses: the error shows the cause, not that
+	// refusal.
+	t.Run("wrong password with sslmode prefer", func(t *testing.T) {
+		t.Setenv("PGSSLMODE", "")
+		t.Setenv("PGPASSWORD", "wrong-password-that-must-not-show")
+		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+		code, stdout, stderr := e.plan(t, "--dir", dir)
+		checkRun(t, code, stdout, stderr, exitError, "",
+			"kortopi: connect to the database: failed to connect to `user="+db.Config.User+" database="+db.Name+"`: ", "password authentication failed")
+		for _, not := range []string{"server refused TLS connection", "no password was given", "wrong-password-that-must-not-show"} {
+			if strings.Contains(stderr, not) {
+				t.Errorf("stderr holds %q:\n%s", not, stderr)
+			}
+		}
+	})
+
+	t.Run("no password", func(t *testing.T) {
+		t.Setenv("PGSSLMODE", "")
+		t.Setenv("PGPASSWORD", "")
+		t.Setenv("PGPASSFILE", filepath.Join(t.TempDir(), "none"))
+		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+		code, stdout, stderr := e.plan(t, "--dir", dir)
+		checkRun(t, code, stdout, stderr, exitError, "", "password authentication failed",
+			": no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names\n")
+		if strings.Contains(stderr, "server refused TLS connection") {
+			t.Errorf("stderr holds the refusal of TLS:\n%s", stderr)
+		}
+	})
+
+	t.Run("no database name", func(t *testing.T) {
+		t.Setenv("PGPASSWORD", db.Config.Password)
+		t.Setenv("PGDATABASE", "")
+		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User}}
+		code, stdout, stderr := e.plan(t, "--dir", dir)
+		checkRun(t, code, stdout, stderr, exitError, "",
+			"kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names\n")
+	})
+
 	t.Run("port without a server", func(t *testing.T) {
 		t.Setenv("PGPASSWORD", db.Config.Password)
 		// A port that was free a moment ago: nothing listens on it.

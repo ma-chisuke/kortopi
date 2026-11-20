@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -122,7 +124,7 @@ func Connect(ctx context.Context, opts Options) (*Session, error) {
 func (o Options) connConfig() (*pgx.ConnConfig, error) {
 	cfg, err := pgx.ParseConfig(o.connString())
 	if err != nil {
-		return nil, fmt.Errorf("read the connection settings: %w", err)
+		return nil, settingsError(err)
 	}
 	// libpq reads these settings as names, and the errors of a connection
 	// repeat them. A connection string there may hold a password, so it is
@@ -138,7 +140,112 @@ func (o Options) connConfig() (*pgx.ConnConfig, error) {
 				f.what, f.what, f.env, f.flag)
 		}
 	}
+	// Without a name, the server would take the name of the user for the
+	// name of the database, and fail on a database that does not exist.
+	if cfg.Database == "" {
+		return nil, errors.New("the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names")
+	}
 	return cfg, nil
+}
+
+// settingsError turns an error of the driver about the settings of the
+// connection into one that says which setting is wrong. It leaves out the
+// connection string that the driver quotes, which kortopi built from the
+// flags and the user never wrote.
+func settingsError(err error) error {
+	msg := err.Error()
+	var parseErr *pgconn.ParseConfigError
+	if errors.As(err, &parseErr) {
+		// The driver writes "cannot parse `<string>`: <what>", and what it
+		// says after the string holds no backquote.
+		if i := strings.LastIndex(msg, "`: "); i >= 0 {
+			msg = msg[i+len("`: "):]
+		}
+	}
+	switch {
+	case strings.HasPrefix(msg, "invalid port"):
+		return errors.New("read the connection settings: the port is not a number from 1 to 65535: correct PGPORT, or the port of the service that PGSERVICE names")
+	case strings.Contains(msg, "sslmode is invalid"):
+		return errors.New("read the connection settings: the SSL mode is not one that libpq knows: " +
+			"set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full")
+	case strings.HasPrefix(msg, "invalid connect_timeout"):
+		return errors.New("read the connection settings: the connection timeout is not a whole number of seconds: correct PGCONNECT_TIMEOUT, or connect_timeout in the service that PGSERVICE names")
+	case strings.Contains(msg, "unable to find service"):
+		return errors.New("read the connection settings: the service that PGSERVICE names is not in the service file, PGSERVICEFILE or ~/.pg_service.conf: correct the name of the service")
+	case strings.Contains(msg, "://") || strings.Contains(msg, "="):
+		// The driver repeats some values that it cannot read, and such a
+		// value may be a connection string with a password.
+		return errors.New("read the connection settings: a variable of libpq, or the service file, holds a value that the driver cannot read")
+	}
+	return fmt.Errorf("read the connection settings: %s", msg)
+}
+
+// invalidPassword is the SQLSTATE of PostgreSQL for a password that does not
+// authenticate the user, also when none was given.
+const invalidPassword = "28P01"
+
+// connectFailure is the error of a connection that failed. It keeps the
+// error of the driver, and says what failed in fewer words.
+type connectFailure struct {
+	msg string
+	err error
+}
+
+func (e *connectFailure) Error() string {
+	return e.msg
+}
+
+func (e *connectFailure) Unwrap() error {
+	return e.err
+}
+
+// connectError says why a connection failed. The driver tries a host more
+// than once, as libpq does: with sslmode prefer, the default, first with TLS
+// and then without, so its error starts with "server refused TLS
+// connection" for a server without TLS, whatever the cause. The error keeps
+// the attempts whose answer says why, each once. A password that the server
+// refuses when none was given is said to be missing. password tells whether
+// the settings held a password, from any source.
+func connectError(err error, password bool) error {
+	var connectErr *pgconn.ConnectError
+	if !errors.As(err, &connectErr) {
+		return fmt.Errorf("connect to the database: %w", err)
+	}
+	attempts := []error{connectErr.Unwrap()}
+	if joined, ok := connectErr.Unwrap().(interface{ Unwrap() []error }); ok {
+		attempts = joined.Unwrap()
+	}
+	msg := fmt.Sprintf("connect to the database: failed to connect to `user=%s database=%s`:", connectErr.Config.User, connectErr.Config.Database)
+	if causes := attemptCauses(attempts); len(causes) == 1 {
+		msg += " " + causes[0]
+	} else {
+		msg += "\n\t" + strings.Join(causes, "\n\t")
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == invalidPassword && !password {
+		msg += ": no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names"
+	}
+	return &connectFailure{msg: msg, err: err}
+}
+
+// attemptCauses returns the text of each attempt that says why the
+// connection failed: a refusal of TLS that another attempt followed is left
+// out, and so is an attempt that says the same as an earlier one.
+func attemptCauses(attempts []error) []string {
+	var causes []string
+	for i, a := range attempts {
+		text := a.Error()
+		if i < len(attempts)-1 && strings.HasSuffix(text, "tls error: server refused TLS connection") {
+			continue
+		}
+		if !slices.Contains(causes, text) {
+			causes = append(causes, text)
+		}
+	}
+	if len(causes) == 0 && len(attempts) > 0 {
+		causes = append(causes, attempts[len(attempts)-1].Error())
+	}
+	return causes
 }
 
 // connString returns the fields of o that are set as a connection string of
@@ -183,7 +290,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	}
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("connect to the database: %w", err)
+		return nil, connectError(err, cfg.Password != "")
 	}
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),

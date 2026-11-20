@@ -30,6 +30,16 @@ func TestNoSecretInOutput(t *testing.T) {
 		{name: "database variable", env: map[string]string{"PGDATABASE": url}},
 		{name: "host variable", env: map[string]string{"PGHOST": url}},
 		{name: "user variable", env: map[string]string{"PGUSER": "app password=" + secret}},
+		// Variables that the driver cannot read: the error names the
+		// variable, and repeats neither its value nor a connection string
+		// that kortopi built.
+		{name: "port variable", env: map[string]string{"PGDATABASE": "prod", "PGPORT": url}},
+		{name: "SSL mode variable", env: map[string]string{"PGDATABASE": "prod", "PGSSLMODE": "require password=" + secret}},
+		{name: "timeout variable", env: map[string]string{"PGDATABASE": "prod", "PGCONNECT_TIMEOUT": url}},
+		{name: "service variable", env: map[string]string{"PGDATABASE": "prod", "PGSERVICE": url}},
+		{name: "session attributes variable", env: map[string]string{"PGDATABASE": "prod", "PGTARGETSESSIONATTRS": "password=" + secret}},
+		// Without the name of a database, kortopi does not connect.
+		{name: "no database", env: map[string]string{"PGDATABASE": "", "PGHOST": "db.example.test", "PGUSER": "app"}},
 	}
 	for _, command := range []string{"plan", "apply", "export"} {
 		for _, tt := range tests {

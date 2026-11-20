@@ -64,6 +64,12 @@ kortopi plan --dir data
 パスワードのフラグはない。プロセスの引数にパスワードを出さないためである。
 パスワードは、`PGPASSWORD`・パスワードファイル・サービスファイルのどれかで渡す。
 
+kortopi には、データベースの名前が要る。`psql` と違い、ユーザーの名前をデータベースの名前として使わない。`--dbname`・`PGDATABASE`・サービスの `dbname` のどれもなければ、接続する前に止まる。
+
+```text
+kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names
+```
+
 `--host`・`--user`・`--dbname` と、環境変数 `PGHOST`・`PGUSER`・`PGDATABASE` は、接続文字列ではなく名前を受け取る。`://` か `=` を含む値はエラーである。
 そうした値はパスワードを含みうる。しかも libpq はそれを名前として読み、接続に失敗したときのエラーで繰り返してしまう。
 エラーは、その値を繰り返さない。
@@ -75,11 +81,21 @@ kortopi: the database of the connection looks like a connection string, which ma
 
 フラグのエラーは、どれも入力された値を繰り返さない。
 
-接続に失敗すると、ドライバーのエラーを示して計画が止まる。
+ドライバーが読めない環境変数は、その名前を示し、値は繰り返さない。
 
 ```text
-kortopi: connect to the database: failed to connect to ...
+kortopi: read the connection settings: the port is not a number from 1 to 65535: correct PGPORT, or the port of the service that PGSERVICE names
+kortopi: read the connection settings: the SSL mode is not one that libpq knows: set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full
 ```
+
+接続に失敗すると、ドライバーが示す原因を出して計画が止まる。
+
+```text
+kortopi: connect to the database: failed to connect to `user=app database=app`: 127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
+```
+
+- 既定の `sslmode` である `prefer` では、ドライバーはまず TLS で接続を試み、次に TLS なしで試す。TLS のないサーバーが TLS を拒んだことは示さない。原因は2回目の試みが示すからである。
+- サーバーがパスワードを拒んだとき、`PGPASSWORD`・パスワードファイル・サービスのどれでもパスワードを渡していなければ、エラーに `: no password was given: ...` を足す。サーバーはパスワードがないときも誤っているときも同じに答える。そのため、この一文がなければ、パスワードは渡されたが誤っているか、そのユーザーがそれでログインできない。
 
 ### 接続の設定
 
@@ -528,4 +544,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:c05a0537d5f174bdc5f3dc4f75b90dae0b3947ef025949cf4c56d27bdfb18e55 -->
+<!-- i18n-source: plan.md sha256:ef19a07e82778ef21b47ffe2ff759608c49ec74e96a8ada7dc2d31d0f3533947 -->
