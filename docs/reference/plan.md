@@ -35,8 +35,7 @@ and from the password file. The flags --host, --port, --user, and --dbname
 override them. There is no flag for the password.
 
 exit status:
-  0   the plan was made (with --exit-code: the database matches the
-      declaration)
+  0   the plan was made (with --exit-code: there is nothing to apply)
   1   the plan failed
   2   with --exit-code only: the plan is not empty
 ```

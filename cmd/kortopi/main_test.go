@@ -186,6 +186,17 @@ func TestFlagOutput(t *testing.T) {
 
 // TestHelpListsTheFlags checks that the help texts name every flag that plan
 // and apply define, and no flag that they lack.
+// The exit status of plan --exit-code claims no more than a plan compares: a
+// table of mode insert is compared by its keys only.
+func TestPlanHelpOfTheExitStatus(t *testing.T) {
+	t.Parallel()
+
+	_, help, _ := runTest(t, []string{"plan", "--help"}, noConnect(t))
+	if !strings.Contains(help, "  0   the plan was made (with --exit-code: there is nothing to apply)\n") || strings.Contains(help, "matches") {
+		t.Errorf("kortopi plan --help says of status 0:\n%s", help)
+	}
+}
+
 func TestHelpListsTheFlags(t *testing.T) {
 	t.Parallel()
 

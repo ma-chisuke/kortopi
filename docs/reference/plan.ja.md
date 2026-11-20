@@ -35,8 +35,7 @@ and from the password file. The flags --host, --port, --user, and --dbname
 override them. There is no flag for the password.
 
 exit status:
-  0   the plan was made (with --exit-code: the database matches the
-      declaration)
+  0   the plan was made (with --exit-code: there is nothing to apply)
   1   the plan failed
   2   with --exit-code only: the plan is not empty
 ```
@@ -546,4 +545,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:7f130859c4ad6306ee6efcb0b166152ea9622ac2f36e4ede5f138447c985535b -->
+<!-- i18n-source: plan.md sha256:5d3202da07e72192a7b1daf0e30297fa13e4a0207fc633ee072ae5e1a404e6b2 -->
