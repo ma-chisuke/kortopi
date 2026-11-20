@@ -1,0 +1,28 @@
+app.labels (upsert, key: id)
+  + id=1  value=NULL
+  + id=2  value=""
+  + id=3  value="NULL"
+  + id=4  value=null
+  + id=5  value="two words"
+  + id=6  value="a=b"
+  + id=7  value="say \"hi\""
+  + id=8  value="it's"
+  + id=9  value="tab\there"
+  + id=10  value="line\nbreak"
+  + id=11  value="bell\a"
+  + id=12  value=東京タワー
+  + id=13  value="東京\u3000タワー"
+  + id=14  value="\ufeffmark"
+  + id=15  value="bad\xffbyte"
+  + id=16  value=back\slash
+  + id=17  value="{\"a\": 1}"
+  + id=18  value={1,2,NULL}
+  + id=19  value="2026-11-19 00:00:00+00"
+  + id=20  value=->
+  ~ id=21  value: NULL -> ""
+  ~ id=22  value: "" -> NULL
+  ~ id=23  value: "NULL" -> NULL
+  ~ id=24  value: "a b" -> "a  b"
+  20 to insert, 4 to update
+
+Plan: 20 to insert, 4 to update, 0 to delete in 1 table.

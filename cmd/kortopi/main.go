@@ -4,10 +4,18 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"regexp"
 	"runtime/debug"
+	"strconv"
+	"strings"
+	"syscall"
 )
 
 // version is the release version. The release build sets it with -ldflags;
@@ -16,37 +24,182 @@ var version = ""
 
 const usage = "kortopi manages the rows of PostgreSQL master tables declaratively.\n" +
 	"\n" +
-	"usage: kortopi <command>\n" +
+	"usage: kortopi <command> [flags]\n" +
 	"\n" +
 	"commands:\n" +
-	"  version   print the version of kortopi\n"
+	"  plan      show how the database differs from the declaration\n" +
+	"  version   print the version of kortopi\n" +
+	"  help      print this help, or the help of a command\n" +
+	"\n" +
+	"flags of plan:\n" +
+	planFlags +
+	"\n" +
+	connectionHelp
 
-// Exit statuses.
+// Exit statuses (ADR-0021).
 const (
 	exitOK    = 0
 	exitError = 1
+	// exitChanges is the status of `plan --exit-code` when the plan is not
+	// empty.
+	exitChanges = 2
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	// An interrupt cancels the context, so that the transaction is rolled back
+	// and the connection closed. A second interrupt ends the process at once.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, connect: connectPostgres})
+	stop()
+	os.Exit(code)
+}
+
+// env is what a command takes from outside: where it writes, and how it
+// reaches the database. Tests replace connect.
+type env struct {
+	stdout  io.Writer
+	stderr  io.Writer
+	connect connectFunc
 }
 
 // run executes one command and returns the exit status.
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, e env) int {
 	if len(args) == 0 {
-		_, _ = io.WriteString(stderr, usage)
+		_, _ = io.WriteString(e.stderr, usage)
 		return exitError
 	}
 	switch args[0] {
+	case "plan":
+		return runPlan(ctx, args[1:], e)
 	case "version", "--version":
-		_, _ = fmt.Fprintf(stdout, "kortopi %s\n", buildVersion())
-		return exitOK
+		return runVersion(args[1:], e)
 	case "help", "--help", "-h":
-		_, _ = io.WriteString(stdout, usage)
-		return exitOK
+		return runHelp(args[1:], e)
 	default:
-		_, _ = fmt.Fprintf(stderr, "kortopi: unknown command %q\n\n%s", args[0], usage)
+		_, _ = fmt.Fprintf(e.stderr, "kortopi: unknown command %q\n\n%s", args[0], usage)
 		return exitError
+	}
+}
+
+const versionUsage = "usage: kortopi version\n"
+
+const versionHelp = versionUsage + "\nPrint the version of kortopi.\n"
+
+// runVersion prints the version. It takes no flag and no argument.
+func runVersion(args []string, e env) int {
+	fs := newFlagSet("version")
+	if err := parse(fs, args, ""); err != nil {
+		return flagError(e, err, versionHelp, versionUsage)
+	}
+	_, _ = fmt.Fprintf(e.stdout, "kortopi %s\n", buildVersion())
+	return exitOK
+}
+
+// runHelp prints the help of kortopi, or of the command that args names.
+func runHelp(args []string, e env) int {
+	switch {
+	case len(args) == 0:
+		_, _ = io.WriteString(e.stdout, usage)
+	case len(args) == 1 && args[0] == "plan":
+		_, _ = io.WriteString(e.stdout, planHelp)
+	case len(args) == 1 && args[0] == "version":
+		_, _ = io.WriteString(e.stdout, versionHelp)
+	default:
+		_, _ = fmt.Fprintf(e.stderr, "kortopi: no help for %q\n\n%s", strings.Join(args, " "), usage)
+		return exitError
+	}
+	return exitOK
+}
+
+// newFlagSet returns an empty flag set for a command. Parse returns its
+// errors, and the command prints them.
+func newFlagSet(command string) *flag.FlagSet {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
+// parse parses the flags of a command, which takes no other argument. hint
+// follows the error for an argument, to say what to write instead.
+func parse(fs *flag.FlagSet, args []string, hint string) error {
+	if err := fs.Parse(args); err != nil {
+		return flagMessage(err)
+	}
+	if fs.NArg() > 0 {
+		got := strconv.Quote(fs.Arg(0))
+		if connectionString(fs.Arg(0)) {
+			got = "a connection string"
+		}
+		err := fmt.Errorf("%s takes no arguments, but got %s", fs.Name(), got)
+		if hint != "" {
+			err = fmt.Errorf("%w: %s", err, hint)
+		}
+		return err
+	}
+	return nil
+}
+
+// connectionString reports whether s looks like a connection string, as a
+// URL or as keywords and values. It may hold a password, so kortopi never
+// prints it.
+func connectionString(s string) bool {
+	return strings.Contains(s, "://") || strings.Contains(s, "=")
+}
+
+// The errors of the flag package, which name a flag with one dash.
+var (
+	undefinedFlag = regexp.MustCompile(`^flag provided but not defined: -(.*)$`)
+	invalidValue  = regexp.MustCompile(`(?s)^invalid (?:boolean )?value .* for (?:flag )?-([A-Za-z0-9_-]+): (.*)$`)
+	missingValue  = regexp.MustCompile(`^flag needs an argument: -(.*)$`)
+	flagName      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+)
+
+// flagMessage rewrites an error of the flag package as kortopi prints it:
+// it names a flag with two dashes, as the help does, and it does not repeat
+// a value, which may be a connection string with a password.
+func flagMessage(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	msg := err.Error()
+	if m := undefinedFlag.FindStringSubmatch(msg); m != nil {
+		if !flagName.MatchString(m[1]) {
+			return errors.New("flag provided but not defined: write a flag as --name or --name=value")
+		}
+		return fmt.Errorf("flag provided but not defined: --%s", m[1])
+	}
+	if m := invalidValue.FindStringSubmatch(msg); m != nil {
+		return fmt.Errorf("invalid value for flag --%s: %s", m[1], m[2])
+	}
+	if m := missingValue.FindStringSubmatch(msg); m != nil {
+		return fmt.Errorf("flag needs an argument: --%s", m[1])
+	}
+	return errors.New("bad flag syntax: write a flag as --name or --name=value")
+}
+
+// flagError handles an error of parse. For --help it prints the help on
+// standard output, as `kortopi help` does, and returns success. For a wrong
+// flag or argument it prints the error and usage, the short form of the
+// help, on standard error, and returns failure.
+func flagError(e env, err error, help, usage string) int {
+	if errors.Is(err, flag.ErrHelp) {
+		_, _ = io.WriteString(e.stdout, help)
+		return exitOK
+	}
+	printError(e.stderr, err)
+	_, _ = io.WriteString(e.stderr, "\n"+usage)
+	return exitError
+}
+
+// printError prints an error as `kortopi: <message>`, one line for each line
+// of the message, so that each error of a joined error gets its own line.
+func printError(w io.Writer, err error) {
+	for line := range strings.Lines(err.Error()) {
+		_, _ = fmt.Fprintf(w, "kortopi: %s\n", strings.TrimSuffix(line, "\n"))
 	}
 }
 

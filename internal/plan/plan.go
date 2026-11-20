@@ -1,0 +1,147 @@
+// Package plan computes how the declared rows differ from the rows of the
+// target database, and prints the difference (ADR-0016).
+//
+// The package holds what is the same for every database: which table is
+// compared by which key, which columns wait for a schema change, and which
+// kinds of change a mode allows. What differs for each database is behind the
+// Database interface (ADR-0019).
+package plan
+
+import (
+	"context"
+
+	"github.com/ma-chisuke/kortopi/internal/config"
+	"github.com/ma-chisuke/kortopi/internal/declaration"
+)
+
+// Database is what a plan needs from the target database. Each supported
+// database implements it in its own package (ADR-0019).
+//
+// An implementation changes no table of the database. The only objects that
+// it creates are temporary tables of its session (ADR-0010).
+type Database interface {
+	// Describe reports what the database knows about each named table. The
+	// result has an entry for every name, also for a table that does not
+	// exist.
+	Describe(ctx context.Context, names []declaration.TableName) (map[declaration.TableName]TableInfo, error)
+
+	// Diff loads the declared rows of one existing table and compares them
+	// with the rows of the table.
+	Diff(ctx context.Context, req DiffRequest) (TableDiff, error)
+
+	// CountRows returns the number of rows that the declaration of a table
+	// holds. Build calls it for a table that the database does not have, so
+	// it must not need the table.
+	CountRows(ctx context.Context, table declaration.Table) (int, error)
+}
+
+// TableInfo is what the database knows about a table.
+type TableInfo struct {
+	Exists  bool
+	Columns []ColumnInfo
+	// PrimaryKey holds the columns of the primary key, in the order of the
+	// key. It is empty for a table without one.
+	PrimaryKey []string
+	// UniqueKeys holds the columns of each key that can match rows besides
+	// the primary key: a UNIQUE constraint, or a unique index over plain
+	// columns that covers every row.
+	UniqueKeys [][]string
+}
+
+// ColumnInfo is what the database knows about a column.
+type ColumnInfo struct {
+	Name    string
+	NotNull bool
+	// Generated is true for a column whose value the database computes from
+	// other columns, so a declaration cannot set it.
+	Generated bool
+	// IdentityAlways is true for an identity column that the database fills
+	// in unless a statement overrides it. A declaration can set it in a new
+	// row, so it may be part of the match key, but an update cannot change
+	// it, so it cannot be a compared column.
+	IdentityAlways bool
+}
+
+// DiffRequest names what Diff compares.
+type DiffRequest struct {
+	Table declaration.Table
+	// Key holds the columns of the match key (ADR-0012).
+	Key []string
+	// Compare holds the declared columns that the table has and that are not
+	// part of the key, in the order of the declaration.
+	Compare []string
+	// NotNull holds the columns of Compare that the table declares NOT NULL.
+	// The key columns are NOT NULL as well (ADR-0012). The database returns
+	// an error when a declared row holds NULL in such a column, because an
+	// apply of that row would fail.
+	NotNull []string
+	// Pending holds the declared columns that the table does not have yet
+	// (ADR-0016). The database loads their values and compares nothing.
+	Pending []string
+	// Updates and Deletes say whether the mode of the table allows these
+	// kinds of change. The database does not compute a kind that is false.
+	Updates bool
+	Deletes bool
+}
+
+// Value is the value of one column of one row, as the database prints it.
+type Value struct {
+	Text string
+	Null bool
+}
+
+// Row is a row to insert or to delete.
+type Row struct {
+	// Key holds the values of the match key, in the order of
+	// DiffRequest.Key.
+	Key []Value
+	// Values holds the values of the other declared columns that the table
+	// has, in the order of DiffRequest.Compare. It is empty for a row to
+	// delete.
+	Values []Value
+}
+
+// Update is a row whose declared values differ from the stored ones.
+type Update struct {
+	Key     []Value
+	Changes []Change
+}
+
+// Change is one column of an update.
+type Change struct {
+	Column string
+	Old    Value
+	New    Value
+}
+
+// TableDiff is the difference of one table, each kind sorted by the match
+// key.
+type TableDiff struct {
+	Inserts []Row
+	Updates []Update
+	Deletes []Row
+}
+
+// Table is the plan of one table.
+type Table struct {
+	Name declaration.TableName
+	Mode config.Mode
+	// Key and Compare are the columns that the plan matched and compared.
+	// They are empty when PendingTable is true.
+	Key     []string
+	Compare []string
+	// PendingTable is true for a declared table that the database does not
+	// have yet. DeclaredRows then holds the number of its declared rows.
+	PendingTable bool
+	DeclaredRows int
+	// PendingColumns holds the declared columns that the table does not have
+	// yet.
+	PendingColumns []string
+	Diff           TableDiff
+}
+
+// Plan is the difference between a declaration and a database.
+type Plan struct {
+	// Tables are sorted by schema and then by name.
+	Tables []Table
+}

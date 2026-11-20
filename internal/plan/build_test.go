@@ -1,0 +1,553 @@
+package plan
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/ma-chisuke/kortopi/internal/config"
+	"github.com/ma-chisuke/kortopi/internal/declaration"
+)
+
+// fakeDB is a Database that answers from its fields and records each call.
+type fakeDB struct {
+	// infos holds the tables that exist. Describe reports every other name as
+	// a table that does not exist, unless omit is true.
+	infos       map[declaration.TableName]TableInfo
+	omit        bool
+	describeErr error
+	diffs       map[declaration.TableName]TableDiff
+	diffErr     error
+	counts      map[declaration.TableName]int
+	countErr    error
+
+	describes [][]declaration.TableName
+	requests  []DiffRequest
+	counted   []declaration.TableName
+}
+
+func (f *fakeDB) Describe(_ context.Context, names []declaration.TableName) (map[declaration.TableName]TableInfo, error) {
+	f.describes = append(f.describes, slices.Clone(names))
+	if f.describeErr != nil {
+		return nil, f.describeErr
+	}
+	infos := make(map[declaration.TableName]TableInfo, len(names))
+	for _, n := range names {
+		info, ok := f.infos[n]
+		if !ok && f.omit {
+			continue
+		}
+		infos[n] = info
+	}
+	return infos, nil
+}
+
+func (f *fakeDB) Diff(_ context.Context, req DiffRequest) (TableDiff, error) {
+	f.requests = append(f.requests, req)
+	if f.diffErr != nil {
+		return TableDiff{}, f.diffErr
+	}
+	return f.diffs[req.Table.Name], nil
+}
+
+func (f *fakeDB) CountRows(_ context.Context, table declaration.Table) (int, error) {
+	f.counted = append(f.counted, table.Name)
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	return f.counts[table.Name], nil
+}
+
+var (
+	tableT = declaration.TableName{Schema: "a", Name: "t"}
+	tableU = declaration.TableName{Schema: "b", Name: "u"}
+	tableV = declaration.TableName{Schema: "c", Name: "v"}
+)
+
+// csvTable returns the declaration of a table in a CSV file.
+func csvTable(name declaration.TableName, cols ...string) declaration.Table {
+	return declaration.Table{
+		Name:    name,
+		Columns: cols,
+		Format:  declaration.CSV,
+		File:    name.Schema + "/" + name.Name + ".csv",
+	}
+}
+
+// existing returns a table that exists with the columns, all of them NOT
+// NULL, and the primary key.
+func existing(pk []string, cols ...string) TableInfo {
+	info := TableInfo{Exists: true, PrimaryKey: pk}
+	for _, c := range cols {
+		info.Columns = append(info.Columns, ColumnInfo{Name: c, NotNull: true})
+	}
+	return info
+}
+
+// with returns info with the changes of change applied.
+func with(info TableInfo, change func(*TableInfo)) TableInfo {
+	info.Columns = slices.Clone(info.Columns)
+	change(&info)
+	return info
+}
+
+// nullable marks a column of info as one that may be NULL.
+func nullable(name string) func(*TableInfo) {
+	return func(info *TableInfo) {
+		for i := range info.Columns {
+			if info.Columns[i].Name == name {
+				info.Columns[i].NotNull = false
+			}
+		}
+	}
+}
+
+func TestBuildRequests(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		table    declaration.Table
+		info     TableInfo
+		settings config.Table
+		want     DiffRequest
+	}{
+		{
+			name:  "primary key",
+			table: csvTable(tableT, "id", "name", "price"),
+			info:  existing([]string{"id"}, "id", "name", "price", "created_at"),
+			want:  DiffRequest{Key: []string{"id"}, Compare: []string{"name", "price"}, Updates: true},
+		},
+		{
+			name:  "identity column in the key",
+			table: csvTable(tableT, "id", "name"),
+			info: with(existing([]string{"id"}, "id", "name"), func(i *TableInfo) {
+				i.Columns[0].IdentityAlways = true
+			}),
+			want: DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Updates: true},
+		},
+		{
+			name:  "compared columns that may be NULL",
+			table: csvTable(tableT, "id", "name", "price"),
+			info:  with(existing([]string{"id"}, "id", "name", "price"), nullable("price")),
+			want:  DiffRequest{Key: []string{"id"}, Compare: []string{"name", "price"}, NotNull: []string{"name"}, Updates: true},
+		},
+		{
+			name:  "primary key declared after other columns",
+			table: csvTable(tableT, "name", "id"),
+			info:  existing([]string{"id"}, "id", "name"),
+			want:  DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Updates: true},
+		},
+		{
+			name:  "composite primary key in the order of the key",
+			table: csvTable(tableT, "version", "name", "code"),
+			info:  existing([]string{"code", "version"}, "code", "version", "name"),
+			want:  DiffRequest{Key: []string{"code", "version"}, Compare: []string{"name"}, Updates: true},
+		},
+		{
+			name:     "chosen unique key",
+			table:    csvTable(tableT, "code", "name"),
+			info:     with(existing([]string{"id"}, "id", "code", "name"), func(i *TableInfo) { i.UniqueKeys = [][]string{{"name", "id"}, {"code"}} }),
+			settings: config.Table{Key: []string{"code"}, Mode: config.ModeUpsert},
+			want:     DiffRequest{Key: []string{"code"}, Compare: []string{"name"}, Updates: true},
+		},
+		{
+			name:     "chosen key in another order than the unique key",
+			table:    csvTable(tableT, "a", "b", "c"),
+			info:     with(existing([]string{"id"}, "id", "a", "b", "c"), func(i *TableInfo) { i.UniqueKeys = [][]string{{"a", "b"}} }),
+			settings: config.Table{Key: []string{"b", "a"}, Mode: config.ModeUpsert},
+			want:     DiffRequest{Key: []string{"b", "a"}, Compare: []string{"c"}, Updates: true},
+		},
+		{
+			name:     "chosen key that is the primary key",
+			table:    csvTable(tableT, "id", "name"),
+			info:     existing([]string{"id"}, "id", "name"),
+			settings: config.Table{Key: []string{"id"}, Mode: config.ModeSync},
+			want:     DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Updates: true, Deletes: true},
+		},
+		{
+			name:  "pending columns",
+			table: csvTable(tableT, "id", "floor", "name", "wing"),
+			info:  existing([]string{"id"}, "id", "name"),
+			want:  DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Pending: []string{"floor", "wing"}, Updates: true},
+		},
+		{
+			name:  "only the key",
+			table: csvTable(tableT, "id"),
+			info:  existing([]string{"id"}, "id", "name"),
+			want:  DiffRequest{Key: []string{"id"}, Updates: true},
+		},
+		{
+			name:     "mode insert",
+			table:    csvTable(tableT, "id", "name"),
+			info:     existing([]string{"id"}, "id", "name"),
+			settings: config.Table{Mode: config.ModeInsert},
+			want:     DiffRequest{Key: []string{"id"}, Compare: []string{"name"}},
+		},
+		{
+			name:     "mode upsert",
+			table:    csvTable(tableT, "id", "name"),
+			info:     existing([]string{"id"}, "id", "name"),
+			settings: config.Table{Mode: config.ModeUpsert},
+			want:     DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Updates: true},
+		},
+		{
+			name:     "mode sync",
+			table:    csvTable(tableT, "id", "name"),
+			info:     existing([]string{"id"}, "id", "name"),
+			settings: config.Table{Mode: config.ModeSync},
+			want:     DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Updates: true, Deletes: true},
+		},
+		{
+			name:  "no mode is upsert",
+			table: csvTable(tableT, "id", "name"),
+			info:  existing([]string{"id"}, "id", "name"),
+			want:  DiffRequest{Key: []string{"id"}, Compare: []string{"name"}, Updates: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: tt.info}}
+			decl := &declaration.Declaration{Tables: []declaration.Table{tt.table}}
+			p, err := Build(t.Context(), decl, config.New(map[declaration.TableName]config.Table{tableT: tt.settings}), db)
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+
+			want := tt.want
+			want.Table = tt.table
+			if want.NotNull == nil {
+				// existing makes every column NOT NULL.
+				want.NotNull = want.Compare
+			}
+			if len(db.requests) != 1 || !reflect.DeepEqual(db.requests[0], want) {
+				t.Errorf("Diff requests = %+v, want [%+v]", db.requests, want)
+			}
+			if len(db.counted) != 0 {
+				t.Errorf("CountRows calls = %v, want none", db.counted)
+			}
+			wantMode := tt.settings.Mode
+			if wantMode == "" {
+				wantMode = config.ModeUpsert
+			}
+			wantTable := Table{Name: tableT, Mode: wantMode, Key: want.Key, Compare: want.Compare, PendingColumns: want.Pending}
+			if len(p.Tables) != 1 || !reflect.DeepEqual(p.Tables[0], wantTable) {
+				t.Errorf("plan tables = %+v, want [%+v]", p.Tables, wantTable)
+			}
+		})
+	}
+}
+
+func TestBuildTables(t *testing.T) {
+	t.Parallel()
+
+	diff := TableDiff{
+		Inserts: []Row{{Key: []Value{{Text: "2"}}, Values: []Value{{Text: "b"}}}},
+		Updates: []Update{{Key: []Value{{Text: "1"}}, Changes: []Change{{Column: "name", Old: Value{Text: "a"}, New: Value{Null: true}}}}},
+	}
+	db := &fakeDB{
+		infos: map[declaration.TableName]TableInfo{
+			tableT: existing([]string{"id"}, "id", "name"),
+			tableV: existing([]string{"id"}, "id"),
+		},
+		diffs:  map[declaration.TableName]TableDiff{tableT: diff},
+		counts: map[declaration.TableName]int{tableU: 12},
+	}
+	decl := &declaration.Declaration{Tables: []declaration.Table{
+		csvTable(tableT, "id", "name"),
+		csvTable(tableU, "id"),
+		csvTable(tableV, "id"),
+	}}
+	settings := config.New(map[declaration.TableName]config.Table{tableU: {Mode: config.ModeSync}})
+
+	p, err := Build(t.Context(), decl, settings, db)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	wantNames := [][]declaration.TableName{{tableT, tableU, tableV}}
+	if !reflect.DeepEqual(db.describes, wantNames) {
+		t.Errorf("Describe calls = %v, want %v", db.describes, wantNames)
+	}
+	if !reflect.DeepEqual(db.counted, []declaration.TableName{tableU}) {
+		t.Errorf("CountRows calls = %v, want [%v]", db.counted, tableU)
+	}
+	var diffed []declaration.TableName
+	for _, r := range db.requests {
+		diffed = append(diffed, r.Table.Name)
+	}
+	if !reflect.DeepEqual(diffed, []declaration.TableName{tableT, tableV}) {
+		t.Errorf("Diff calls = %v, want [%v %v]", diffed, tableT, tableV)
+	}
+	want := &Plan{Tables: []Table{
+		{Name: tableT, Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"}, Diff: diff},
+		{Name: tableU, Mode: config.ModeSync, PendingTable: true, DeclaredRows: 12},
+		{Name: tableV, Mode: config.ModeUpsert, Key: []string{"id"}},
+	}}
+	if !reflect.DeepEqual(p, want) {
+		t.Errorf("Build() = %+v, want %+v", p, want)
+	}
+}
+
+func TestBuildWithoutSettings(t *testing.T) {
+	t.Parallel()
+
+	db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: existing([]string{"id"}, "id")}}
+	decl := &declaration.Declaration{Tables: []declaration.Table{csvTable(tableT, "id")}}
+	p, err := Build(t.Context(), decl, nil, db)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(p.Tables) != 1 || p.Tables[0].Mode != config.ModeUpsert {
+		t.Errorf("Build() = %+v, want one table in mode upsert", p)
+	}
+	if len(db.requests) != 1 || !db.requests[0].Updates || db.requests[0].Deletes {
+		t.Errorf("Diff requests = %+v, want one with updates and without deletes", db.requests)
+	}
+}
+
+func TestBuildNoTables(t *testing.T) {
+	t.Parallel()
+
+	db := &fakeDB{}
+	p, err := Build(t.Context(), &declaration.Declaration{}, nil, db)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(p.Tables) != 0 || len(db.describes) != 0 {
+		t.Errorf("Build() = %+v with %d calls of Describe, want no tables and no call", p, len(db.describes))
+	}
+}
+
+func TestBuildErrors(t *testing.T) {
+	t.Parallel()
+
+	pk := []string{"id"}
+	unique := func(keys ...[]string) func(*TableInfo) {
+		return func(i *TableInfo) { i.UniqueKeys = keys }
+	}
+	tests := []struct {
+		name     string
+		table    declaration.Table
+		info     TableInfo
+		settings config.Table
+		want     string
+	}{
+		{
+			name:  "no primary key and no chosen key",
+			table: csvTable(tableT, "id"),
+			info:  existing(nil, "id"),
+			want:  `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "primary key column not declared",
+			table: csvTable(tableT, "name"),
+			info:  existing(pk, "id", "name"),
+			want:  `data/a/t.csv: column "id" of the primary key of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml`,
+		},
+		{
+			name:  "columns of a composite primary key not declared",
+			table: csvTable(tableT, "name"),
+			info:  existing([]string{"code", "version"}, "code", "version", "name"),
+			want: `data/a/t.csv: column "code" of the primary key of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml` + "\n" +
+				`data/a/t.csv: column "version" of the primary key of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml`,
+		},
+		{
+			name:     "chosen key that is not unique",
+			table:    csvTable(tableT, "id", "name"),
+			info:     with(existing(pk, "id", "name", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"name"}},
+			want:     `data/kortopi.toml: key ("name") of table a.t is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint`,
+		},
+		{
+			name:     "chosen key that is part of a unique key",
+			table:    csvTable(tableT, "a", "b"),
+			info:     with(existing(pk, "id", "a", "b"), unique([]string{"a", "b"})),
+			settings: config.Table{Key: []string{"a"}},
+			want:     `data/kortopi.toml: key ("a") of table a.t is neither the primary key nor a unique key`,
+		},
+		{
+			name:     "chosen key that holds a unique key and more",
+			table:    csvTable(tableT, "a", "b"),
+			info:     with(existing(pk, "id", "a", "b"), unique([]string{"a"})),
+			settings: config.Table{Key: []string{"a", "b"}},
+			want:     `data/kortopi.toml: key ("a", "b") of table a.t is neither the primary key nor a unique key`,
+		},
+		{
+			name:     "chosen key column that may be NULL",
+			table:    csvTable(tableT, "code", "name"),
+			info:     with(with(existing(pk, "id", "code", "name"), unique([]string{"code"})), nullable("code")),
+			settings: config.Table{Key: []string{"code"}},
+			want:     `data/kortopi.toml: key column "code" of table a.t may be NULL, so a match could be ambiguous: make the column NOT NULL, or name another key`,
+		},
+		{
+			name:     "chosen key column not declared",
+			table:    csvTable(tableT, "name"),
+			info:     with(existing(pk, "id", "code", "name"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"code"}},
+			want:     `data/a/t.csv: key column "code" of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml`,
+		},
+		{
+			name:     "chosen key column that waits for the schema change",
+			table:    csvTable(tableT, "code", "name"),
+			info:     existing(pk, "id", "name"),
+			settings: config.Table{Key: []string{"code"}},
+			want:     `table a.t has no column "code" yet, and no row can be matched by a key column that waits for the schema change: apply the schema first, or name another key with key in data/kortopi.toml`,
+		},
+		{
+			name:     "chosen key column that the table does not have",
+			table:    csvTable(tableT, "code", "name"),
+			info:     with(existing(pk, "id", "code", "name"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"cod"}},
+			want:     `data/kortopi.toml: key of table a.t names column "cod", which the table does not have: correct the key`,
+		},
+		{
+			name:     "chosen key that names a column twice",
+			table:    csvTable(tableT, "code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"code", "code"}},
+			want:     `data/kortopi.toml: key of table a.t names column "code" twice: name each column once`,
+		},
+		{
+			name:  "generated column",
+			table: csvTable(tableT, "id", "total"),
+			info: with(existing(pk, "id", "total"), func(i *TableInfo) {
+				i.Columns[1].Generated = true
+			}),
+			want: `data/a/t.csv: column "total" of table a.t is generated, so the database computes its value: remove the column from the file`,
+		},
+		{
+			name:  "identity column outside the key",
+			table: csvTable(tableT, "id", "serial"),
+			info: with(existing(pk, "id", "serial"), func(i *TableInfo) {
+				i.Columns[1].IdentityAlways = true
+			}),
+			want: `data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key`,
+		},
+		{
+			name:     "unknown mode",
+			table:    csvTable(tableT, "id"),
+			info:     existing(pk, "id"),
+			settings: config.Table{Mode: "merge"},
+			want:     `data/kortopi.toml: mode "merge" of table a.t is unknown: use insert, upsert, or sync`,
+		},
+		{
+			name:  "every mistake of one table",
+			table: csvTable(tableT, "total", "name"),
+			info: with(with(existing(pk, "id", "code", "name", "total"), unique([]string{"code"})), func(i *TableInfo) {
+				nullable("code")(i)
+				i.Columns[3].Generated = true
+			}),
+			settings: config.Table{Key: []string{"code"}, Mode: "merge"},
+			want: `data/kortopi.toml: mode "merge" of table a.t is unknown: use insert, upsert, or sync` + "\n" +
+				`data/a/t.csv: column "total" of table a.t is generated, so the database computes its value: remove the column from the file` + "\n" +
+				`data/kortopi.toml: key column "code" of table a.t may be NULL, so a match could be ambiguous: make the column NOT NULL, or name another key` + "\n" +
+				`data/a/t.csv: key column "code" of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: tt.info}}
+			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{tt.table}}
+			p, err := Build(t.Context(), decl, config.New(map[declaration.TableName]config.Table{tableT: tt.settings}), db)
+			if err == nil {
+				t.Fatalf("Build() = %+v, want an error", p)
+			}
+			if want := filepath.FromSlash(tt.want); !strings.HasPrefix(err.Error(), want) || strings.Count(err.Error(), "\n") != strings.Count(want, "\n") {
+				t.Errorf("Build() error =\n%v\nwant\n%v", err, tt.want)
+			}
+			if len(db.requests) != 0 || len(db.counted) != 0 {
+				t.Errorf("Build() called Diff %d times and CountRows %d times, want no call", len(db.requests), len(db.counted))
+			}
+		})
+	}
+}
+
+func TestBuildErrorsOfSeveralTables(t *testing.T) {
+	t.Parallel()
+
+	db := &fakeDB{infos: map[declaration.TableName]TableInfo{
+		tableT: existing(nil, "id"),
+		tableV: existing(nil, "id"),
+	}}
+	decl := &declaration.Declaration{Tables: []declaration.Table{
+		csvTable(tableT, "id"),
+		csvTable(tableU, "id"),
+		csvTable(tableV, "id"),
+	}}
+	_, err := Build(t.Context(), decl, nil, db)
+
+	want := `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of kortopi.toml` + "\n" +
+		`table c.v has no primary key: name the columns of a unique key with key in [tables."c.v"] of kortopi.toml`
+	if err == nil || err.Error() != want {
+		t.Errorf("Build() error =\n%v\nwant\n%v", err, want)
+	}
+	if len(db.requests) != 0 || len(db.counted) != 0 {
+		t.Errorf("Build() called Diff %d times and CountRows %d times, want no call", len(db.requests), len(db.counted))
+	}
+}
+
+func TestBuildDatabaseErrors(t *testing.T) {
+	t.Parallel()
+
+	errDB := errors.New("connection reset")
+	decl := &declaration.Declaration{Tables: []declaration.Table{
+		csvTable(tableT, "id"),
+		csvTable(tableU, "id"),
+		csvTable(tableV, "id"),
+	}}
+	infos := map[declaration.TableName]TableInfo{
+		tableT: existing([]string{"id"}, "id"),
+		tableV: existing([]string{"id"}, "id"),
+	}
+	tests := []struct {
+		name        string
+		db          *fakeDB
+		want        string
+		wantDiffs   int
+		wantCounted int
+	}{
+		{
+			name: "describe",
+			db:   &fakeDB{infos: infos, describeErr: errDB},
+			want: errDB.Error(),
+		},
+		{
+			name: "diff stops at the first table",
+			db:   &fakeDB{infos: infos, diffErr: errDB},
+			want: errDB.Error(), wantDiffs: 1,
+		},
+		{
+			name: "count stops before the next table",
+			db:   &fakeDB{infos: infos, countErr: errDB},
+			want: errDB.Error(), wantDiffs: 1, wantCounted: 1,
+		},
+		{
+			name: "a table that describe leaves out",
+			db:   &fakeDB{infos: infos, omit: true},
+			want: "the database reported nothing about table b.u",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, err := Build(t.Context(), decl, nil, tt.db)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("Build() = %+v, %v, want error %q", p, err, tt.want)
+			}
+			if len(tt.db.describes) != 1 || len(tt.db.requests) != tt.wantDiffs || len(tt.db.counted) != tt.wantCounted {
+				t.Errorf("Build() called Describe %d, Diff %d, and CountRows %d times, want 1, %d, and %d",
+					len(tt.db.describes), len(tt.db.requests), len(tt.db.counted), tt.wantDiffs, tt.wantCounted)
+			}
+		})
+	}
+}

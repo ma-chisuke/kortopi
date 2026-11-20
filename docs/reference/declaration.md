@@ -1,0 +1,364 @@
+# Declaration files
+
+A declaration is the set of files that state the rows that your master tables should hold.
+kortopi reads it from a data directory: `kortopi plan --dir data`, or the current directory when you leave out `--dir`.
+
+This page says what kortopi accepts in those files, and which error it reports for each common mistake.
+How kortopi compares the declared values with the database is in [How values are compared](comparison.md), and the command is in [kortopi plan](plan.md).
+The examples run `kortopi plan --dir data`, so the paths in the messages start with `data/`.
+
+## The data directory
+
+```text
+data/
+├── kortopi.toml              # settings for some tables (optional)
+├── facility/
+│   ├── room_types.csv        # the rows of facility.room_types
+│   └── rooms.csv             # the rows of facility.rooms
+└── dumps/
+    └── billing.sql           # INSERT statements for one or more tables
+```
+
+- A CSV file declares the table that its path names, and sits at exactly `<schema>/<table>.csv`: `facility/room_types.csv` declares `facility.room_types`.
+- A SQL file ends in `.sql` and may sit anywhere under the data directory, at any depth. Its name means nothing: each `INSERT` names its table, and one file may declare several tables.
+- `kortopi.toml` at the root holds the settings of the tables. It is optional.
+- Each table is declared in one file. A table in a CSV file and in a SQL file, or in two SQL files, is an error. One SQL file may hold several `INSERT` statements for the same table.
+- The extensions are lower case: `rooms.CSV` and `dump.Sql` are errors.
+- Every other file is ignored, such as a `README.md`. Files and directories whose names start with a dot are skipped.
+- A symbolic link to a directory is an error, because kortopi does not follow it.
+- A schema or a table whose name contains a dot cannot be declared in this version.
+
+A name in a CSV path is exact, with its case.
+PostgreSQL folds an unquoted name to lower case, so a table created as `CREATE TABLE Facility.Rooms` is `facility.rooms`, and its file is `facility/rooms.csv`.
+
+The columns that a file names are the columns that kortopi manages: it compares and updates them, and leaves the other columns of the table alone.
+A new row gets the default of every column that the file does not name.
+
+kortopi reads the files in the sorted order of their paths and stops at the first mistake.
+Fix it, and run the plan again.
+
+## CSV files
+
+```csv
+code,name,capacity
+single,Single,1
+twin,Twin,2
+suite,"Suite, with a view",4
+```
+
+### The header
+
+- The first line is the header. It names the declared columns, separated by commas.
+- A name is the exact name of a column, with its case. The order of the columns is free.
+- Name only the columns that kortopi should manage.
+
+### The rows
+
+Each following line is one row, in the CSV format of PostgreSQL's COPY:
+
+- Fields are separated by commas.
+- A field in double quotes may hold commas and line breaks. A double quote inside it is written twice: `"say ""hi"""`.
+- White space is part of the value: in `1, one`, the second value starts with a space, and differs from the value in `1,one`.
+- Lines may end in LF or in CRLF, and the last line needs no line break.
+- On PostgreSQL before 18, a line that is exactly `\.` is an error. COPY on those versions takes it for the end of the data and drops the rest of the file without an error. Write the value in quotes, as `"\."`, which is data on every version.
+
+### NULL and the empty string
+
+| In the file | The value |
+|---|---|
+| `1,,x` (nothing between two commas) | NULL |
+| `1,"",x` | the empty string |
+| `1,NULL,x` | the text `NULL` |
+| `1,\N,x` | the text `\N` |
+
+A spreadsheet saved as CSV writes an empty cell as nothing, so an empty cell is NULL.
+Write `""` where a column needs the empty string.
+
+### Values and encoding
+
+Write each value as PostgreSQL reads it for the type of its column: `2026-11-19` for a date, `true` or `t` for a boolean, `"{1,2,3}"` for an array, and `"{""a"": 1}"` for a JSON document.
+[How values are compared](comparison.md) lists what is equal for each type.
+
+A CSV file is UTF-8.
+A byte order mark at its start is accepted.
+A file in another encoding fails when PostgreSQL reads it, with the error `invalid byte sequence for encoding "UTF8"`.
+
+kortopi itself reads only the header.
+PostgreSQL reads the rows when a plan loads them, and a value that the column rejects stops the plan with the file, the line, and the column:
+
+```text
+kortopi: data/facility/room_types.csv:3: column "capacity": invalid input syntax for type integer: "many"
+```
+
+The line is the line of the file, also after a quoted value that holds a line break.
+
+## SQL files
+
+```sql
+INSERT INTO billing.plans (code, name, price) VALUES
+  ('basic', 'Basic', 10.00),
+  ('pro', 'Pro', 25.00);
+
+INSERT INTO billing.discounts (code, percent) VALUES ('spring', 10);
+```
+
+### Start from pg_dump
+
+The output of `pg_dump` with `--data-only` and `--column-inserts` is a declaration as it is:
+
+```sh
+pg_dump --data-only --column-inserts --schema billing app > data/dumps/billing.sql
+```
+
+Every `INSERT` in the file declares its table, so dump only the master tables that kortopi should manage.
+Without `--column-inserts`, `pg_dump` writes `COPY ... FROM stdin`, which kortopi does not accept.
+
+### What a statement may hold
+
+kortopi accepts `INSERT INTO <schema>.<table> (<columns>) VALUES (...), (...)`, and nothing else:
+
+- The table name has its schema: `billing.plans`, not `plans`.
+- The column list is required. It names whole columns, each once, and each row has one value for each of them.
+- Every `INSERT` of one table names the same columns, in any order.
+- `OVERRIDING SYSTEM VALUE` is accepted, because `pg_dump` writes it for an identity column that is `GENERATED ALWAYS`.
+- `WITH`, a table alias, `DEFAULT VALUES`, `INSERT ... SELECT`, `UNION`, `INTERSECT`, `EXCEPT`, `ORDER BY`, `LIMIT`, `OFFSET`, `FOR UPDATE`, `ON CONFLICT`, `RETURNING`, and `OVERRIDING USER VALUE` are errors.
+
+Unquoted names are folded to lower case and quoted names are exact, as PostgreSQL reads them.
+
+### Values
+
+A value is one of these:
+
+- a constant or `NULL`: `'twin'`, `4`, `-1.5`, `TRUE`, `E'line\nbreak'`, `$$it's$$`;
+- a constant with one or more casts: `'2026-11-19'::date`, `CAST('ok' AS facility.mood)`, `date '2026-11-19'`;
+- a sign before a number: `-1`, `+2`;
+- an `ARRAY[...]` or a `ROW(...)` of such values: `ARRAY[1, 2, 3]`, `ROW(1, 'a')`.
+
+Without a cast, PostgreSQL reads a constant as the type of its column, so a cast is rarely needed.
+A cast to a type outside `pg_catalog` names the schema of the type, as `pg_dump` writes it: `'ok'::facility.mood` works, and `'ok'::mood` does not.
+Built-in types such as `text`, `integer`, `date`, and `numeric(10,2)` need no schema.
+kortopi reads the files with the search path set to `pg_catalog` (see [How values are compared](comparison.md#the-settings-of-the-session)).
+
+Everything else is an error, because a plan must not change the database and must give the same result each time:
+
+- function calls, such as `now()`, `gen_random_uuid()`, and `nextval('...')`;
+- operators, such as `'a' || 'b'` and `1 + 2`;
+- subqueries, column references, parameters, `COLLATE`, `CASE`, and `DEFAULT`.
+
+To let the database fill a column, such as a generated ID or a timestamp, leave the column out of the file.
+
+The words `now`, `today`, `tomorrow`, and `yesterday`, in any case, are errors in a date or time value, because PostgreSQL reads them as the moment of reading, and the value would change from one plan to the next.
+Write the date or time itself.
+kortopi finds them in two places:
+
+- In a SQL file, the reader finds them in a string under a cast to a date or time type, such as `'now'::timestamptz`, `date 'today'`, or `'{2026-04-01,tomorrow}'::date[]`.
+- In a CSV file, and in a SQL value without such a cast, a plan finds them after it connects, in every declared column whose type is a date or time type: the type itself, a domain over it, an array of it, or a range or a multirange of it.
+
+A column of another type, such as `text`, may hold the words.
+The check does not look into the fields of a composite type, and it does not see a word in a SQL value cast to a domain, such as `'today'::facility.day`, because the cast has already made a date of it.
+
+### What kortopi skips
+
+kortopi skips, and never runs, what a dump writes around the rows:
+
+- `SET` statements and `SET CONSTRAINTS`;
+- `SELECT pg_catalog.set_config(...)`;
+- `SELECT pg_catalog.setval(...)`: kortopi does not manage sequences;
+- the lines of the psql meta-commands `\restrict` and `\unrestrict`;
+- comments.
+
+A `SET` of one of these settings to another value than a plan pins is an error, because the values of the file would then mean something other than what kortopi loads:
+
+| Setting | Accepted values |
+|---|---|
+| `standard_conforming_strings` | `on`, and the other spellings of true |
+| `client_encoding`, also through `SET NAMES` | `UTF8`, `UTF-8`, `utf_8`, `unicode`, in any case |
+| `TimeZone`, also through `SET TIME ZONE` | `UTC` or `Etc/UTC` in any case, or an offset of `0` |
+| `DateStyle` | `ISO`, alone or with `MDY`, in any order and case |
+| `IntervalStyle` | `postgres`, in any case |
+
+This holds also for `pg_catalog.set_config`.
+Write the values so that they need no setting instead: a timestamp with its offset, as `'2026-04-01 09:00:00+09'`, a date as `YYYY-MM-DD`, and an interval as `'1 day 02:00:00'`.
+
+### Statements that are errors
+
+Every other statement is an error that names its kind: `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE`, `CREATE`, `ALTER`, `DROP`, `GRANT`, `BEGIN`, `RESET`, `COPY`, a `SELECT` of anything else, and every other psql meta-command, such as `\connect`.
+
+### Encoding and size
+
+A SQL file is UTF-8 and holds no NUL byte.
+A byte order mark at its start is accepted.
+
+kortopi reads SQL with the parser of PostgreSQL, compiled to WebAssembly.
+Its first use in a run takes up to about a second, and a SQL file of 25 MB took about 10 seconds and about 1 GB of memory in a measurement.
+Declare large tables in CSV files: PostgreSQL reads them with COPY, and kortopi never parses them.
+
+## kortopi.toml
+
+```toml
+[tables."catalog.plans"]
+key = ["code"]
+mode = "sync"
+
+[tables."facility.rooms"]
+mode = "insert"
+```
+
+A table that the file does not name uses mode `upsert` and matches rows by its primary key.
+
+- A table has a section `[tables."<schema>.<table>"]`. The quotes are required: `[tables.facility.rooms]` would be two nested sections.
+- `mode` says which changes the plan computes:
+
+  | Mode | Rows to insert | Rows to update | Rows to delete |
+  |---|---|---|---|
+  | `insert` | yes | no | no |
+  | `upsert` (the default) | yes | yes | no |
+  | `sync` | yes | yes | yes |
+
+- `key` names the columns that match a declared row with a stored row. Without it, the match key is the primary key. The columns of `key`
+  - are exactly the columns of the primary key or of one unique key of the table: a `UNIQUE` constraint, or a unique index that is neither partial nor deferrable and holds no expression;
+  - are all `NOT NULL`;
+  - are all named by the file of the table;
+  - have types with an equality and a B-tree ordering, so that the plan can match and sort the rows by them.
+
+  A unique index, the one of the primary key included, counts as a key only when it uses, for every key column, the collation of the column and the default operator class of its type. An index on `code COLLATE "C"` for a column with another collation, or on `slug text_pattern_ops`, is not a key, because it could tell apart two values that the plan takes for one, or the other way round.
+
+  Their order decides the order in which the plan prints the key and sorts the rows.
+- Any other setting is an error, and so is `key = []`.
+- Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults.
+
+## Common mistakes
+
+### A CSV file in the wrong place
+
+```text
+kortopi: data/room_types.csv: a CSV file must be at <schema>/<table>.csv in the data directory, as in facility/room_types.csv: move the file, or declare its rows in a .sql file
+```
+
+Move the file into the directory of its schema.
+
+### An extension in capitals
+
+```text
+kortopi: data/facility/room_types.CSV: the extension .CSV is not lower case: rename the file to room_types.csv
+```
+
+### A header with a column twice, or without a name
+
+```text
+kortopi: data/facility/room_types.csv:1: the header names the column "code" twice, as columns 1 and 3: name each column once
+kortopi: data/facility/room_types.csv:1: column 2 of the header has no name: name every column
+```
+
+A comma at the end of the header adds a column without a name.
+
+### A table in two files
+
+```text
+kortopi: table facility.room_types is declared in two files, data/facility/room_types.csv and data/seed.sql: declare each table in one file
+```
+
+### A table name without its schema
+
+```text
+kortopi: data/seed.sql:1: the table name room_types has no schema; write it with its schema, as <schema>.room_types
+```
+
+### An INSERT without a column list
+
+```text
+kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them
+```
+
+### A function call as a value
+
+```text
+kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time
+```
+
+Write the value itself, or leave the column out of the file so that a new row gets its default.
+
+### INSERT statements of one table with other columns
+
+```text
+kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name); every INSERT of one table must name the same columns
+```
+
+### A dump without --column-inserts
+
+```text
+kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
+```
+
+### A word for the current time in a SQL value
+
+```text
+kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time
+```
+
+### A SET of the time zone
+
+```text
+kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo'; write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
+```
+
+### A column named twice in an INSERT
+
+```text
+kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice; name each column once
+```
+
+### Settings of a table that no file declares
+
+```text
+kortopi: data/kortopi.toml: table "facility.room_type" has settings, but no file declares it: correct the name, or remove its settings
+```
+
+### A table name in kortopi.toml without quotes
+
+```text
+kortopi: data/kortopi.toml:1: unknown setting tables.facility.room_types: write the name of the table in quotes, as in [tables."facility.room_types"]
+```
+
+### An unknown mode or setting
+
+```text
+kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": write "insert", "upsert", or "sync"
+kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key and mode
+```
+
+### A file without the columns of the key
+
+```text
+kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml
+```
+
+Add the key columns to the file, or name a unique key whose columns the file has with `key`.
+
+### A key that two rows hold
+
+```text
+kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would match the same row: (code)=(twin) 2 times: declare each key once
+```
+
+### NULL in a NOT NULL column
+
+```text
+kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
+```
+
+### A word for the current time in a CSV file
+
+```text
+kortopi: data/facility/events.csv: column "starts_at" of table facility.events holds a word that PostgreSQL reads as the current date or time, so the plan would differ on every run: (code)=(a) "now": write the date or time itself
+```
+
+### A line of the CSV file that reads `\.`
+
+```text
+kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
+```
+
+The last five mistakes need the database, so kortopi reports them after it connects.
+The first of them is reported for every table at once, before any row is loaded.
+The other four stop the plan at the first table that has them, as a value that the column rejects does.

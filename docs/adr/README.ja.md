@@ -27,5 +27,9 @@
 | [ADR-0019](ADR-0019-postgresql-first-with-database-specific-parts-in-one-place.ja.md) | まず PostgreSQL に対応し、データベースごとに違う部分は1か所にまとめる | accepted | 2026-11-19 |
 | [ADR-0020](ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md) | 版管理のマイグレーションを生成する代わりに、計画をそのまま流せる SQL として出力する | accepted | 2026-11-19 |
 | [ADR-0021](ADR-0021-cli-with-subcommands.ja.md) | CLI をサブコマンドの形にする | accepted | 2026-11-19 |
+| [ADR-0022](ADR-0022-accept-only-declaration-files-with-one-meaning.ja.md) | 宣言のファイルは、意味が1つに決まり、値が定数であるものだけを受け付ける | accepted | 2026-11-19 |
+| [ADR-0023](ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md) | 値は列の型の等価性で比べ、セッションの設定は固定する | accepted | 2026-11-19 |
+| [ADR-0024](ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md) | 計画は1つのトランザクションで立ててロールバックし、違うものだけを出力する | accepted | 2026-11-19 |
+| [ADR-0025](ADR-0025-pgx-go-toml-and-test-containers-in-the-root-module.ja.md) | PostgreSQL とは pgx で話し、設定は go-toml で読み、テスト用のサーバーはルートのモジュールの testcontainers-go で起動する | accepted | 2026-11-19 |
 
-<!-- i18n-source: README.md sha256:faaf4b4afbe754f5f5b7c32dd610bb68b61bb479ba5c1754579808c1d544b086 -->
+<!-- i18n-source: README.md sha256:f63de5319f195da05fff587cec7d64cb809c84180609789b94269f7387a624af -->

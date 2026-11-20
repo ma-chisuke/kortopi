@@ -1,0 +1,8 @@
+facility.room_types (sync, key: code)
+  + code=suite  name=Suite  capacity=4
+  ~ code=twin  capacity: 2 -> 3
+  - code=old
+  1 to insert, 1 to update, 1 to delete
+
+Plan: 1 to insert, 1 to update, 1 to delete in 4 tables.
+3 tables without changes are not shown.

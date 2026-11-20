@@ -81,7 +81,7 @@ kortopi version
 ### 確認の方法
 
 - コマンドラインのテストで、サブコマンド、あるサブコマンドのフラグをほかのサブコマンドが受け付けないこと、3つの終了コードを確かめる。テストは、それぞれのコマンドの実装とともに加わる。
-- それらのコマンドが加わるまで、コマンドは `kortopi version` だけであり、そのテストは `cmd/kortopi` にある。
+- `kortopi plan` と `kortopi version` はすでにあり、そのテストは `cmd/kortopi` にある。`apply` と `export` は、あとで加わる。
 
 ## 選択肢の長所と短所
 
@@ -108,4 +108,4 @@ kortopi version
 
 - [libpq の環境変数](https://www.postgresql.org/docs/current/libpq-envars.html)
 
-<!-- i18n-source: ADR-0021-cli-with-subcommands.md sha256:197cfe9d79aade0a6d4ee2eec8ff1b8e30a63897d3e6857f8789dba95e5f190b -->
+<!-- i18n-source: ADR-0021-cli-with-subcommands.md sha256:dd96aee5b6cb07fb8c89566e255acbabf25a66a1c4bc7adb5513f8808e88bc68 -->

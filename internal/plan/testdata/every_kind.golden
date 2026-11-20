@@ -1,0 +1,14 @@
+billing.plans: known after the schema is applied (12 declared rows)
+
+facility.room_types (sync, key: code)
+  + code=suite  name=Suite  capacity=4
+  ~ code=twin  capacity: 2 -> 3
+  - code=old
+  1 to insert, 1 to update, 1 to delete
+
+facility.rooms (upsert, key: id)
+  column floor: known after the schema is applied
+  no changes
+
+Plan: 1 to insert, 1 to update, 1 to delete in 3 tables.
+Known after the schema is applied: 1 table, 1 column.

@@ -1,0 +1,17 @@
+app.countries (insert, key: code)
+  + code=FR  name=France
+  + code=JP  name=Japan
+  2 to insert
+
+app.plans (upsert, key: id)
+  + id=3  name=Gold  price=30.00
+  ~ id=1  price: 9.00 -> 10.00
+  ~ id=2  name: Silver -> Plus  price: 19.00 -> 20.00
+  1 to insert, 2 to update
+
+app.prefectures (sync, key: code)
+  - code=48
+  - code=49
+  0 to insert, 0 to update, 2 to delete
+
+Plan: 3 to insert, 2 to update, 2 to delete in 3 tables.

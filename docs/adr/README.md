@@ -27,3 +27,7 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0019](ADR-0019-postgresql-first-with-database-specific-parts-in-one-place.md) | Support PostgreSQL first, and keep the database-specific parts in one place | accepted | 2026-11-19 |
 | [ADR-0020](ADR-0020-runnable-sql-instead-of-generated-migrations.md) | Print the plan as runnable SQL instead of generating versioned migrations | accepted | 2026-11-19 |
 | [ADR-0021](ADR-0021-cli-with-subcommands.md) | Shape the CLI as subcommands | accepted | 2026-11-19 |
+| [ADR-0022](ADR-0022-accept-only-declaration-files-with-one-meaning.md) | Accept only declaration files that have one meaning, with constant values | accepted | 2026-11-19 |
+| [ADR-0023](ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md) | Compare values with the equality of their column's type, in a session with pinned settings | accepted | 2026-11-19 |
+| [ADR-0024](ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md) | Plan in one transaction that is rolled back, and print only what differs | accepted | 2026-11-19 |
+| [ADR-0025](ADR-0025-pgx-go-toml-and-test-containers-in-the-root-module.md) | Talk to PostgreSQL with pgx, read the settings with go-toml, and start test servers with testcontainers-go in the root module | accepted | 2026-11-19 |

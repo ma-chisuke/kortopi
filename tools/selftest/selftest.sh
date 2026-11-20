@@ -483,9 +483,22 @@ module_of() {
   sed -n 's/^module //p' "$COPY/$1/go.mod"
 }
 
-# A package with a test that passes, in the directory $1.
+# A package with a test that passes, in the directory $1. The packages of
+# kortopi leave the copy first: a case tries the check, not kortopi, and
+# compiling, linting, and testing them in every copy takes minutes. The root
+# module always keeps the fixture, so that it still has a package to test.
 good_go() {
   local dir=${1:-internal/sample}
+  drop cmd
+  drop internal
+  sample_go internal/sample
+  if [ "$dir" != internal/sample ]; then
+    sample_go "$dir"
+  fi
+}
+
+sample_go() {
+  local dir=$1
   put_go "$dir/sample.go" << 'EOF'
 // Package sample is a fixture of the self-test.
 package sample

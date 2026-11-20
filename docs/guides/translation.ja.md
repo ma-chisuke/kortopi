@@ -154,5 +154,39 @@
 | copyleft | コピーレフト |
 | patent grant | 特許の許諾 |
 | notice（ライセンスの） | 表示 |
+| pending table, pending column（スキーマの変更を待つもの） | 適用待ちのテーブル、適用待ちの列 |
+| savepoint | セーブポイント |
+| snapshot（トランザクションの） | スナップショット |
+| isolation level | 分離レベル |
+| setting（セッションの） | 設定 |
+| equality, equality operator（型の） | 等価性、等価演算子 |
+| operator class | 演算子クラス |
+| type cast | キャスト |
+| type modifier | 型修飾子 |
+| domain（型） | ドメイン |
+| identity column | 識別列 |
+| generated column | 生成列 |
+| partitioned table | パーティションテーブル |
+| inherit（テーブルを） | 継承する |
+| text form（値の） | テキスト表現 |
+| byte order mark | バイトオーダーマーク |
+| extension（PostgreSQL の） | 拡張 |
+| extension（ファイル名の） | 拡張子 |
+| symbolic link | シンボリックリンク |
+| standby | スタンバイ |
+| interrupt | 割り込み |
+| standard output, standard error | 標準出力、標準エラー出力 |
+| count line（計画のテーブルごとの） | 件数の行 |
+| summary（計画の末尾の） | 要約 |
+| golden file, golden test | ゴールデンファイル、ゴールデンテスト |
+| escape（出力した値の文字の） | エスケープ |
+| row-level security, policy（行単位セキュリティの） | 行単位セキュリティ、ポリシー |
+| owner（テーブルの） | 所有者 |
+| connection string | 接続文字列 |
+| driver（データベースの） | ドライバー |
+| module（Go の）, indirect dependency | モジュール、間接の依存 |
+| container runtime | コンテナの実行環境 |
+| B-tree ordering（型の） | B-tree の順序 |
+| nondeterministic collation | 非決定的な照合順序 |
 
-<!-- i18n-source: translation.md sha256:ca5e8cd9c5e04c873a56791c5398b4032f56acd2855d7a08fe2ca09b9e60d130 -->
+<!-- i18n-source: translation.md sha256:18bd8285a35fa6420a803150b1fe77a1f7fc7475b4e8d7f1abfde9a0eeff0675 -->

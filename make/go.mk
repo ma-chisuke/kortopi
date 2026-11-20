@@ -6,7 +6,7 @@
 SETUP_TARGETS += setup-go
 FMT_TARGETS += fmt-go
 CHECK_TARGETS += fmt-check-go lint-go test-go
-CHECK_ALL_TARGETS += vuln-go
+CHECK_ALL_TARGETS += vuln-go test-go-integration
 
 GO_MODULES := . $(patsubst %/go.mod,%,$(wildcard */go.mod))
 GO_GLOBS := "*.go" "*go.mod" "*go.sum" ".golangci.yml"
@@ -23,9 +23,12 @@ setup-go:
 	@mkdir -p .cache/build
 	@for m in $(GO_MODULES); do (cd "$$m" && go mod download && go build -o "$(CURDIR)/.cache/build/" ./... && go test -race -run "^$$" ./... > /dev/null); done
 
+# The SQL parser runs as WebAssembly (ADR-0015). With cgo on, the package of
+# its node types would also compile and link the C parser, which kortopi never
+# calls, so the binary is built without cgo.
 .PHONY: build
 build: ## Build the kortopi binary into bin/
-	@go build -trimpath -o bin/kortopi ./cmd/kortopi
+	@CGO_ENABLED=0 go build -trimpath -o bin/kortopi ./cmd/kortopi
 
 fmt-go:
 	@$(call go-each,$(GOLANGCI) fmt ./...)
@@ -39,18 +42,29 @@ lint-go:
 test-go:
 	@$(TASK) $@ '$(call go-each,go test -race -shuffle=on ./...)'
 
+# The tests with the build tag integration start PostgreSQL 15 to 18 in
+# containers, so they need Docker, and they fail without it (ADR-0019). They
+# take a minute or more, so they run in check-all. There, other checks run at
+# the same time and slow them down, so the time limit of `go test` is raised.
+GO_INTEGRATION := -tags integration -timeout 20m
+
+test-go-integration:
+	@$(TASK) $@ '$(call go-each,go test $(GO_INTEGRATION) -race -shuffle=on ./...)'
+
 # Known vulnerabilities in code that the module actually calls.
 vuln-go:
 	@$(TASK) $@ '$(call go-each,go tool -modfile=$(CURDIR)/tools/go.mod govulncheck ./...)'
 
 # Coverage: one profile per module in coverage/go/, merged into coverage/go.out,
 # which .octocov.yml reads. `make coverage` runs this target (make/coverage.mk).
+# It includes the integration tests, which cover the code that talks to
+# PostgreSQL, so it needs Docker.
 COVERAGE_TARGETS += coverage-go
 .PHONY: coverage-go
 
 coverage-go:
 	@rm -rf coverage/go coverage/go.out && mkdir -p coverage/go
-	@$(call go-each,go test -race -shuffle=on -covermode=atomic -coverprofile="$(CURDIR)/coverage/go/$$(basename "$$PWD").out" ./...)
+	@$(call go-each,go test $(GO_INTEGRATION) -race -shuffle=on -covermode=atomic -coverprofile="$(CURDIR)/coverage/go/$$(basename "$$PWD").out" ./...)
 	@if [ -n "$$(find coverage/go -name '*.out' -print -quit)" ]; then \
 		{ echo "mode: atomic"; for f in coverage/go/*.out; do tail -n +2 "$$f"; done; } > coverage/go.out; \
 	fi

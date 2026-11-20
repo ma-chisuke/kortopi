@@ -29,6 +29,7 @@ The reason for a rule is in the decision record that the rule cites ([docs/adr/]
 | `tools/` | Checks and generators of this repository (a Go module of its own, and scripts). Nothing here ships in the binary. |
 | `make/` | One file of make targets per area. |
 | `docs/adr/` | Decision records. |
+| `docs/reference/` | Pages for people who use kortopi: the files of a declaration, how values are compared, and each command. |
 | `docs/guides/` | How to do recurring work. The skills in `.claude/skills/` follow them. |
 | `.claude/` | Hooks, skills, and subagents for Claude Code. |
 
