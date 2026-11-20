@@ -62,6 +62,22 @@ check_version() {
   fi
 }
 
+# The major version must be one that the module path takes, or go install and
+# the module version in the binary cannot use the tag: v0 and v1 without a
+# suffix /vN, and vN with it. Run in the root of the repository.
+check_major() {
+  local version=$1 module major suffix
+  module=$(sed -n 's/^module //p' go.mod)
+  major=${version#v}
+  major=${major%%.*}
+  suffix=${module##*/}
+  if [[ $suffix =~ ^v[0-9]+$ ]] && [ "$module" != "${module%/*}" ]; then
+    [ "v$major" = "$suffix" ] || fail "VERSION '$version' does not match the module path $module, which takes $suffix only"
+  elif [ "$major" -gt 1 ]; then
+    fail "VERSION '$version' is a major version $major, and the module path $module takes v0 and v1 only. Fix: a v$major moves the module to $module/v$major first"
+  fi
+}
+
 repository() {
   if [ -n "${GH_REPO:-}" ]; then
     printf '%s\n' "$GH_REPO"
@@ -100,6 +116,7 @@ cmd_build() {
   local root
   root=$(git rev-parse --show-toplevel)
   cd "$root"
+  check_major "$version"
   case "$dist" in
     /*) ;;
     *) dist="$root/$dist" ;;
@@ -158,6 +175,8 @@ cmd_build() {
 cmd_gate() {
   local version=$1
   check_version "$version"
+  cd "$(git rev-parse --show-toplevel)"
+  check_major "$version"
   local commit head repo
   commit=$(git rev-parse --verify --quiet "refs/tags/$version^{commit}") || fail "the tag $version does not exist here"
   head=$(git rev-parse HEAD)
