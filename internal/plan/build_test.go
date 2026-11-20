@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,8 +23,10 @@ type fakeDB struct {
 	describeErr error
 	diffs       map[declaration.TableName]TableDiff
 	diffErr     error
-	counts      map[declaration.TableName]int
-	countErr    error
+	// diffErrs makes Diff fail for the tables that it names.
+	diffErrs map[declaration.TableName]error
+	counts   map[declaration.TableName]int
+	countErr error
 
 	describes [][]declaration.TableName
 	requests  []DiffRequest
@@ -51,7 +54,7 @@ func (f *fakeDB) Diff(_ context.Context, req DiffRequest) (TableDiff, error) {
 	if f.diffErr != nil {
 		return TableDiff{}, f.diffErr
 	}
-	return f.diffs[req.Table.Name], nil
+	return f.diffs[req.Table.Name], f.diffErrs[req.Table.Name]
 }
 
 func (f *fakeDB) CountRows(_ context.Context, table declaration.Table) (int, error) {
@@ -346,6 +349,18 @@ func TestBuildErrors(t *testing.T) {
 			want:  `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of data/kortopi.toml`,
 		},
 		{
+			name:  "no primary key, and keys that cannot match rows",
+			table: csvTable(tableT, "id", "code"),
+			info: with(existing(nil, "id", "code"), func(i *TableInfo) {
+				i.SetAsideKeys = []SetAsideKey{
+					{Columns: []string{"id"}, Reason: "its index uses another collation than the column"},
+					{Columns: []string{"code", "id"}, Reason: "its index is partial"},
+				}
+			}),
+			want: `table a.t has no primary key that can match rows; the unique key ("id") cannot, because its index uses another collation than the column; ` +
+				`the unique key ("code", "id") cannot, because its index is partial: name the columns of a unique key that can with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
 			name:  "primary key column not declared",
 			table: csvTable(tableT, "name"),
 			info:  existing(pk, "id", "name"),
@@ -364,6 +379,18 @@ func TestBuildErrors(t *testing.T) {
 			info:     with(existing(pk, "id", "name", "code"), unique([]string{"code"})),
 			settings: config.Table{Key: []string{"name"}},
 			want:     `data/kortopi.toml: key ("name") of table a.t is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint`,
+		},
+		{
+			name:  "chosen key that is a unique key that cannot match rows",
+			table: csvTable(tableT, "id", "name", "code"),
+			info: with(existing(pk, "id", "name", "code"), func(i *TableInfo) {
+				i.SetAsideKeys = []SetAsideKey{
+					{Columns: []string{"name"}, Reason: "its index is partial"},
+					{Columns: []string{"name", "code"}, Reason: "its index uses another collation than the column"},
+				}
+			}),
+			settings: config.Table{Key: []string{"code", "name"}},
+			want:     `data/kortopi.toml: key ("code", "name") of table a.t is a unique key that cannot match rows, because its index uses another collation than the column: name the columns of the primary key or of another unique key`,
 		},
 		{
 			name:     "chosen key that is part of a unique key",
@@ -547,6 +574,88 @@ func TestBuildDatabaseErrors(t *testing.T) {
 			if len(tt.db.describes) != 1 || len(tt.db.requests) != tt.wantDiffs || len(tt.db.counted) != tt.wantCounted {
 				t.Errorf("Build() called Describe %d, Diff %d, and CountRows %d times, want 1, %d, and %d",
 					len(tt.db.describes), len(tt.db.requests), len(tt.db.counted), tt.wantDiffs, tt.wantCounted)
+			}
+		})
+	}
+}
+
+// A NOT NULL column without a default that the declaration does not name is
+// a mistake of a table with rows to insert, and only of such a table.
+func TestBuildMissingValues(t *testing.T) {
+	t.Parallel()
+
+	// The table has a column for each case: declared, nullable, with a
+	// default, and the one that every new row would lack.
+	info := TableInfo{Exists: true, PrimaryKey: []string{"id"}, Columns: []ColumnInfo{
+		{Name: "id", NotNull: true},
+		{Name: "created_by", NotNull: true},
+		{Name: "note"},
+		{Name: "created_at", NotNull: true, HasDefault: true},
+		{Name: "owner", NotNull: true},
+	}}
+	inserts := func(n int) TableDiff {
+		rows := make([]Row, n)
+		for i := range rows {
+			rows[i] = Row{Key: []Value{{Text: strconv.Itoa(i)}}}
+		}
+		return TableDiff{Inserts: rows}
+	}
+	errDB := errors.New("connection reset")
+	mistake := func(table, column, rows string) string {
+		return filepath.FromSlash("data/"+table[:1]+"/"+table[2:]+".csv") + `: column "` + column + `" of table ` + table +
+			" is NOT NULL and has no default, and the declaration does not name it, so " + rows +
+			" to insert would get no value for it: declare the column, or give it a default in the schema"
+	}
+	tests := []struct {
+		name      string
+		diffs     map[declaration.TableName]TableDiff
+		diffErrs  map[declaration.TableName]error
+		want      string
+		wantDiffs int
+	}{
+		{name: "no rows to insert", diffs: map[declaration.TableName]TableDiff{tableT: {Deletes: []Row{{}}}}, wantDiffs: 2},
+		{
+			name:  "one row to insert",
+			diffs: map[declaration.TableName]TableDiff{tableT: inserts(1)},
+			want:  mistake("a.t", "created_by", "the row") + "\n" + mistake("a.t", "owner", "the row"),
+			// The other table is compared all the same, to find its
+			// mistakes in the same run.
+			wantDiffs: 2,
+		},
+		{
+			name:  "rows to insert in both tables",
+			diffs: map[declaration.TableName]TableDiff{tableT: inserts(2), tableU: inserts(3)},
+			want: mistake("a.t", "created_by", "the 2 rows") + "\n" + mistake("a.t", "owner", "the 2 rows") + "\n" +
+				mistake("b.u", "created_by", "the 3 rows") + "\n" + mistake("b.u", "owner", "the 3 rows"),
+			wantDiffs: 2,
+		},
+		{
+			name:      "an error of the database after a mistake",
+			diffs:     map[declaration.TableName]TableDiff{tableT: inserts(1)},
+			diffErrs:  map[declaration.TableName]error{tableU: errDB},
+			want:      mistake("a.t", "created_by", "the row") + "\n" + mistake("a.t", "owner", "the row") + "\n" + errDB.Error(),
+			wantDiffs: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: info, tableU: info}, diffs: tt.diffs, diffErrs: tt.diffErrs}
+			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id", "note"), csvTable(tableU, "id")}}
+			p, err := Build(t.Context(), decl, nil, db)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("Build() error = %v", err)
+				}
+			} else if err == nil || err.Error() != tt.want {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, tt.want)
+			}
+			if len(db.requests) != tt.wantDiffs {
+				t.Errorf("Build() called Diff %d times, want %d", len(db.requests), tt.wantDiffs)
+			}
+			if tt.diffErrs != nil && !errors.Is(err, errDB) {
+				t.Errorf("Build() error = %v, want it to hold %v", err, errDB)
 			}
 		})
 	}

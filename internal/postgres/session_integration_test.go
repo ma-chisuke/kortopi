@@ -64,7 +64,7 @@ func TestPlanLeavesNothingBehind(t *testing.T) {
 			objects := db.Objects(t)
 			rows := db.Query(t, tableRows)
 
-			s, err := ConnectConfig(t.Context(), db.Config, writeFiles(t, planFiles))
+			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: writeFiles(t, planFiles)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -321,11 +321,11 @@ func TestConnectErrors(t *testing.T) {
 			db := database(t, srv)
 			cfg := db.Config.Copy()
 			cfg.Password = "wrong"
-			_, err := ConnectConfig(t.Context(), cfg, t.TempDir())
+			_, err := ConnectConfig(t.Context(), cfg, Options{Dir: t.TempDir()})
 			wantError(t, err, "connect to the database")
 
 			// A closed session refuses work.
-			s, err := ConnectConfig(t.Context(), db.Config, t.TempDir())
+			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: t.TempDir()})
 			if err != nil {
 				t.Fatal(err)
 			}

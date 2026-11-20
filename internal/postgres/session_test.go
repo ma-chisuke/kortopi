@@ -103,14 +103,23 @@ func TestOptionsConnConfig(t *testing.T) {
 }
 
 func TestTemporaryError(t *testing.T) {
-	err := temporaryError("app", "the transaction is read-only")
-	if !errors.Is(err, ErrTemporaryTables) {
-		t.Errorf("%v is not ErrTemporaryTables", err)
+	for _, tt := range []struct {
+		apply bool
+		needs string
+	}{{false, "a plan"}, {true, "an apply"}} {
+		s := &Session{databaseName: "app", apply: tt.apply}
+		err := s.temporaryError("the transaction is read-only")
+		if !errors.Is(err, ErrTemporaryTables) {
+			t.Errorf("%v is not ErrTemporaryTables", err)
+		}
+		want := `cannot create temporary tables in database "app", because the transaction is read-only; ` +
+			tt.needs + ` needs a session that can write, on the primary, with the TEMPORARY privilege on the database`
+		if err.Error() != want {
+			t.Errorf("temporaryError = %s, want %s", err, want)
+		}
 	}
-	want := `cannot create temporary tables in database "app", because the transaction is read-only; ` +
-		`a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database`
-	if err.Error() != want {
-		t.Errorf("temporaryError = %s, want %s", err, want)
+	if s := (&Session{apply: true}); s.work() != "apply" || (&Session{}).work() != "plan" {
+		t.Error("work")
 	}
 }
 

@@ -48,7 +48,8 @@ func (d *TableDiff) changes() bool {
 //
 // Each table with something to show gets a block: a header with its mode and
 // match key, a line for each pending column, a line for each row to insert
-// (+), update (~), and delete (-), and the counts of the table. A table that
+// (+), update (~), and delete (-), a line under the rows to delete for each
+// foreign key that points at them, and the counts of the table. A table that
 // the database does not have yet gets one line. Tables without changes get no
 // block, and the summary at the end counts them. An empty plan prints one
 // sentence.
@@ -157,6 +158,11 @@ func writeTable(b *strings.Builder, t *Table) error {
 		}
 		writeLine(b, '-', pairs(t.Key, r.Key))
 	}
+	for _, r := range t.Diff.References {
+		b.WriteString("    ")
+		b.WriteString(formatReference(r, len(t.Diff.Deletes)))
+		b.WriteString("\n")
+	}
 
 	if !t.Diff.changes() {
 		b.WriteString("  no changes\n")
@@ -171,6 +177,47 @@ func writeTable(b *strings.Builder, t *Table) error {
 	}
 	fmt.Fprintf(b, "  %s\n", strings.Join(counts, ", "))
 	return nil
+}
+
+// formatReference returns the line of a foreign key that points at rows to
+// delete: how many rows reference them, the referencing table, its columns,
+// and the constraint, and what the action ON DELETE of the key does while
+// those rows still reference a row to delete (ADR-0018). The run may delete
+// or change the referencing rows first, so the line says what PostgreSQL does
+// in that state, not that it will happen. deleting is the number of rows to
+// delete. When the role may not read the referencing table, the line says so
+// instead of a count.
+func formatReference(r Reference, deleting int) string {
+	columns := make([]string, len(r.Columns))
+	for i, c := range r.Columns {
+		columns[i] = formatName(c)
+	}
+	source := formatTable(r.Table) + " (" + strings.Join(columns, ", ") + "), " + formatName(r.Constraint)
+	subject, verb, target := "these rows", "reference", "them"
+	switch {
+	case r.Unreadable:
+		subject = "such rows"
+	case r.Rows == 1:
+		subject, verb = "this row", "references"
+	}
+	if deleting == 1 {
+		target = "it"
+	}
+	action := "ON DELETE " + r.OnDelete
+	switch r.OnDelete {
+	case "NO ACTION", "RESTRICT":
+		action += ", so the deletion fails while " + subject + " " + verb + " " + target
+	case "CASCADE":
+		action += ", so the deletion deletes " + subject + " too"
+	case "SET NULL":
+		action += ", so the deletion sets the reference of " + subject + " to NULL"
+	case "SET DEFAULT":
+		action += ", so the deletion sets the reference of " + subject + " to the default"
+	}
+	if r.Unreadable {
+		return "maybe referenced by rows of " + source + ": the role may not read the table to count them; " + action
+	}
+	return "referenced by " + count(r.Rows, "row", "rows") + " of " + source + ": " + action
 }
 
 // keyError reports a row whose key does not fit the key of its table.
