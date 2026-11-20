@@ -5,7 +5,6 @@ CI protects `main` only if a ruleset requires the check of CI, and Renovate merg
 The script `tools/github/apply-settings.sh` writes these settings, so that they can be reviewed in a pull request and applied again at any time.
 This guide is for the maintainer, who runs the script, and for anyone who wants to know why the repository is set up as it is.
 It explains how to run the script, what each setting does, and the one step that the script cannot do: installing Renovate.
-kortopi has no release workflow yet, and the settings that a release workflow needs arrive together with that workflow.
 
 ## Apply the settings
 
@@ -50,6 +49,17 @@ The ruleset `main` applies to the default branch and has no bypass, not even for
 - Nobody can force-push to the branch or delete it.
 
 The ruleset does not require a branch to be up to date with `main` before it merges. That would make every open pull request, including the ones from Renovate, wait for a rebase after each merge.
+
+### Releases
+
+A tag `v*` starts a release: `.github/workflows/release.yml` builds, attests, and publishes the commit that the tag points to ([the release guide](release.md), ADR-0030).
+
+| Setting | Value | Why |
+|---|---|---|
+| Ruleset `release-tags` | only an administrator creates, moves, or deletes a tag `v*` | Pushing such a tag starts a release, so only the maintainer can start one. The release workflow also checks that the tag is on `main` and that CI passed on it. |
+| Immutable releases | on | Once a release is published, nobody can change its assets, nobody can move or delete its tag while the release exists, and GitHub signs an attestation of the release, which `gh release verify` checks. The title and the notes stay editable. |
+
+Apply both before the first release: a release published while immutable releases are off stays mutable.
 
 ### Security
 
