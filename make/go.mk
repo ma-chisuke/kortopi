@@ -36,8 +36,12 @@ fmt-go:
 fmt-check-go:
 	@$(TASK) $@ '$(call go-each,$(GOLANGCI) fmt --diff ./...)'
 
+# golangci-lint lets one instance run on a machine at a time and fails when
+# another one holds its lock. --allow-serial-runners makes it wait instead, so
+# a second check on the same machine (a hook, an agent, the self-test) does
+# not fail this one.
 lint-go:
-	@$(TASK) $@ '$(call go-each,$(GOLANGCI) run ./...)'
+	@$(TASK) $@ '$(call go-each,$(GOLANGCI) run --allow-serial-runners ./...)'
 
 test-go:
 	@$(TASK) $@ '$(call go-each,go test -race -shuffle=on ./...)'
