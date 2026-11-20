@@ -64,7 +64,7 @@ kortopi plan --dir data
 There is no flag for the password, so that it never appears in the arguments of a process.
 Give it in `PGPASSWORD`, in the password file, or in the service file.
 
-kortopi needs the name of the database. Unlike `psql`, it does not take the name of the user for it: without `--dbname`, `PGDATABASE`, or `dbname` in the service, it stops before it connects.
+kortopi needs the name of the database. Unlike `psql`, it does not take the name of the user for it ([ADR-0032](../adr/ADR-0032-require-the-name-of-the-database.md)): without `--dbname`, `PGDATABASE`, or `dbname` in the service, it stops before it connects.
 
 ```text
 kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names

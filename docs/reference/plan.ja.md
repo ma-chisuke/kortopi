@@ -64,7 +64,7 @@ kortopi plan --dir data
 パスワードのフラグはない。プロセスの引数にパスワードを出さないためである。
 パスワードは、`PGPASSWORD`・パスワードファイル・サービスファイルのどれかで渡す。
 
-kortopi には、データベースの名前が要る。`psql` と違い、ユーザーの名前をデータベースの名前として使わない。`--dbname`・`PGDATABASE`・サービスの `dbname` のどれもなければ、接続する前に止まる。
+kortopi には、データベースの名前が要る。`psql` と違い、ユーザーの名前をデータベースの名前として使わない（[ADR-0032](../adr/ADR-0032-require-the-name-of-the-database.ja.md)）。`--dbname`・`PGDATABASE`・サービスの `dbname` のどれもなければ、接続する前に止まる。
 
 ```text
 kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names
@@ -545,4 +545,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:5d3202da07e72192a7b1daf0e30297fa13e4a0207fc633ee072ae5e1a404e6b2 -->
+<!-- i18n-source: plan.md sha256:e7cbe8ccb7430538b8f48aa29b99c6aed9e0b81c060e32e12a19db77b976ccb3 -->

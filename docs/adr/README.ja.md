@@ -37,5 +37,6 @@
 | [ADR-0029](ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md) | 計画を、適用の順に、どのセッションでも同じに読める値で SQL として出力し、削除はコメントにする | accepted | 2026-11-20 |
 | [ADR-0030](ADR-0030-release-reproducible-archives-with-attested-provenance.ja.md) | main 上のタグから再現できるアーカイブをリリースし、サードパーティの表示と構成証明した来歴を添える | accepted | 2026-11-20 |
 | [ADR-0031](ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) | パーティションが二重に宣言する行と、データベースの名前と空白か大小だけが違う名前で止まり、モード insert が比べない値について一致を主張しない | accepted | 2026-11-21 |
+| [ADR-0032](ADR-0032-require-the-name-of-the-database.ja.md) | データベースの名前を必須とし、ユーザーの名前で代用しない | accepted | 2026-11-21 |
 
-<!-- i18n-source: README.md sha256:903cb7bfcc260c9acd15e81d3b62e25be6734f7d161d80d3560e34f22e19dc54 -->
+<!-- i18n-source: README.md sha256:23a1ec382f7af26759b02a7a247c6b1bbab3955a0d5efb6c523bafb65ba8ceb8 -->
