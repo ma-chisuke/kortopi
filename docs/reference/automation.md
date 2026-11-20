@@ -8,7 +8,7 @@ The commands are those of [kortopi plan](plan.md), [kortopi apply](apply.md), an
 
 - Standard output gets the plan, of `kortopi plan` and of `kortopi apply`, and the lines of what an apply wrote. Standard error gets the errors, one line each as `kortopi: <message>`, except a failed connection, which adds a line for each attempt to connect ([kortopi plan](plan.md#connect-to-the-database)). It also gets the notes as `note: <message>`, and the line of an apply that waits for another apply.
 - A plan never changes the database, so it can run as often as needed.
-- An apply of a declaration that is applied already changes nothing, and prints the empty plan. A failed apply changed nothing, and its last line says so, unless its error says that the outcome of the commit is not known: run `kortopi plan` to see the state then. An apply can therefore run again after any failure.
+- An apply of a declaration that is applied already changes nothing, and prints the empty plan. A failed apply changed nothing, unless its error says that the outcome of the commit is not known: run `kortopi plan` to see the state then. After an error in the database or in the files, the last line of standard error is `kortopi: nothing was changed`; after a mistake in the flags, the usage of the command ends the output instead. An apply can therefore run again after any failure.
 - The settings of the connection come from the environment variables of libpq ([kortopi plan](plan.md#connect-to-the-database)). There is no flag for the password: give it in `PGPASSWORD` from the secrets of the pipeline, or in a password file.
 
 | Command | 0 | 1 | 2 |
@@ -29,7 +29,7 @@ export PGOPTIONS='-c lock_timeout=10s'
 kortopi apply --dir data
 ```
 
-- Run the apply as the role that owns the declared tables, or as a role with `SELECT`, `INSERT`, and `UPDATE` on them, and `DELETE` where it deletes ([kortopi apply](apply.md#what-an-apply-needs)). With one owner role for each schema, run one apply for each schema, with `--schema` ([kortopi apply](apply.md#one-apply-for-each-schema)).
+- Run the apply as the role that owns the declared tables, or as a role that has [what an apply needs](apply.md#what-an-apply-needs). With one owner role for each schema, run one apply for each schema, with `--schema` ([kortopi apply](apply.md#one-apply-for-each-schema)).
 - Set a lock timeout. Without one, an apply waits without limit while another session holds a lock on a declared table, and the deployment waits with it. With one, the apply stops with an error that says so, and changes nothing ([kortopi plan](plan.md#connection-settings)).
 - Exit status 1 means that the apply changed nothing, unless its error says that the outcome of the commit is not known. The deployment can run the apply again after a fix.
 - Decide about deletions for each pipeline. Without `--allow-delete`, an apply leaves the rows that tables of mode `sync` should lose, says so in a line `Not deleted: ...`, and exits with 0. With `--allow-delete`, it deletes them, within `--max-delete`, 100 rows by default. To fail a deployment that leaves rows behind, run `kortopi plan --exit-code` after the apply.
@@ -53,7 +53,7 @@ kortopi plan --dir data --exit-code
 - The last plan must exit with 0: anything else means that the apply did not bring the database to the declaration.
 - `--allow-delete` costs nothing here, since the scratch database holds nothing worth keeping.
 
-A plan against a real environment, to show a reviewer what the merge will change, belongs in a run that you trust, such as one that a maintainer starts, as a role that may not change the tables: `SELECT` on the declared tables and `TEMPORARY` on the database ([kortopi plan](plan.md#what-the-session-needs)).
+A plan against a real environment, to show a reviewer what the merge will change, belongs in a run that you trust, such as one that a maintainer starts, as a role that has [what the session of a plan needs](plan.md#what-the-session-needs) and no privilege to change the declared tables, such as `UPDATE`.
 
 ## A scheduled drift check
 
@@ -71,7 +71,7 @@ esac
 
 - Status 2 counts every row to insert, to update, or to delete, and every table or column that waits for a schema change.
 - A table of mode `insert` is compared by its keys only, so a changed value of one of its rows is no drift.
-- The role needs what a plan needs: `SELECT` on the declared tables and `TEMPORARY` on the database, on the primary.
+- The role needs [what the session of a plan needs](plan.md#what-the-session-needs), on the primary.
 - `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
 
 ## The plan as SQL for reviewed scripts
