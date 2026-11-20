@@ -152,7 +152,7 @@ func TestFlagOutput(t *testing.T) {
 		},
 		{
 			name: "limit without deletions", args: []string{"apply", "--max-delete", "5"}, wantCode: exitError,
-			wantStderr: "kortopi: flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete\n\n" + applyUsage,
+			wantStderr: "kortopi: flag --max-delete needs --allow-delete, without which an apply deletes no row: add --allow-delete, or remove --max-delete\n\n" + applyUsage,
 		},
 		{name: "help of version", args: []string{"version", "--help"}, wantCode: exitOK, wantStdout: versionHelp},
 		{name: "help command of version", args: []string{"help", "version"}, wantCode: exitOK, wantStdout: versionHelp},

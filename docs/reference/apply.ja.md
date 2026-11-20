@@ -287,7 +287,7 @@ kortopi: the deletion of rows of z.parent cascades through foreign key "orders_p
 ### `--allow-delete` のない `--max-delete`
 
 ```text
-kortopi: flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete
+kortopi: flag --max-delete needs --allow-delete, without which an apply deletes no row: add --allow-delete, or remove --max-delete
 ```
 
 ### 権限の不足
@@ -378,4 +378,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:6bc82696620a0b97d6097c17feb49bca773201b3403e4c219af41fcd13f33122 -->
+<!-- i18n-source: apply.md sha256:0aa932762a5fafdbdd2e2682090e151c5d3a7fd6c46b72ea8882244d83598d6d -->

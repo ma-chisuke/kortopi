@@ -424,27 +424,27 @@ func TestParseInsertsFileErrors(t *testing.T) {
 		{
 			name: "an earlier rejected statement comes first",
 			src:  "UPDATE s.t SET a = 1;\nINSERT INTO s.t (a) VALUES (1);\nINSERT INTO s.t (a) VALUES (2) x;\n",
-			want: "seed.sql:1: UPDATE is not accepted; a SQL declaration holds only INSERT ... VALUES statements",
+			want: "seed.sql:1: UPDATE is not accepted: a SQL declaration holds only INSERT ... VALUES statements",
 		},
 		{
 			name: "copy from stdin with its data",
 			src:  "SET a = 1;\n\nCOPY public.t (a, b) FROM stdin;\n1\tx\n2\ty\n\\.\n",
-			want: "seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file",
+			want: "seed.sql:3: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file",
 		},
 		{
 			name: "another psql meta-command",
 			src:  "\\connect app\nINSERT INTO s.t (a) VALUES (1);\n",
-			want: `seed.sql:1:1: the psql meta-command \connect is not accepted; a declaration skips only \restrict and \unrestrict`,
+			want: `seed.sql:1:1: the psql meta-command \connect is not accepted: a declaration skips only \restrict and \unrestrict`,
 		},
 		{
 			name: "a meta-command without a space after it",
 			src:  "\\restrictx\n",
-			want: `seed.sql:1:1: the psql meta-command \restrictx is not accepted; a declaration skips only \restrict and \unrestrict`,
+			want: `seed.sql:1:1: the psql meta-command \restrictx is not accepted: a declaration skips only \restrict and \unrestrict`,
 		},
 		{
 			name: "a meta-command at the end of the file",
 			src:  "INSERT INTO s.t (a) VALUES (1);\n\\gexec",
-			want: `seed.sql:2:1: the psql meta-command \gexec is not accepted; a declaration skips only \restrict and \unrestrict`,
+			want: `seed.sql:2:1: the psql meta-command \gexec is not accepted: a declaration skips only \restrict and \unrestrict`,
 		},
 		{
 			name: "a meta-command that does not start the line",

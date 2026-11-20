@@ -205,7 +205,7 @@ CREATE TABLE s.c (a text, b integer, v text NOT NULL, PRIMARY KEY (a, b));
 // keys of the first ones. The temporary table has no constraints, so the
 // rows load, but an apply of them would fail.
 func TestDiffNotNull(t *testing.T) {
-	const csvCause = `; in a CSV file, an unquoted empty field is NULL: write "" for the empty string`
+	const csvCause = `, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL`
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)

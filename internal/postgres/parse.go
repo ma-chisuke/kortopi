@@ -44,7 +44,7 @@ func (p Parser) ParseInserts(file string, src []byte) (inserts []declaration.Ins
 		if v := recover(); v != nil {
 			inserts = nil
 			err = fmt.Errorf(
-				"%s: the SQL reader could not hold the file (panic: %v); declare large tables in CSV files, which kortopi loads with COPY without parsing them",
+				"%s: the SQL reader could not hold the file (panic: %v): declare large tables in CSV files, which kortopi loads with COPY without parsing them",
 				file, v)
 		}
 	}()
@@ -306,7 +306,7 @@ func (r *parseReader) parseError(err error) error {
 	}
 	if r.lineStart(offset) == offset && strings.HasPrefix(r.text[offset:], `\`) {
 		return r.errorAtColumn(offset,
-			"the psql meta-command %s is not accepted; a declaration skips only \\restrict and \\unrestrict",
+			"the psql meta-command %s is not accepted: a declaration skips only \\restrict and \\unrestrict",
 			parseMetaName(r.text[offset:r.lineEnd(offset)]))
 	}
 	return r.errorAtColumn(offset, "%s", perr.Message)

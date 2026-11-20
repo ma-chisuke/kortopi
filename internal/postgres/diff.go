@@ -551,7 +551,7 @@ func (s *Session) checkNotNull(ctx context.Context, tx pgx.Tx, table declaration
 	}
 	cause := ""
 	if table.Format == declaration.CSV {
-		cause = `; in a CSV file, an unquoted empty field is NULL: write "" for the empty string`
+		cause = `, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL`
 	}
 	errs := make([]error, 0, len(found))
 	for _, f := range found {

@@ -290,7 +290,7 @@ func TestTemporaryError(t *testing.T) {
 		if !errors.Is(err, ErrTemporaryTables) {
 			t.Errorf("%v is not ErrTemporaryTables", err)
 		}
-		want := `cannot create temporary tables in database "app", because the transaction is read-only; ` +
+		want := `cannot create temporary tables in database "app", because the transaction is read-only: ` +
 			tt.needs + ` needs a session that can write, on the primary, with the TEMPORARY privilege on the database`
 		if err.Error() != want {
 			t.Errorf("temporaryError = %s, want %s", err, want)

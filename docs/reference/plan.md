@@ -156,7 +156,7 @@ GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 Each check that fails stops the plan with its own error, which names what is missing and what to grant:
 
 ```text
-kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database; a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
+kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database: a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
 kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" lacks it: grant the role SELECT on the table
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" may not read its column "capacity": grant the role SELECT on the table

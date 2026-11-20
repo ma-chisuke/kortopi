@@ -282,19 +282,19 @@ kortopi: table facility.room_types is declared in two files, data/facility/room_
 ### A table name without its schema
 
 ```text
-kortopi: data/seed.sql:1: the table name room_types has no schema; write it with its schema, as <schema>.room_types
+kortopi: data/seed.sql:1: the table name room_types has no schema: write it with its schema, as <schema>.room_types
 ```
 
 ### An INSERT without a column list
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them
+kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list: name the columns, as pg_dump --column-inserts writes them
 ```
 
 ### A function call as a value
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time
 ```
 
 Write the value itself, or leave the column out of the file so that a new row gets its default.
@@ -308,25 +308,25 @@ kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (cod
 ### A dump without --column-inserts
 
 ```text
-kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
+kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
 ```
 
 ### A word for the current time in a SQL value
 
 ```text
-kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value: write the date or time itself, because a plan must not change the database and must give the same result each time
 ```
 
 ### A SET of the time zone
 
 ```text
-kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo'; write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
+kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo': write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
 ```
 
 ### A column named twice in an INSERT
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice; name each column once
+kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice: name each column once
 ```
 
 ### Settings of a table that no file declares
@@ -394,7 +394,7 @@ kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would
 ### NULL in a NOT NULL column
 
 ```text
-kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
+kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL
 ```
 
 ### A column that the rows to insert would lack

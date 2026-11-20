@@ -89,7 +89,7 @@ func TestParseInsertsAcceptsValues(t *testing.T) {
 
 func TestParseInsertsRejectsValues(t *testing.T) {
 	t.Parallel()
-	const reason = " is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time"
+	const reason = " is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time"
 	tests := []struct {
 		value string
 		what  string
@@ -144,7 +144,7 @@ func TestParseInsertsRejectsValues(t *testing.T) {
 
 func TestParseInsertsRejectsCurrentTime(t *testing.T) {
 	t.Parallel()
-	const message = "seed.sql:%d: s.t, column %s: the word %s, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time"
+	const message = "seed.sql:%d: s.t, column %s: the word %s, which PostgreSQL reads as the current date or time, is not accepted in a value: write the date or time itself, because a plan must not change the database and must give the same result each time"
 	tests := []struct {
 		value string
 		word  string
@@ -197,142 +197,142 @@ func TestParseInsertsClauseErrors(t *testing.T) {
 		{
 			name: "WITH before INSERT",
 			src:  "WITH x AS (SELECT 1)\nINSERT INTO s.t (a) VALUES (1);",
-			want: "seed.sql:1: s.t: WITH is not accepted; write the rows as INSERT ... VALUES without WITH",
+			want: "seed.sql:1: s.t: WITH is not accepted: write the rows as INSERT ... VALUES without WITH",
 		},
 		{
 			name: "WITH before VALUES",
 			src:  "INSERT INTO s.t (a)\nWITH x AS (SELECT 1) VALUES (1);",
-			want: "seed.sql:2: s.t: WITH is not accepted; write the rows as INSERT ... VALUES without WITH",
+			want: "seed.sql:2: s.t: WITH is not accepted: write the rows as INSERT ... VALUES without WITH",
 		},
 		{
 			name: "ON CONFLICT DO NOTHING",
 			src:  "INSERT INTO s.t (a) VALUES (1)\nON CONFLICT DO NOTHING;",
-			want: "seed.sql:2: s.t: ON CONFLICT is not accepted; remove the clause, because the plan decides which rows to insert and update",
+			want: "seed.sql:2: s.t: ON CONFLICT is not accepted: remove the clause, because the plan decides which rows to insert and update",
 		},
 		{
 			name: "ON CONFLICT DO UPDATE",
 			src:  "INSERT INTO s.t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 2;",
-			want: "seed.sql:1: s.t: ON CONFLICT is not accepted; remove the clause, because the plan decides which rows to insert and update",
+			want: "seed.sql:1: s.t: ON CONFLICT is not accepted: remove the clause, because the plan decides which rows to insert and update",
 		},
 		{
 			name: "RETURNING",
 			src:  "INSERT INTO s.t (a) VALUES (1)\nRETURNING a;",
-			want: "seed.sql:2: s.t: RETURNING is not accepted; remove the clause",
+			want: "seed.sql:2: s.t: RETURNING is not accepted: remove the clause",
 		},
 		{
 			name: "OVERRIDING USER VALUE",
 			src:  "INSERT INTO s.t (a)\nOVERRIDING USER VALUE VALUES (1);",
-			want: "seed.sql:2: s.t: OVERRIDING USER VALUE is not accepted; remove the clause",
+			want: "seed.sql:2: s.t: OVERRIDING USER VALUE is not accepted: remove the clause",
 		},
 		{
 			name: "DEFAULT VALUES",
 			src:  "INSERT INTO s.t\nDEFAULT VALUES;",
-			want: "seed.sql:2: s.t: DEFAULT VALUES is not accepted; name the columns and write the rows as VALUES",
+			want: "seed.sql:2: s.t: DEFAULT VALUES is not accepted: name the columns and write the rows as VALUES",
 		},
 		{
 			name: "INSERT ... SELECT",
 			src:  "INSERT INTO s.t (a)\nSELECT 1;",
-			want: "seed.sql:2: s.t: INSERT ... SELECT is not accepted; write the rows as VALUES",
+			want: "seed.sql:2: s.t: INSERT ... SELECT is not accepted: write the rows as VALUES",
 		},
 		{
 			name: "INSERT ... SELECT FROM",
 			src:  "INSERT INTO s.t (a) SELECT a FROM s.u WHERE a > 1;",
-			want: "seed.sql:1: s.t: INSERT ... SELECT is not accepted; write the rows as VALUES",
+			want: "seed.sql:1: s.t: INSERT ... SELECT is not accepted: write the rows as VALUES",
 		},
 		{
 			name: "INSERT ... TABLE",
 			src:  "INSERT INTO s.t (a) TABLE s.u;",
-			want: "seed.sql:1: s.t: INSERT ... SELECT is not accepted; write the rows as VALUES",
+			want: "seed.sql:1: s.t: INSERT ... SELECT is not accepted: write the rows as VALUES",
 		},
 		{
 			name: "UNION",
 			src:  "INSERT INTO s.t (a) VALUES (1)\nUNION VALUES (2);",
-			want: "seed.sql:2: s.t: UNION is not accepted; write the rows as one VALUES list",
+			want: "seed.sql:2: s.t: UNION is not accepted: write the rows as one VALUES list",
 		},
 		{
 			name: "INTERSECT",
 			src:  "INSERT INTO s.t (a) VALUES (1) INTERSECT VALUES (2);",
-			want: "seed.sql:1: s.t: INTERSECT is not accepted; write the rows as one VALUES list",
+			want: "seed.sql:1: s.t: INTERSECT is not accepted: write the rows as one VALUES list",
 		},
 		{
 			name: "EXCEPT",
 			src:  "INSERT INTO s.t (a) VALUES (1) EXCEPT VALUES (2);",
-			want: "seed.sql:1: s.t: EXCEPT is not accepted; write the rows as one VALUES list",
+			want: "seed.sql:1: s.t: EXCEPT is not accepted: write the rows as one VALUES list",
 		},
 		{
 			name: "ORDER BY",
 			src:  "INSERT INTO s.t (a) VALUES (1)\nORDER BY 1;",
-			want: "seed.sql:2: s.t: ORDER BY is not accepted after VALUES; remove it",
+			want: "seed.sql:2: s.t: ORDER BY is not accepted after VALUES: remove it",
 		},
 		{
 			name: "OFFSET",
 			src:  "INSERT INTO s.t (a) VALUES (1) OFFSET 1;",
-			want: "seed.sql:1: s.t: OFFSET is not accepted after VALUES; remove it",
+			want: "seed.sql:1: s.t: OFFSET is not accepted after VALUES: remove it",
 		},
 		{
 			name: "LIMIT",
 			src:  "INSERT INTO s.t (a) VALUES (1) LIMIT 1;",
-			want: "seed.sql:1: s.t: LIMIT is not accepted after VALUES; remove it",
+			want: "seed.sql:1: s.t: LIMIT is not accepted after VALUES: remove it",
 		},
 		{
 			name: "FOR UPDATE",
 			src:  "INSERT INTO s.t (a) VALUES (1) FOR UPDATE;",
-			want: "seed.sql:1: s.t: FOR UPDATE is not accepted after VALUES; remove it",
+			want: "seed.sql:1: s.t: FOR UPDATE is not accepted after VALUES: remove it",
 		},
 		{
 			name: "table alias",
 			src:  "INSERT INTO s.t AS x (a) VALUES (1);",
-			want: "seed.sql:1: s.t: the table alias x is not accepted; remove it",
+			want: "seed.sql:1: s.t: the table alias x is not accepted: remove it",
 		},
 		{
 			name: "DEFAULT as a value",
 			src:  "INSERT INTO s.t (a, b) VALUES\n(1, 2),\n(3, DEFAULT);",
-			want: "seed.sql:3: s.t, column b: DEFAULT is not accepted as a value; write the value itself",
+			want: "seed.sql:3: s.t, column b: DEFAULT is not accepted as a value: write the value itself",
 		},
 		{
 			name: "a value on a later line",
 			src:  "INSERT INTO s.t (a, b)\nVALUES (1, 'x'),\n  (2, now());",
-			want: "seed.sql:3: s.t, column b: the function call now() is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time",
+			want: "seed.sql:3: s.t, column b: the function call now() is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time",
 		},
 		{
 			name: "a value without a location of its own",
 			src:  "INSERT INTO s.t (a)\nVALUES (date 'x' || 'y');",
-			want: "seed.sql:2: s.t, column a: the operator || is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time",
+			want: "seed.sql:2: s.t, column a: the operator || is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time",
 		},
 		{
 			name: "no schema",
 			src:  "INSERT INTO room_types (a) VALUES (1);",
-			want: "seed.sql:1: the table name room_types has no schema; write it with its schema, as <schema>.room_types",
+			want: "seed.sql:1: the table name room_types has no schema: write it with its schema, as <schema>.room_types",
 		},
 		{
 			name: "no schema, quoted",
 			src:  `INSERT INTO "Room Types" (a) VALUES (1);`,
-			want: `seed.sql:1: the table name "Room Types" has no schema; write it with its schema, as <schema>."Room Types"`,
+			want: `seed.sql:1: the table name "Room Types" has no schema: write it with its schema, as <schema>."Room Types"`,
 		},
 		{
 			name: "a database name",
 			src:  "INSERT INTO app.s.t (a) VALUES (1);",
-			want: "seed.sql:1: the table name app.s.t names a database; write only the schema and the table",
+			want: "seed.sql:1: the table name app.s.t names a database: write only the schema and the table",
 		},
 		{
 			name: "no column list",
 			src:  "INSERT INTO s.t VALUES (1, 'x');",
-			want: "seed.sql:1: s.t: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them",
+			want: "seed.sql:1: s.t: the INSERT has no column list: name the columns, as pg_dump --column-inserts writes them",
 		},
 		{
 			name: "a field of a column",
 			src:  "INSERT INTO s.t (a.b) VALUES (1);",
-			want: "seed.sql:1: s.t: the column list sets a part of column a (a field or an array element); name whole columns",
+			want: "seed.sql:1: s.t: the column list sets a part of column a (a field or an array element): name whole columns",
 		},
 		{
 			name: "an element of a column",
 			src:  "INSERT INTO s.t (a, b[1]) VALUES (1, 2);",
-			want: "seed.sql:1: s.t: the column list sets a part of column b (a field or an array element); name whole columns",
+			want: "seed.sql:1: s.t: the column list sets a part of column b (a field or an array element): name whole columns",
 		},
 		{
 			name: "a column twice",
 			src:  "INSERT INTO s.t (a, b, A) VALUES (1, 2, 3);",
-			want: `seed.sql:1: s.t: the column list names column "a" twice; name each column once`,
+			want: `seed.sql:1: s.t: the column list names column "a" twice: name each column once`,
 		},
 		{
 			name: "fewer values than columns",
@@ -359,9 +359,9 @@ func TestParseInsertsClauseErrors(t *testing.T) {
 
 func TestParseInsertsStatementErrors(t *testing.T) {
 	t.Parallel()
-	const only = " is not accepted; a SQL declaration holds only INSERT ... VALUES statements"
+	const only = " is not accepted: a SQL declaration holds only INSERT ... VALUES statements"
 	const selects = only + ", and skips only the calls of pg_catalog.set_config and pg_catalog.setval that a dump writes"
-	const copyFrom = "seed.sql:2: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file"
+	const copyFrom = "seed.sql:2: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file"
 	parseCheckErrors(t, []parseErrorCase{
 		{"UPDATE", "SET a = 1;\nUPDATE s.t SET a = 1;", "seed.sql:2: UPDATE" + only},
 		{"DELETE", "SET a = 1;\nDELETE FROM s.t;", "seed.sql:2: DELETE" + only},

@@ -287,7 +287,7 @@ kortopi: the deletion of rows of z.parent cascades through foreign key "orders_p
 ### `--max-delete` without `--allow-delete`
 
 ```text
-kortopi: flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete
+kortopi: flag --max-delete needs --allow-delete, without which an apply deletes no row: add --allow-delete, or remove --max-delete
 ```
 
 ### A missing privilege

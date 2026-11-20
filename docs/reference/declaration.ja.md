@@ -283,19 +283,19 @@ kortopi: table facility.room_types is declared in two files, data/facility/room_
 ### スキーマのないテーブル名
 
 ```text
-kortopi: data/seed.sql:1: the table name room_types has no schema; write it with its schema, as <schema>.room_types
+kortopi: data/seed.sql:1: the table name room_types has no schema: write it with its schema, as <schema>.room_types
 ```
 
 ### 列の一覧のない INSERT
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them
+kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list: name the columns, as pg_dump --column-inserts writes them
 ```
 
 ### 値としての関数の呼び出し
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time
 ```
 
 値そのものを書くか、その列をファイルから外して、新しい行に既定値が入るようにする。
@@ -309,25 +309,25 @@ kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (cod
 ### --column-inserts なしのダンプ
 
 ```text
-kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
+kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
 ```
 
 ### SQL の値の中の現在の時刻を表す語
 
 ```text
-kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value: write the date or time itself, because a plan must not change the database and must give the same result each time
 ```
 
 ### タイムゾーンの SET
 
 ```text
-kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo'; write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
+kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo': write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
 ```
 
 ### INSERT で2回挙げた列
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice; name each column once
+kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice: name each column once
 ```
 
 ### どのファイルも宣言していないテーブルの設定
@@ -395,7 +395,7 @@ kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would
 ### NOT NULL の列の NULL
 
 ```text
-kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
+kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL
 ```
 
 ### 挿入する行が値を得られない列
@@ -424,4 +424,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:a30c1a56952d21a045776fb3d1c8520c7f26dad091d9a7430fd90e04f96733f1 -->
+<!-- i18n-source: declaration.md sha256:89a8fabe2f76f0ba034f6bd738c752f23cb6e2f776e9bd297ddba0fde590fe94 -->

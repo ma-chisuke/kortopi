@@ -512,7 +512,7 @@ func (s *Session) checkTemporary(ctx context.Context) error {
 
 // temporaryError returns ErrTemporaryTables with the database and the reason.
 func (s *Session) temporaryError(reason string) error {
-	return &temporaryTablesError{msg: fmt.Sprintf("cannot create temporary tables in database %q, because %s; "+
+	return &temporaryTablesError{msg: fmt.Sprintf("cannot create temporary tables in database %q, because %s: "+
 		"%s needs a session that can write, on the primary, with the TEMPORARY privilege on the database",
 		s.databaseName, reason, s.needs())}
 }
