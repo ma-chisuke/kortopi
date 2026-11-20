@@ -187,7 +187,7 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- 違いがなければ、apply は `No changes. The database matches the declaration.` だけを出す。
+- 違いがなければ、apply は空の計画の行だけを出す。それは `No changes. The database matches the declaration.` である。モード `insert` のテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行である（[kortopi plan](plan.ja.md#出力の読み方)）。
 - 失敗したときは、エラーを標準エラー出力に出し、最後の行は `kortopi: nothing was changed` になる。
 - コミットの答えが届かないときは、変更がなされたかどうかを apply は知ることができず、何も変えなかったとは言わない。
 
@@ -364,4 +364,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:b5aeea53301f18054d9f0759cd3ad3ca14caad66c7b29749a159e06d99279aa4 -->
+<!-- i18n-source: apply.md sha256:d9ef6c473009ceca8061dadb2f7662706348db837331b6ce5af3dec5ede3bc32 -->

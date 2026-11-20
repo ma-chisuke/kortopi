@@ -341,6 +341,20 @@ kortopi: schema "nowhere" does not exist in database "app"
 kortopi: schema "nothing" has no table whose rows can be declared: name another schema, or tables with --table
 ```
 
+データベースのテーブルと空白か大小だけが違う名前のテーブル。
+
+```text
+kortopi: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+```
+
+パーティションを、そのパーティションテーブルと一緒に指定したもの。宣言はその行を二重に持ってしまう。
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and the export names both: the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables
+```
+
+データのディレクトリがすでにパーティションテーブルを宣言しているパーティションも、同じである。
+
 テーブルでないリレーション。
 
 ```text
@@ -380,4 +394,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:224df660a0c28ebc74a8287518e6d1aeeaa4bd037f8af92d05dde3eba26ced06 -->
+<!-- i18n-source: export.md sha256:7244e5e2e9f118f8a701069fd887281ac173eae9a30629a56d9625b27a3159d0 -->

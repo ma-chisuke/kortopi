@@ -189,6 +189,14 @@ When nothing differs and nothing waits for a schema change, the plan is one line
 No changes. The database matches the declaration.
 ```
 
+A table of mode `insert` gets only its missing rows, so a plan compares its declared rows with the stored rows by their keys alone, not by their values.
+When the plan has such a table, the empty plan does not say that the database matches, and names those tables instead, up to five of them and then a count of the others:
+
+```text
+No changes. There is nothing to apply.
+A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+```
+
 ### Tables and columns that wait for a schema change
 
 In a pull request that adds a table or a column, the database does not have them yet.
@@ -214,7 +222,8 @@ Known after the schema is applied: 1 table, 1 column.
   kortopi: data/seed.sql:2: type "facility.level" does not exist (hint: if the schema change adds the type, apply the schema first, or remove the cast)
   ```
 
-A misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review.
+A name that differs from a name of the database only in white space or case does not wait: it is a mistake, and the plan stops ([Declaration files](declaration.md#a-name-in-another-case)).
+Any other misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review.
 
 ### Rows that reference rows to delete
 
@@ -335,6 +344,13 @@ A plan with nothing to do gives one line:
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
+When the plan has a table of mode `insert`, it gives the lines of the empty plan as comments instead:
+
+```sql
+-- No changes: there is nothing to do.
+-- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+```
+
 A plan in which only tables and columns wait for a schema change gives the header and this line:
 
 ```sql
@@ -424,7 +440,7 @@ A failed plan prints nothing on standard output.
 kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
-2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
+2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that the declaration does not name is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 5. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
@@ -435,7 +451,7 @@ kortopi checks in this order:
 
 | Status | Meaning |
 |---|---|
-| 0 | The plan was made. With `--exit-code`, the database also matches the declaration. |
+| 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare. |
 | 1 | The plan failed: a wrong flag, a mistake in the declaration, a database error, or an interrupt. |
 | 2 | Only with `--exit-code`: the plan is not empty. |
 
@@ -457,4 +473,4 @@ esac
 
 The `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), and [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), and [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md).

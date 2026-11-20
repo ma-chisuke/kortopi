@@ -31,6 +31,11 @@ data/
 
 CSV のパスの名前は、大文字と小文字も含めてそのまま使う。
 PostgreSQL は引用符のない名前を小文字にするので、`CREATE TABLE Facility.Rooms` で作ったテーブルは `facility.rooms` であり、そのファイルは `facility/rooms.csv` である。
+テーブル・スキーマ・列の名前が、データベースの名前と空白か大小だけで違っていれば、エラーである（[大小の違う名前](#大小の違う名前)）。
+
+パーティションと、その上にあるパーティションテーブルは、同じ行を持つ。計画は、パーティションテーブルをそのパーティションの行とともに読むからである。
+宣言するのはどちらか一方であり、両方ではない（[パーティションとそのパーティションテーブル](#パーティションとそのパーティションテーブル)）。
+別のテーブルを継承するテーブルは、パーティションではない。kortopi はそれぞれを `ONLY` で読み書きするので、両方を、それぞれの行で宣言できる。
 
 kortopi の管理する列は、ファイルが挙げる列である。kortopi はその列を比べて更新し、テーブルのほかの列には手を出さない。
 新しい行では、ファイルが挙げない列のそれぞれに既定値が入る。
@@ -219,6 +224,8 @@ mode = "insert"
   | `upsert`（既定） | 求める | 求める | 求めない |
   | `sync` | 求める | 求める | 求める |
 
+  モード `insert` では、計画は宣言した行と保存されている行をキーだけで比べる。すでにある行の値が変わっていても示さない。空の計画は、データベースが宣言と一致しているとは言わず、代わりにモード `insert` のテーブルを挙げる（[kortopi plan](plan.ja.md#出力の読み方)）。
+
 - `key` は、宣言の行と保存されている行を照合する列を挙げる。`key` がなければ、照合キーは主キーである。`key` の列は、次の条件を満たす。
   - テーブルの主キーの列か、1つの一意キーの列そのものである。一意キーとは、`UNIQUE` 制約か、部分インデックスでも遅らせられるものでもなく、式を含まない一意インデックスである。
   - どの列も `NOT NULL` である。
@@ -339,6 +346,26 @@ kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans i
 
 キーの列をファイルに足すか、ファイルにある列からなる一意キーを `key` で指定する。
 
+### 大小の違う名前
+
+```text
+kortopi: data/facility/room_types.csv: column " name" is not a column of table facility.room_types, but column "name" is, whose name differs only in white space or case: write the name as the table has it
+kortopi: data/facility/Rooms.csv: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+kortopi: data/Facility/rooms.csv: schema "Facility" of table Facility.rooms does not exist, but schema "facility" does, whose name differs only in white space or case: write the name as the database has it
+```
+
+見出しの行でコンマのあとに置いた空白は、列の名前の一部になる。名前は大文字と小文字も含めてそのまま使う。
+データベースにない列・テーブル・スキーマで、空白を除いて大小を同一視するとデータベースの名前と等しいものは、こうした誤りであり、スキーマの変更を待つ名前ではない。
+テーブルとスキーマの名前は ASCII の文字の大小を同一視して比べ、列の名前はすべての文字の大小を同一視して比べる。
+
+### パーティションとそのパーティションテーブル
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and both tables are declared, in data/facility/events_2026.csv and data/facility/events.csv: the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables
+```
+
+この検査は、パーティションのどの深さにも及ぶ。パーティションのパーティションと、根にあるパーティションテーブルも、同じ誤りである。
+
 ### 行を照合できないキー
 
 ```text
@@ -380,10 +407,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の7つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
+最後の9つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
-- キーの列のないファイルと、行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
+- キーの列のないファイル・大小だけが違う名前・パーティションとそのパーティションテーブル・行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:3f57b0f09c363f08773b9ed832036f1a954d3126ecdc2ba4831b82e3a75e1235 -->
+<!-- i18n-source: declaration.md sha256:2d2a90fea4fb6597ce85c0e0157d17ffbd3cee7d7da1ceafc7c538df81d07188 -->

@@ -341,6 +341,20 @@ kortopi: schema "nowhere" does not exist in database "app"
 kortopi: schema "nothing" has no table whose rows can be declared: name another schema, or tables with --table
 ```
 
+A table whose name differs from a table of the database only in white space or case:
+
+```text
+kortopi: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+```
+
+A partition named together with its partitioned table, which would declare its rows twice:
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and the export names both: the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables
+```
+
+The same holds for a partition whose partitioned table the data directory declares already.
+
 A relation that is not a table:
 
 ```text

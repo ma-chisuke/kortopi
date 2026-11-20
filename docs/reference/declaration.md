@@ -31,6 +31,11 @@ data/
 
 A name in a CSV path is exact, with its case.
 PostgreSQL folds an unquoted name to lower case, so a table created as `CREATE TABLE Facility.Rooms` is `facility.rooms`, and its file is `facility/rooms.csv`.
+A table, a schema, or a column whose name differs from a name of the database only in white space or case is an error ([A name in another case](#a-name-in-another-case)).
+
+A partition and a partitioned table above it hold the same rows: a plan reads a partitioned table with the rows of its partitions.
+Declare one of the two, never both ([A partition and its partitioned table](#a-partition-and-its-partitioned-table)).
+A table that inherits from another is no partition: kortopi reads and writes each of the two with `ONLY`, so both may be declared, each with its own rows.
 
 The columns that a file names are the columns that kortopi manages: it compares and updates them, and leaves the other columns of the table alone.
 A new row gets the default of every column that the file does not name.
@@ -218,6 +223,8 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   | `upsert` (the default) | yes | yes | no |
   | `sync` | yes | yes | yes |
 
+  In mode `insert`, a plan compares the declared rows with the stored rows by their keys only: a changed value of a row that exists is not shown, and an empty plan names the tables of mode `insert` instead of saying that the database matches the declaration ([kortopi plan](plan.md#read-the-output)).
+
 - `key` names the columns that match a declared row with a stored row. Without it, the match key is the primary key. The columns of `key`
   - are exactly the columns of the primary key or of one unique key of the table: a `UNIQUE` constraint, or a unique index that is neither partial nor deferrable and holds no expression;
   - are all `NOT NULL`;
@@ -338,6 +345,26 @@ kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans i
 
 Add the key columns to the file, or name a unique key whose columns the file has with `key`.
 
+### A name in another case
+
+```text
+kortopi: data/facility/room_types.csv: column " name" is not a column of table facility.room_types, but column "name" is, whose name differs only in white space or case: write the name as the table has it
+kortopi: data/facility/Rooms.csv: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+kortopi: data/Facility/rooms.csv: schema "Facility" of table Facility.rooms does not exist, but schema "facility" does, whose name differs only in white space or case: write the name as the database has it
+```
+
+A space after a comma in the header is part of the name of the column, and a name is exact, with its case.
+A column, a table, or a schema that the database lacks, and whose name equals a name of the database once white space is trimmed and case is folded, is such a mistake, not a name that waits for a schema change.
+The names of tables and schemas are compared with ASCII letters folded, and the names of columns with every letter folded.
+
+### A partition and its partitioned table
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and both tables are declared, in data/facility/events_2026.csv and data/facility/events.csv: the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables
+```
+
+The check covers every depth of partitioning: a partition of a partition and the partitioned table at the root are the same mistake.
+
 ### A key that cannot match rows
 
 ```text
@@ -379,8 +406,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last seven mistakes need the database, so kortopi reports them after it connects:
+The last nine mistakes need the database, so kortopi reports them after it connects:
 
-- A file without the columns of the key, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
+- A file without the columns of the key, a name in another case, a partition and its partitioned table, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
 - A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
 - A column that the rows to insert would lack is reported for every table at once, after the tables are compared.
