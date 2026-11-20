@@ -197,3 +197,17 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | set-based statement | 集合単位の文 |
 | phase (of an apply) | 段階 |
 | outcome (of a commit) | 結果 |
+| release (of kortopi), pre-release | リリース、プレリリース |
+| tag (in Git) | タグ |
+| archive (of a release) | アーカイブ |
+| checksum, checksum file | チェックサム、チェックサムのファイル |
+| attestation, artifact attestation | 構成証明、アーティファクトの構成証明 |
+| build provenance | ビルドの来歴 |
+| artifact (of a workflow run) | アーティファクト |
+| immutable release (on GitHub) | 変更不可リリース |
+| reproducible (build) | 再現できる |
+| third-party software | サードパーティのソフトウェア |
+| build information (of a Go binary) | ビルド情報 |
+| module cache (of Go) | モジュールキャッシュ |
+| sign, signature | 署名する、署名 |
+| administrator (of a repository) | 管理者 |

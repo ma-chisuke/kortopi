@@ -197,5 +197,19 @@
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
 | outcome（コミットの） | 結果 |
+| release（kortopi の）, pre-release | リリース、プレリリース |
+| tag（Git の） | タグ |
+| archive（リリースの） | アーカイブ |
+| checksum, checksum file | チェックサム、チェックサムのファイル |
+| attestation, artifact attestation | 構成証明、アーティファクトの構成証明 |
+| build provenance | ビルドの来歴 |
+| artifact（ワークフローの実行の） | アーティファクト |
+| immutable release（GitHub の） | 変更不可リリース |
+| reproducible（ビルドが） | 再現できる |
+| third-party software | サードパーティのソフトウェア |
+| build information（Go のバイナリの） | ビルド情報 |
+| module cache（Go の） | モジュールキャッシュ |
+| sign, signature | 署名する、署名 |
+| administrator（リポジトリの） | 管理者 |
 
-<!-- i18n-source: translation.md sha256:5b658ede5163d2902cde7c27697ef8120c4ed02c47b471fd9c6e7913c3c59697 -->
+<!-- i18n-source: translation.md sha256:697ab7c035f44c7e05218f00141dd773db1de54a9853ad2436990ae9c9620614 -->
