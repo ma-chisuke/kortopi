@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -322,7 +324,14 @@ func TestConnectErrors(t *testing.T) {
 			cfg := db.Config.Copy()
 			cfg.Password = "wrong"
 			_, err := ConnectConfig(t.Context(), cfg, Options{Dir: t.TempDir()})
-			wantError(t, err, "connect to the database")
+			// One error: the database and the user, and a line for the
+			// attempt whose password the server refused, without the
+			// refusal of TLS of sslmode prefer.
+			wantError(t, err, "cannot connect to database "+strconv.Quote(db.Name)+" as user "+strconv.Quote(cfg.User)+":\n  ",
+				"password authentication failed")
+			if strings.Contains(err.Error(), "server refused TLS") || strings.Contains(err.Error(), "no password was given") {
+				t.Errorf("error %q holds a refusal of TLS, or the hint of a missing password", err)
+			}
 
 			// A closed session refuses work.
 			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: t.TempDir()})
