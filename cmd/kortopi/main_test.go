@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,36 @@ func TestRun(t *testing.T) {
 			}
 			if !strings.Contains(stderr, tt.wantStderr) || tt.wantStderr == "" && stderr != "" {
 				t.Errorf("run(%q) stderr = %q, want it to contain %q", tt.args, stderr, tt.wantStderr)
+			}
+		})
+	}
+}
+
+// A --dir that names a file gets the error of the data directory first, for
+// every command, before kortopi reads a file under it or connects.
+func TestDirThatIsAFile(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(writeFiles(t, with(twoTables, map[string]string{"kortopi.toml": ""})), "kortopi.toml")
+	notADir := "kortopi: the data directory " + file + " is not a directory: give the directory that holds the declaration\n"
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"plan", "--dir", file}, want: notADir},
+		{args: []string{"apply", "--dir", file}, want: notADir + "kortopi: nothing was changed\n"},
+		{
+			args: []string{"export", "--dir", file, "--table", "app.plans"},
+			want: "kortopi: the data directory " + file + " is not a directory: give the directory to write the declaration into\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.args[0], func(t *testing.T) {
+			t.Parallel()
+
+			code, stdout, stderr := runTest(t, tt.args, noConnect(t))
+			if code != exitError || stdout != "" || stderr != tt.want {
+				t.Errorf("kortopi %s = %d, %q, %q, want %d and the error\n%s", strings.Join(tt.args, " "), code, stdout, stderr, exitError, tt.want)
 			}
 		})
 	}

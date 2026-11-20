@@ -94,14 +94,32 @@ func (t Table) Path(dir string) string {
 
 // checkDir returns an error when dir is not a directory.
 func checkDir(dir string) error {
+	return CheckDir(dir, false)
+}
+
+// CheckDir returns an error when the data directory dir does not exist or
+// is not a directory. A command checks it first, before it reads any file of
+// the directory, so that a path to a file gets this error and not the error
+// of a file under it. When missingOK is true, for a command that creates the
+// directory, such as an export, a directory that does not exist is no error.
+func CheckDir(dir string, missingOK bool) error {
+	if dir == "" {
+		dir = "."
+	}
+	what := "the directory that holds the declaration"
+	if missingOK {
+		what = "the directory to write the declaration into"
+	}
 	info, err := os.Stat(dir)
 	switch {
+	case errors.Is(err, fs.ErrNotExist) && missingOK:
+		return nil
 	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("the data directory %s does not exist: give the directory that holds the declaration", dir)
+		return fmt.Errorf("the data directory %s does not exist: give %s", dir, what)
 	case err != nil:
 		return pathError(dir, err)
 	case !info.IsDir():
-		return fmt.Errorf("the data directory %s is not a directory: give the directory that holds the declaration", dir)
+		return fmt.Errorf("the data directory %s is not a directory: give %s", dir, what)
 	}
 	return nil
 }

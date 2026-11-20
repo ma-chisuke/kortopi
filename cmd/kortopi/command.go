@@ -119,6 +119,11 @@ func nameOnly(dst *string, what string) func(string) error {
 // the schemas of --schema. It needs no database, so that a mistake in a file
 // is reported before kortopi connects.
 func load(c common) (*declaration.Declaration, *config.Settings, error) {
+	// The directory comes first, so that a path to a file is named as such,
+	// and not as a file kortopi.toml under it.
+	if err := declaration.CheckDir(c.dir, false); err != nil {
+		return nil, nil, err
+	}
 	settings, err := config.Load(c.dir)
 	if err != nil {
 		return nil, nil, err

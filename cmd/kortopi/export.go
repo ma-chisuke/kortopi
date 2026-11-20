@@ -125,6 +125,11 @@ func exportFlagSet(o *exportOptions) *flag.FlagSet {
 // holds already, if any, checks the flags against them, and only then
 // connects and exports.
 func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
+	// The directory may be missing, and the export creates it, but a path to
+	// a file is named as such before anything is read under it.
+	if err := declaration.CheckDir(o.dir, true); err != nil {
+		return err
+	}
 	settings, err := config.Load(o.dir)
 	if err != nil {
 		return err
