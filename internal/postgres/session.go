@@ -199,53 +199,123 @@ func (e *connectFailure) Unwrap() error {
 	return e.err
 }
 
-// connectError says why a connection failed. The driver tries a host more
-// than once, as libpq does: with sslmode prefer, the default, first with TLS
-// and then without, so its error starts with "server refused TLS
-// connection" for a server without TLS, whatever the cause. The error keeps
-// the attempts whose answer says why, each once. A password that the server
-// refuses when none was given is said to be missing. password tells whether
-// the settings held a password, from any source.
+// missingPassword follows the attempt whose password the server refused,
+// when the settings held none.
+const missingPassword = "no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names"
+
+// connectError says why a connection failed, as one error of several lines:
+// the first says which database and which user, and each further line is
+// one attempt, indented. The driver tries a host more than once, as libpq
+// does: with sslmode prefer, the default, first with TLS for each address of
+// the host, and then without, so for a server without TLS an attempt says
+// "server refused TLS connection", whatever the cause. When the settings
+// allow an attempt without TLS, such a refusal is left out if a later
+// attempt to the same host failed for another reason; an attempt that says
+// the same as an earlier one is left out too. An attempt whose password the
+// server refused, when the settings held none, says that no password was
+// given. password tells whether the settings held a password, from any
+// source.
 func connectError(err error, password bool) error {
 	var connectErr *pgconn.ConnectError
 	if !errors.As(err, &connectErr) {
 		return fmt.Errorf("connect to the database: %w", err)
 	}
-	attempts := []error{connectErr.Unwrap()}
-	if joined, ok := connectErr.Unwrap().(interface{ Unwrap() []error }); ok {
-		attempts = joined.Unwrap()
+	plain := connectErr.Config.TLSConfig == nil
+	for _, f := range connectErr.Config.Fallbacks {
+		plain = plain || f.TLSConfig == nil
 	}
-	msg := fmt.Sprintf("connect to the database: failed to connect to `user=%s database=%s`:", connectErr.Config.User, connectErr.Config.Database)
-	if causes := attemptCauses(attempts); len(causes) == 1 {
-		msg += " " + causes[0]
-	} else {
-		msg += "\n\t" + strings.Join(causes, "\n\t")
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == invalidPassword && !password {
-		msg += ": no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names"
-	}
+	lines := attemptCauses(attemptsOf(connectErr.Unwrap()), password, plain)
+	msg := fmt.Sprintf("cannot connect to database %q as user %q:\n  %s",
+		connectErr.Config.Database, connectErr.Config.User, strings.Join(lines, "\n  "))
 	return &connectFailure{msg: msg, err: err}
 }
 
-// attemptCauses returns the text of each attempt that says why the
-// connection failed: a refusal of TLS that another attempt followed is left
-// out, and so is an attempt that says the same as an earlier one.
-func attemptCauses(attempts []error) []string {
-	var causes []string
+// attemptsOf returns the attempts of a connection that failed, each as an
+// error of one attempt. The driver joins them, and may wrap the joined
+// errors in a message of its own, such as for a host whose name it could not
+// resolve: that message then stands before each attempt.
+func attemptsOf(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var attempts []error
+		for _, e := range joined.Unwrap() {
+			attempts = append(attempts, attemptsOf(e)...)
+		}
+		return attempts
+	}
+	inner := errors.Unwrap(err)
+	if inner == nil {
+		return []error{err}
+	}
+	prefix, wrapped := strings.CutSuffix(err.Error(), inner.Error())
+	attempts := attemptsOf(inner)
+	if !wrapped || len(attempts) < 2 {
+		return []error{err}
+	}
 	for i, a := range attempts {
-		text := a.Error()
-		if i < len(attempts)-1 && strings.HasSuffix(text, "tls error: server refused TLS connection") {
+		attempts[i] = &prefixedError{prefix: prefix, err: a}
+	}
+	return attempts
+}
+
+// prefixedError is an attempt with the message that the driver wrapped
+// around all attempts.
+type prefixedError struct {
+	prefix string
+	err    error
+}
+
+func (e *prefixedError) Error() string {
+	return e.prefix + e.err.Error()
+}
+
+func (e *prefixedError) Unwrap() error {
+	return e.err
+}
+
+// attemptCauses returns a line for each attempt that says why the
+// connection failed. When plain is true, as with sslmode prefer or allow,
+// whose settings allow an attempt without TLS, a refusal of TLS is left out
+// if a later attempt to the same host failed for another reason: that
+// attempt, the retry without TLS, gives the cause. With sslmode require,
+// every refusal of TLS is a cause and stays. An attempt that says the same as
+// an earlier one is left out. A refused password, when the settings held
+// none, gets missingPassword after it.
+func attemptCauses(attempts []error, password, plain bool) []string {
+	var lines []string
+	for i, a := range attempts {
+		text := strings.ReplaceAll(a.Error(), "\n", " ")
+		if plain && refusedTLS(text) && slices.ContainsFunc(attempts[i+1:], func(later error) bool {
+			return !refusedTLS(later.Error()) && attemptHost(later.Error()) == attemptHost(text)
+		}) {
 			continue
 		}
-		if !slices.Contains(causes, text) {
-			causes = append(causes, text)
+		var pgErr *pgconn.PgError
+		if !password && errors.As(a, &pgErr) && pgErr.Code == invalidPassword {
+			text += ": " + missingPassword
+		}
+		if !slices.Contains(lines, text) {
+			lines = append(lines, text)
 		}
 	}
-	if len(causes) == 0 && len(attempts) > 0 {
-		causes = append(causes, attempts[len(attempts)-1].Error())
+	return lines
+}
+
+// refusedTLS reports whether the text of an attempt says that the server
+// refused TLS.
+func refusedTLS(text string) bool {
+	return strings.HasSuffix(text, "tls error: server refused TLS connection")
+}
+
+// attemptHost returns the host that the error of one attempt names, as the
+// driver writes it: "address:port (host): ...". The addresses of one host,
+// such as ::1 and 127.0.0.1 of localhost, name the same host.
+func attemptHost(text string) string {
+	end := strings.Index(text, "): ")
+	start := strings.LastIndex(text[:max(end, 0)], " (")
+	if end < 0 || start < 0 {
+		return text
 	}
-	return causes
+	return text[start+2 : end]
 }
 
 // connString returns the fields of o that are set as a connection string of

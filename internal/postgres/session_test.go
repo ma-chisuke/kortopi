@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -228,31 +229,56 @@ func TestConnectionSettingErrors(t *testing.T) {
 }
 
 // Of the attempts of one connection, those that say why it failed remain,
-// each once: a refusal of TLS that the attempt without TLS followed is not
-// the cause.
+// each once: a refusal of TLS that the attempt without TLS to the same
+// address followed is not the cause, but a refusal of TLS by one host before
+// an attempt to another host is. A refused password, when none was given,
+// says so on its own line.
 func TestAttemptCauses(t *testing.T) {
 	refused := errors.New("127.0.0.1:5432 (127.0.0.1): tls error: server refused TLS connection")
-	password := errors.New(`127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)`)
+	refused2 := errors.New("10.0.0.2:5432 (db2.example.test): tls error: server refused TLS connection")
+	pgErr := &pgconn.PgError{Severity: "FATAL", Code: invalidPassword, Message: `password authentication failed for user "app"`}
+	password := fmt.Errorf("127.0.0.1:5432 (127.0.0.1): failed SASL auth: %w", pgErr)
 	dial := errors.New("127.0.0.1:1 (127.0.0.1): dial error: dial tcp 127.0.0.1:1: connect: connection refused")
+	dialSame := errors.New("127.0.0.1:5432 (127.0.0.1): dial error: dial tcp 127.0.0.1:5432: connect: connection refused")
+	refusedV6 := errors.New("[::1]:5432 (127.0.0.1): tls error: server refused TLS connection")
+	passwordV6 := fmt.Errorf("[::1]:5432 (127.0.0.1): failed SASL auth: %w", pgErr)
 	tests := []struct {
 		name     string
 		attempts []error
+		password bool
+		plain    bool
 		want     []string
 	}{
-		{"a refusal of TLS before the cause", []error{refused, password}, []string{password.Error()}},
-		{"the same cause twice", []error{dial, dial}, []string{dial.Error()}},
-		{"a refusal of TLS alone, as with sslmode require", []error{refused}, []string{refused.Error()}},
-		{"two hosts", []error{dial, password}, []string{dial.Error(), password.Error()}},
+		{"a refusal of TLS before the cause", []error{refused, password}, true, true, []string{password.Error()}},
+		{"the same cause twice", []error{dial, dial}, true, true, []string{dial.Error()}},
+		{"a refusal of TLS alone, as with sslmode require", []error{refused}, true, false, []string{refused.Error()}},
+		{"two hosts", []error{dial, password}, true, true, []string{dial.Error(), password.Error()}},
+		{"two hosts with sslmode require", []error{refused2, refused}, true, false, []string{refused2.Error(), refused.Error()}},
+		{"a refusal of TLS by another host, with sslmode prefer", []error{refused2, password}, true, true, []string{refused2.Error(), password.Error()}},
+		{"two addresses of one host, and the retry without TLS", []error{refusedV6, refused, passwordV6}, true, true, []string{passwordV6.Error()}},
+		{"a refusal of TLS before a dial error, with sslmode require", []error{refused, dialSame}, true, false, []string{refused.Error(), dialSame.Error()}},
+		{"no password given", []error{refused, password}, false, true, []string{password.Error() + ": " + missingPassword}},
+		{"no password given, and another host", []error{dial, password}, false, true, []string{dial.Error(), password.Error() + ": " + missingPassword}},
 	}
 	for _, tt := range tests {
-		if got := attemptCauses(tt.attempts); !slices.Equal(got, tt.want) {
-			t.Errorf("%s: attemptCauses = %q, want %q", tt.name, got, tt.want)
+		if got := attemptCauses(tt.attempts, tt.password, tt.plain); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: attemptCauses =\n%q\nwant\n%q", tt.name, got, tt.want)
 		}
+	}
+
+	// The driver may wrap all attempts in a message of its own, which then
+	// stands before each of them.
+	wrapped := fmt.Errorf("hostname resolving error: %w", errors.Join(errors.New("lookup a.test: no such host"), errors.New("lookup b.test: no such host")))
+	got := attemptCauses(attemptsOf(wrapped), true, true)
+	want := []string{"hostname resolving error: lookup a.test: no such host", "hostname resolving error: lookup b.test: no such host"}
+	if !slices.Equal(got, want) {
+		t.Errorf("attempts of a wrapped error = %q, want %q", got, want)
 	}
 }
 
-// A connection to a port where nothing listens fails with one line, though
-// sslmode prefer tries it twice.
+// A connection to a port where nothing listens fails with a line that names
+// the database and the user, and one line for the attempt, though sslmode
+// prefer tries it twice.
 func TestConnectErrorOfAPortWithoutAServer(t *testing.T) {
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -270,9 +296,9 @@ func TestConnectErrorOfAPortWithoutAServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = ConnectConfig(t.Context(), cfg, Options{})
-	want := "connect to the database: failed to connect to `user=app database=app`: 127.0.0.1:" + port + " (127.0.0.1): dial error: "
-	if err == nil || !strings.HasPrefix(err.Error(), want) || strings.Contains(err.Error(), "\n") {
-		t.Errorf("ConnectConfig() = %v, want one line that starts with %s", err, want)
+	want := "cannot connect to database \"app\" as user \"app\":\n  127.0.0.1:" + port + " (127.0.0.1): dial error: "
+	if err == nil || !strings.HasPrefix(err.Error(), want) || strings.Count(err.Error(), "\n") != 1 {
+		t.Errorf("ConnectConfig() = %v, want two lines that start with %s", err, want)
 	}
 	var connectErr *pgconn.ConnectError
 	if !errors.As(err, &connectErr) {

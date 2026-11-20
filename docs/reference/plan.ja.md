@@ -89,14 +89,15 @@ kortopi: read the connection settings: the port is not a number from 1 to 65535:
 kortopi: read the connection settings: the SSL mode is not one that libpq knows: set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full
 ```
 
-接続に失敗すると、ドライバーが示す原因を出して計画が止まる。
+接続に失敗すると、計画は1つのエラーを出して止まる。エラーは、データベースとユーザーを挙げる行と、接続の試みごとにドライバーが示す原因を字下げして書いた行からなる。
 
 ```text
-kortopi: connect to the database: failed to connect to `user=app database=app`: 127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
+kortopi: cannot connect to database "app" as user "app":
+kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
 ```
 
-- 既定の `sslmode` である `prefer` では、ドライバーはまず TLS で接続を試み、次に TLS なしで試す。TLS のないサーバーが TLS を拒んだことは示さない。原因は2回目の試みが示すからである。
-- サーバーがパスワードを拒んだとき、`PGPASSWORD`・パスワードファイル・サービスのどれでもパスワードを渡していなければ、エラーに `: no password was given: ...` を足す。サーバーはパスワードがないときも誤っているときも同じに答える。そのため、この一文がなければ、パスワードは渡されたが誤っているか、そのユーザーがそれでログインできない。
+- ドライバーは、各ホストのアドレスごとに接続を試みる。既定の `sslmode` である `prefer` では、まず TLS で試み、次に TLS なしで試みる。設定が TLS なしの試みを許すときは、同じホストへのあとの試みが別の理由で失敗していれば、TLS の拒否は示さない。原因はその試みが示すからである。`sslmode` が `require` なら、TLS の拒否はすべて示す。前の試みと同じことを述べる試みも示さない。
+- サーバーがパスワードを拒んだとき、`PGPASSWORD`・パスワードファイル・サービスのどれでもパスワードを渡していなければ、その試みの行の終わりに `: no password was given: ...` を足す。続きは、パスワードを `PGPASSWORD` かパスワードファイル（`~/.pgpass` か `PGPASSFILE` が指すファイル）で渡すよう告げる。サーバーはパスワードがないときも誤っているときも同じに答える。そのため、この追記がなければ、パスワードは渡されたが誤っているか、そのユーザーがそれでログインできない。
 
 ### 接続の設定
 
@@ -504,7 +505,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 
 ## エラー
 
-計画は標準出力に出す。エラーは、1つのエラーにつき1行ずつ、`kortopi: <message>` として標準エラー出力に出す。
+計画は標準出力に出す。エラーは、1つのエラーにつき1行ずつ、`kortopi: <message>` として標準エラー出力に出す。例外は接続の失敗で、接続の試みごとにも1行を出す（[データベースへの接続](#データベースへの接続)）。
 失敗した計画は、標準出力に何も出さない。
 
 kortopi は、次の順に検査する。
@@ -545,4 +546,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:1aabc390e50b2cc81e3aee1a108bffdbec62a534f71c7fc05e484c6a3d6fa8e4 -->
+<!-- i18n-source: plan.md sha256:7f130859c4ad6306ee6efcb0b166152ea9622ac2f36e4ede5f138447c985535b -->

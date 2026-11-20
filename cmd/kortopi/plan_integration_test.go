@@ -240,7 +240,7 @@ func TestPlanCommandConnectionErrors(t *testing.T) {
 		t.Setenv("PGPASSWORD", wrong)
 		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
 		code, stdout, stderr := e.plan(t, "--dir", dir)
-		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: connect to the database: ", "password authentication failed")
+		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: cannot connect to database ", "password authentication failed")
 		if strings.Contains(stderr, wrong) {
 			t.Errorf("stderr repeats the password:\n%s", stderr)
 		}
@@ -255,7 +255,7 @@ func TestPlanCommandConnectionErrors(t *testing.T) {
 		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
 		code, stdout, stderr := e.plan(t, "--dir", dir)
 		checkRun(t, code, stdout, stderr, exitError, "",
-			"kortopi: connect to the database: failed to connect to `user="+db.Config.User+" database="+db.Name+"`: ", "password authentication failed")
+			"kortopi: cannot connect to database \""+db.Name+"\" as user \""+db.Config.User+"\":\nkortopi:   ", "password authentication failed")
 		for _, not := range []string{"server refused TLS connection", "no password was given", "wrong-password-that-must-not-show"} {
 			if strings.Contains(stderr, not) {
 				t.Errorf("stderr holds %q:\n%s", not, stderr)
@@ -301,6 +301,6 @@ func TestPlanCommandConnectionErrors(t *testing.T) {
 		}
 		e := &e2e{db: db, conn: []string{"--host", "127.0.0.1", "--port", free, "--user", db.Config.User, "--dbname", db.Name}}
 		code, stdout, stderr := e.plan(t, "--dir", dir)
-		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: connect to the database: ", "127.0.0.1")
+		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: cannot connect to database ", "\nkortopi:   127.0.0.1:")
 	})
 }

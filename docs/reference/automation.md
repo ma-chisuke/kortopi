@@ -6,7 +6,7 @@ The commands are those of [kortopi plan](plan.md), [kortopi apply](apply.md), an
 
 ## What a script can rely on
 
-- Standard output gets the plan, of `kortopi plan` and of `kortopi apply`, and the lines of what an apply wrote. Standard error gets the errors, one line each as `kortopi: <message>`, the notes as `note: <message>`, and the line of an apply that waits for another apply.
+- Standard output gets the plan, of `kortopi plan` and of `kortopi apply`, and the lines of what an apply wrote. Standard error gets the errors, one line each as `kortopi: <message>`, except a failed connection, which adds a line for each attempt to connect ([kortopi plan](plan.md#connect-to-the-database)). It also gets the notes as `note: <message>`, and the line of an apply that waits for another apply.
 - A plan never changes the database, so it can run as often as needed.
 - An apply of a declaration that is applied already changes nothing, and prints the empty plan. A failed apply changed nothing, and its last line says so, unless its error says that the outcome of the commit is not known: run `kortopi plan` to see the state then. An apply can therefore run again after any failure.
 - The settings of the connection come from the environment variables of libpq ([kortopi plan](plan.md#connect-to-the-database)). There is no flag for the password: give it in `PGPASSWORD` from the secrets of the pipeline, or in a password file.

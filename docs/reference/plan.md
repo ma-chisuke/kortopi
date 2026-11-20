@@ -89,14 +89,15 @@ kortopi: read the connection settings: the port is not a number from 1 to 65535:
 kortopi: read the connection settings: the SSL mode is not one that libpq knows: set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full
 ```
 
-A connection that fails stops the plan, with the cause that the driver gives:
+A connection that fails stops the plan, with one error: a line that names the database and the user, and an indented line for each attempt to connect, with the cause that the driver gives.
 
 ```text
-kortopi: connect to the database: failed to connect to `user=app database=app`: 127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
+kortopi: cannot connect to database "app" as user "app":
+kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
 ```
 
-- With `sslmode` `prefer`, the default, the driver tries TLS first, and then without it. The refusal of TLS by a server without TLS is left out, because the second attempt gives the cause.
-- When the server refuses the password and no password was given, in `PGPASSWORD`, in the password file, or in the service, the error adds `: no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names`. The server answers a missing password and a wrong one alike, so without that line, the password was given and is wrong, or the user cannot log in with it.
+- The driver makes an attempt for each address of each host, and with `sslmode` `prefer`, the default, tries TLS first and then a host without it. When the settings allow an attempt without TLS, a refusal of TLS is left out if a later attempt to the same host failed for another reason, because that attempt gives the cause. With `sslmode` `require`, every refusal of TLS stays. An attempt that repeats an earlier one is left out.
+- When the server refuses the password and no password was given, in `PGPASSWORD`, in the password file, or in the service, the line of that attempt ends with `: no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names`. The server answers a missing password and a wrong one alike, so without that ending, the password was given and is wrong, or the user cannot log in with it.
 
 ### Connection settings
 
@@ -504,7 +505,7 @@ A declaration whose references hold IDs that differ between environments, such a
 
 ## Errors
 
-The plan goes to standard output, and errors go to standard error as `kortopi: <message>`, one line for each error.
+The plan goes to standard output, and errors go to standard error as `kortopi: <message>`, one line for each error, except a failed connection, which gives a line for each attempt too ([Connect to the database](#connect-to-the-database)).
 A failed plan prints nothing on standard output.
 
 kortopi checks in this order:

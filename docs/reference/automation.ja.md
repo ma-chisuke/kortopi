@@ -6,7 +6,7 @@ kortopi が人の手を離れて動く場所は3つある。デプロイのと�
 
 ## スクリプトが頼れること
 
-- 標準出力には、`kortopi plan` と `kortopi apply` の計画と、apply が書いたものの行が出る。標準エラー出力には、`kortopi: <message>` の形のエラーと `note: <message>` の形の注記が1行ずつ出る。別の apply を待つ apply の行もここに出る。
+- 標準出力には、`kortopi plan` と `kortopi apply` の計画と、apply が書いたものの行が出る。標準エラー出力には、`kortopi: <message>` の形のエラーが1行ずつ出る。例外は接続の失敗で、接続の試みごとにも1行を出す（[kortopi plan](plan.ja.md#データベースへの接続)）。`note: <message>` の形の注記と、別の apply を待つ apply の行もここに出る。
 - 計画はデータベースを変えない。そのため、何度でも実行できる。
 - 適用済みの宣言の apply は何も変えず、空の計画を出す。失敗した apply は何も変えておらず、最後の行がそう告げる。例外は、コミットの結果が分からないとエラーが告げる場合で、そのときは `kortopi plan` で状態を確かめる。そのため、apply はどんな失敗のあとでも、もう一度実行できる。
 - 接続の設定は、libpq の環境変数から読む（[kortopi plan](plan.ja.md#データベースへの接続)）。パスワードのフラグはない。パイプラインのシークレットから `PGPASSWORD` に渡すか、パスワードファイルに書く。
@@ -88,4 +88,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
 - スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除だけを示すか、何も示さない。
 
-<!-- i18n-source: automation.md sha256:5b8af6883cd3a3edee9a1f8a89f3d3c8c0a238c31414375c61468b889bb4a712 -->
+<!-- i18n-source: automation.md sha256:47b16c6db51ec8fd07f187e637d443a0259af9f1c8462eec2b7596751d4030f1 -->
