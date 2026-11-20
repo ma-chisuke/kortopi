@@ -14,13 +14,18 @@ The files that it writes are described in [Declaration files](declaration.md), a
 usage: kortopi export [flags]
 
 Write the rows of tables of the database as a declaration: a file for each
-table, <schema>/<table>.csv or .sql in the data directory, which a plan of
-the same rows finds equal. Name the tables with --table or --schema: an
-export never writes every table of a database. A table that a file
-declares already is written again only with --overwrite, into that file,
-in its format, and with its columns. A new file holds every column of its
-table but the generated ones: remove the columns that the declaration
-should not manage. An export only reads the database.
+table, which a plan of the same rows finds equal. An export only reads
+the database.
+
+Name the tables with --table or --schema: an export never writes every
+table of a database.
+
+A table that no file declares gets a new file, <schema>/<table>.csv, or
+.sql with --format sql. It holds every column of the table but the
+generated ones: remove the columns that the declaration should not manage.
+
+A table that a file declares already is written again only with
+--overwrite, into that file, in its format, and with its columns.
 
 flags:
   --dir <path>      the data directory to write into, created if it is
@@ -157,7 +162,7 @@ kortopi export --dir data --table facility.room_types --overwrite
 
 A refresh replaces the file that declares the table:
 
-- in the format of that file, whatever `--format` says;
+- in the format of that file, whatever `--format` says; when `--format` names another format, a note on standard error says that the file keeps its own;
 - with the columns of that file, so a refresh never starts to manage a column that you removed;
 - with every row of the table, also the rows that the file did not declare.
 
@@ -392,7 +397,7 @@ kortopi: tables App.t and app.t would be written to data/App/t.csv and data/app/
 A name that cannot be a file:
 
 ```text
-kortopi: table a/b.t cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: export it into a SQL file that you name, or rename the schema
+kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "a/b"."t" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
 ```
 
 A flag in a wrong form:

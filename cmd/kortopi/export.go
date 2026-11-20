@@ -37,13 +37,18 @@ const exportUsage = "usage: kortopi export [flags]\n" +
 const exportHelp = "usage: kortopi export [flags]\n" +
 	"\n" +
 	"Write the rows of tables of the database as a declaration: a file for each\n" +
-	"table, <schema>/<table>.csv or .sql in the data directory, which a plan of\n" +
-	"the same rows finds equal. Name the tables with --table or --schema: an\n" +
-	"export never writes every table of a database. A table that a file\n" +
-	"declares already is written again only with --overwrite, into that file,\n" +
-	"in its format, and with its columns. A new file holds every column of its\n" +
-	"table but the generated ones: remove the columns that the declaration\n" +
-	"should not manage. An export only reads the database.\n" +
+	"table, which a plan of the same rows finds equal. An export only reads\n" +
+	"the database.\n" +
+	"\n" +
+	"Name the tables with --table or --schema: an export never writes every\n" +
+	"table of a database.\n" +
+	"\n" +
+	"A table that no file declares gets a new file, <schema>/<table>.csv, or\n" +
+	".sql with --format sql. It holds every column of the table but the\n" +
+	"generated ones: remove the columns that the declaration should not manage.\n" +
+	"\n" +
+	"A table that a file declares already is written again only with\n" +
+	"--overwrite, into that file, in its format, and with its columns.\n" +
 	"\n" +
 	"flags:\n" +
 	exportFlags +
@@ -58,9 +63,11 @@ const exportHelp = "usage: kortopi export [flags]\n" +
 // exportOptions are the flags of export.
 type exportOptions struct {
 	common
-	tables    []declaration.TableName
-	format    declaration.Format
-	overwrite bool
+	tables []declaration.TableName
+	format declaration.Format
+	// formatGiven is true when the user gave --format.
+	formatGiven bool
+	overwrite   bool
 }
 
 // errExportInterrupted is the first line of the error of an export that an
@@ -115,6 +122,7 @@ func exportFlagSet(o *exportOptions) *flag.FlagSet {
 		default:
 			return errors.New("give csv or sql")
 		}
+		o.formatGiven = true
 		return nil
 	})
 	fs.BoolVar(&o.overwrite, "overwrite", false, "")
@@ -138,7 +146,7 @@ func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
 	if err != nil {
 		return err
 	}
-	opts := export.Options{Tables: o.tables, Schemas: o.schemas, Format: o.format, Overwrite: o.overwrite, Notes: e.stderr}
+	opts := export.Options{Tables: o.tables, Schemas: o.schemas, Format: o.format, FormatGiven: o.formatGiven, Overwrite: o.overwrite, Notes: e.stderr}
 	if err := export.Check(decl, opts); err != nil {
 		return err
 	}

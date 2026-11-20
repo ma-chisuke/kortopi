@@ -44,6 +44,7 @@ exit status:
 `--schema` は、計画を、指定したスキーマの宣言したテーブルに絞る。
 テーブルを1つも宣言していないスキーマを指定するとエラーになる。そのため、綴りを誤った名前で計画が空に絞られることはない。
 `kortopi.toml` の設定は、`--schema` が外したスキーマのものも含め、宣言したすべてのテーブルと照らし合わせる。
+計画をテーブルごとに絞ることはできない。`--table` は `kortopi export` のフラグであり、計画はそれを拒んで `--schema` を使うよう告げる。
 
 `--format sql` は、計画をテキストのかわりに SQL の文として出力する（[計画を SQL として出力する](#計画を-sql-として出力する)）。
 
@@ -544,4 +545,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:7945c7677c373ba9ae5dad11080b8a35c77321d3808d318e9902cce8b8eb573c -->
+<!-- i18n-source: plan.md sha256:f4eb354519e650e8a96701fa98915ee8dc0f884869308224f5b360812eb7cd4e -->

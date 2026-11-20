@@ -51,6 +51,15 @@ func TestRun(t *testing.T) {
 		{name: "help of version", args: []string{"help", "version"}, wantCode: exitOK, wantStdout: "usage: kortopi version"},
 		{name: "help of an unknown command", args: []string{"help", "nope"}, wantCode: exitError, wantStderr: `kortopi: no help for "nope"`},
 		{name: "unknown command", args: []string{"nope"}, wantCode: exitError, wantStderr: `unknown command "nope"`},
+		{
+			name: "plan takes no --table", args: []string{"plan", "--table", "a.b"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --table: a plan narrows the declaration by schema, with --schema <name>, and only an export takes --table\n",
+		},
+		{
+			name: "apply takes no --table", args: []string{"apply", "--table=a.b"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --table: an apply narrows the declaration by schema, with --schema <name>, and only an export takes --table\n",
+		},
+		{name: "another unknown flag of plan", args: []string{"plan", "--tables"}, wantCode: exitError, wantStderr: "kortopi: flag provided but not defined: --tables\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

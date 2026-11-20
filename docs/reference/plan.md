@@ -44,6 +44,7 @@ exit status:
 `--schema` narrows the plan to the declared tables of the named schemas.
 A named schema that declares no table is an error, so a misspelled name cannot narrow the plan to nothing.
 The settings in `kortopi.toml` are still checked against every declared table, also those of the schemas that `--schema` leaves out.
+A plan cannot be narrowed to one table: `--table` is a flag of `kortopi export`, and a plan rejects it with a hint to use `--schema`.
 
 `--format sql` prints the plan as SQL statements instead of text ([Print the plan as SQL](#print-the-plan-as-sql)).
 

@@ -14,13 +14,18 @@
 usage: kortopi export [flags]
 
 Write the rows of tables of the database as a declaration: a file for each
-table, <schema>/<table>.csv or .sql in the data directory, which a plan of
-the same rows finds equal. Name the tables with --table or --schema: an
-export never writes every table of a database. A table that a file
-declares already is written again only with --overwrite, into that file,
-in its format, and with its columns. A new file holds every column of its
-table but the generated ones: remove the columns that the declaration
-should not manage. An export only reads the database.
+table, which a plan of the same rows finds equal. An export only reads
+the database.
+
+Name the tables with --table or --schema: an export never writes every
+table of a database.
+
+A table that no file declares gets a new file, <schema>/<table>.csv, or
+.sql with --format sql. It holds every column of the table but the
+generated ones: remove the columns that the declaration should not manage.
+
+A table that a file declares already is written again only with
+--overwrite, into that file, in its format, and with its columns.
 
 flags:
   --dir <path>      the data directory to write into, created if it is
@@ -157,7 +162,7 @@ kortopi export --dir data --table facility.room_types --overwrite
 
 書き出し直しは、テーブルを宣言しているファイルを次のように置き換える。
 
-- `--format` の指定にかかわらず、そのファイルの形式で書く。
+- `--format` の指定にかかわらず、そのファイルの形式で書く。`--format` が別の形式を指定していれば、ファイルが自分の形式を保つことを、標準エラー出力の注記が告げる。
 - そのファイルの列で書く。そのため、書き出し直しで、人の除いた列の管理が始まることはない。
 - ファイルが宣言していなかった行も含め、テーブルのすべての行を書く。
 
@@ -392,7 +397,7 @@ kortopi: tables App.t and app.t would be written to data/App/t.csv and data/app/
 ファイルの名前になれない名前。
 
 ```text
-kortopi: table a/b.t cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: export it into a SQL file that you name, or rename the schema
+kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "a/b"."t" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
 ```
 
 形の誤ったフラグ。
@@ -404,4 +409,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:3e4bf467875ed80c6d0b49640ac6d77c01314e317120ddfe820eb6e23b593941 -->
+<!-- i18n-source: export.md sha256:8e93e1091f1e76f364226808f848dd153a269cf5307979c0396d2a5f7487cc59 -->

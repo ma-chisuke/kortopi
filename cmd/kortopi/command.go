@@ -21,9 +21,15 @@ import (
 // and of the connection, their help, the reading of the files, the session,
 // and the handling of an interrupt.
 
-// dirFlag is the help of --dir.
+// dirFlag is the help of --dir for plan and apply.
 const dirFlag = "  --dir <path>      the data directory, which holds the declaration and\n" +
 	"                    kortopi.toml (default: the current directory)\n"
+
+// usageDirFlag is the help of --dir in the help of kortopi, which lists the
+// flags of every command: the directory of an export may not exist yet.
+const usageDirFlag = "  --dir <path>      the data directory of the declaration and kortopi.toml,\n" +
+	"                    which an export creates if it is missing (default: the\n" +
+	"                    current directory)\n"
 
 // schemaFlag returns the help of --schema for plan and apply, whose name
 // says what the command does with the declared tables of a schema.

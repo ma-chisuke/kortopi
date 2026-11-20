@@ -29,6 +29,9 @@ type Options struct {
 	// Format is the format of a new file. A table that a file declares
 	// already keeps the format of its file.
 	Format declaration.Format
+	// FormatGiven is true when the user named the format, so that a note
+	// can say that a refresh keeps the format of a file all the same.
+	FormatGiven bool
 	// Overwrite lets the export replace the file that declares a table.
 	Overwrite bool
 	// Notes gets what the user should know about a table that is exported
@@ -278,10 +281,18 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 	}
 	j := &job{req: Request{Table: name}}
 	var errs []error
+	// notes are what the user should know about the table, one line each.
+	var notes []string
 	if dt, ok := declared[name]; ok {
 		j.path, j.rel, j.replace = dt.Path(decl.Dir), dt.File, true
 		if !opts.Overwrite {
 			return j, "", []error{fmt.Errorf("%s: table %s is declared in this file already: export with --overwrite to replace the file, or leave the table out", j.path, name)}
+		}
+		// A refresh keeps the format of the file (ADR-0028), whatever
+		// --format asks for.
+		if opts.FormatGiven && opts.Format != dt.Format {
+			notes = append(notes, fmt.Sprintf("note: table %s is declared in %s, so the export keeps the format of that file, %s: --format applies to new files only",
+				name, j.path, formatName(dt.Format)))
 		}
 		if dt.Format == declaration.SQL {
 			if others := othersInFile(decl, dt); others != "" {
@@ -321,8 +332,10 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 		j.path = filepath.Join(decl.Dir, name.Schema, name.Name+ext)
 		for _, part := range []struct{ what, name string }{{"schema", name.Schema}, {"table", name.Name}} {
 			if why := notAFileName(part.name); why != "" {
-				errs = append(errs, fmt.Errorf("table %s cannot get a file of its own: the name of its %s %s, which a file name cannot: export it into a SQL file that you name, or rename the %s",
-					plan.FormatTable(name), part.what, why, part.what))
+				errs = append(errs, fmt.Errorf("table %s cannot get a file of its own: the name of its %s %s, which a file name cannot: "+
+					"declare the table in a SQL file of another name, with one INSERT into %s that names the columns to declare, "+
+					"and export the table with --overwrite to write its rows into that file, or rename the %s",
+					quotedName(name), part.what, why, quotedName(name), part.what))
 			}
 		}
 		for _, c := range info.Columns {
@@ -372,8 +385,19 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 				name)
 		}
 	}
+	if note != "" {
+		notes = append(notes, note)
+	}
 	j.req.OrderBy = slices.Clone(key)
-	return j, note, errs
+	return j, strings.Join(notes, "\n"), errs
+}
+
+// formatName names a format of a declaration file, for messages.
+func formatName(f declaration.Format) string {
+	if f == declaration.SQL {
+		return "SQL"
+	}
+	return "CSV"
 }
 
 // partitions returns an error for each exported partition whose partitioned
@@ -400,6 +424,19 @@ func partitions(dir string, names []declaration.TableName, infos map[declaration
 		}
 	}
 	return errs
+}
+
+// quotedName writes the name of a table as an INSERT of a SQL file writes
+// it, each part in double quotes, so that a message shows a space or a
+// separator in it, and the user can copy it. A name with a control
+// character prints with the escapes of Go instead, so that the message stays
+// one line.
+func quotedName(name declaration.TableName) string {
+	if strings.ContainsFunc(name.Schema+name.Name, unicode.IsControl) {
+		return strconv.Quote(name.Schema) + "." + strconv.Quote(name.Name)
+	}
+	quote := func(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+	return quote(name.Schema) + "." + quote(name.Name)
 }
 
 // notAFileName says why name cannot be a part of a path on every file

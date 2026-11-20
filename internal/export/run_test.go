@@ -241,6 +241,21 @@ func TestRun(t *testing.T) {
 			},
 			wantOut: "wrote DIR/facility/room_types.csv (2 rows)\nwrote DIR/seed/rooms.sql (2 rows)\nExported 2 tables with 4 rows.\n",
 		},
+		{
+			name:  "a table of a SQL file, refreshed with --format csv",
+			files: map[string]string{"facility/room_types.csv": "name,code\nSingle,single\n", "seed/rooms.sql": "old\n"},
+			decl: []declaration.Table{
+				{Name: tn("facility.room_types"), Columns: []string{"name", "code"}, Format: csv, File: "facility/room_types.csv"},
+				{Name: tn("facility.rooms"), Columns: []string{"id", "note"}, Format: sql, File: "seed/rooms.sql"},
+			},
+			opts: Options{Schemas: []string{"facility"}, Format: csv, FormatGiven: true, Overwrite: true},
+			wantFiles: map[string]string{
+				"facility/room_types.csv": line("facility.room_types", csv, "name,code", "code"),
+				"seed/rooms.sql":          line("facility.rooms", sql, "id,note", "id"),
+			},
+			wantOut:   "wrote DIR/facility/room_types.csv (2 rows)\nwrote DIR/seed/rooms.sql (2 rows)\nExported 2 tables with 4 rows.\n",
+			wantNotes: "note: table facility.rooms is declared in DIR/seed/rooms.sql, so the export keeps the format of that file, SQL: --format applies to new files only\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -643,11 +658,11 @@ func TestRunFileRules(t *testing.T) {
 				name("s", "bell\a"): table("id"), name("s", "space "): table("id"),
 			},
 			opts: Options{Schemas: []string{"a/b", `a\b`, "s"}, Format: sql},
-			want: `table a/b.t cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: export it into a SQL file that you name, or rename the schema` + "\n" +
-				`table a\b.t cannot get a file of its own: the name of its schema holds a path separator` + ", which a file name cannot: export it into a SQL file that you name, or rename the schema\n" +
-				`table s."bell\a" cannot get a file of its own: the name of its table holds a control character` + ", which a file name cannot: export it into a SQL file that you name, or rename the table\n" +
-				`table s."space " cannot get a file of its own: the name of its table ends with a space or a dot` + ", which a file name cannot: export it into a SQL file that you name, or rename the table\n" +
-				`table s."x:y" cannot get a file of its own: the name of its table holds a colon, which a file name cannot: export it into a SQL file that you name, or rename the table`,
+			want: `table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "a/b"."t" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema` + "\n" +
+				`table "a\b"."t" cannot get a file of its own: the name of its schema holds a path separator` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "a\b"."t" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema` + "\n" +
+				`table "s"."bell\a" cannot get a file of its own: the name of its table holds a control character` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "s"."bell\a" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the table` + "\n" +
+				`table "s"."space " cannot get a file of its own: the name of its table ends with a space or a dot` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "s"."space " that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the table` + "\n" +
+				`table "s"."x:y" cannot get a file of its own: the name of its table holds a colon` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT into "s"."x:y" that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the table`,
 		},
 		{
 			name: "a column with a line break, in CSV",
