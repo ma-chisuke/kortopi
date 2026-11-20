@@ -263,6 +263,17 @@ kortopi: data/facility/room_types.csv:1: column 2 of the header has no name: nam
 
 見出しの行の末尾のコンマは、名前のない列を1つ足してしまう。
 
+### 見出しの行より多いか少ないフィールドを持つ行
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 6 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+kortopi: data/facility/room_types.csv:3: missing data for column "sort_order" (hint: the row has fewer fields than the header, which names 3 columns: give the row a field for every column, an empty one for NULL)
+```
+
+行を読んで行番号を示すのは PostgreSQL であり、ヒントは kortopi が足す。
+見出しの行から除いた列を行から除かなければ、1つ目のエラーになる。その列のフィールドをすべての行からも除くか、[kortopi export](export.ja.md#宣言したテーブルを書き出し直す) に `--overwrite` で行を書き直させる。
+メッセージが英語以外のサーバーでは、ヒントのないエラーになる。
+
 ### 2つのファイルにあるテーブル
 
 ```text
@@ -413,4 +424,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:2d2a90fea4fb6597ce85c0e0157d17ffbd3cee7d7da1ceafc7c538df81d07188 -->
+<!-- i18n-source: declaration.md sha256:a30c1a56952d21a045776fb3d1c8520c7f26dad091d9a7430fd90e04f96733f1 -->

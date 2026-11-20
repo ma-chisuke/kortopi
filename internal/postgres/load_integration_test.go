@@ -102,8 +102,17 @@ func TestLoadErrorsCSV(t *testing.T) {
 					name:    "missing field",
 					columns: []string{"id", "n"},
 					csv:     "id,n\n1\n",
-					want:    []string{"s/t.csv:2: missing data for column \"n\""},
-					code:    "22P04",
+					want: []string{"s/t.csv:2: missing data for column \"n\" (hint: the row has fewer fields than the header, which names 2 columns: " +
+						"give the row a field for every column, an empty one for NULL)"},
+					code: "22P04",
+				},
+				{
+					name:    "extra field",
+					columns: []string{"id", "n"},
+					csv:     "id,n\n1,2\n3,4,5\n",
+					want: []string{"s/t.csv:3: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns: " +
+						"remove the extra fields, or write a value that holds a comma in double quotes)"},
+					code: "22P04",
 				},
 				{
 					name:    "header that differs from the declared columns",

@@ -262,6 +262,17 @@ kortopi: data/facility/room_types.csv:1: column 2 of the header has no name: nam
 
 A comma at the end of the header adds a column without a name.
 
+### A row with more or fewer fields than the header
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 6 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+kortopi: data/facility/room_types.csv:3: missing data for column "sort_order" (hint: the row has fewer fields than the header, which names 3 columns: give the row a field for every column, an empty one for NULL)
+```
+
+PostgreSQL reads the rows and names the line; kortopi adds the hint.
+A column removed from the header but not from the rows gives the first error: remove its field from every row too, or let [kortopi export](export.md#refresh-a-declared-table) write the rows again with `--overwrite`.
+A server whose messages are in another language than English gets the error without the hint.
+
 ### A table in two files
 
 ```text
