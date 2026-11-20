@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestNoSecretInOutput runs kortopi plan on the paths that fail before it
+// TestNoSecretInOutput runs kortopi plan and apply on the paths that fail before it
 // connects, with a password in the environment and connection strings in
 // the arguments, and fails if the output repeats the password or a
 // connection string. It sets the environment, so it does not run in
@@ -31,23 +31,25 @@ func TestNoSecretInOutput(t *testing.T) {
 		{name: "host variable", env: map[string]string{"PGHOST": url}},
 		{name: "user variable", env: map[string]string{"PGUSER": "app password=" + secret}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			for k, v := range tt.env {
-				t.Setenv(k, v)
-			}
-			args := append([]string{"plan", "--dir", dir}, tt.args...)
-			// Every case fails before a connection is made: on a flag, or on
-			// the settings of the connection.
-			code, stdout, stderr := runTest(t, args, connectPostgres)
-			if code != exitError {
-				t.Errorf("exit status %d, want %d", code, exitError)
-			}
-			for _, leak := range []string{secret, "://"} {
-				if strings.Contains(stdout+stderr, leak) {
-					t.Errorf("the output repeats %q:\n%s%s", leak, stdout, stderr)
+	for _, command := range []string{"plan", "apply"} {
+		for _, tt := range tests {
+			t.Run(command+" "+tt.name, func(t *testing.T) {
+				for k, v := range tt.env {
+					t.Setenv(k, v)
 				}
-			}
-		})
+				args := append([]string{command, "--dir", dir}, tt.args...)
+				// Every case fails before a connection is made: on a flag, or on
+				// the settings of the connection.
+				code, stdout, stderr := runTest(t, args, connectPostgres)
+				if code != exitError {
+					t.Errorf("exit status %d, want %d", code, exitError)
+				}
+				for _, leak := range []string{secret, "://"} {
+					if strings.Contains(stdout+stderr, leak) {
+						t.Errorf("the output repeats %q:\n%s%s", leak, stdout, stderr)
+					}
+				}
+			})
+		}
 	}
 }
