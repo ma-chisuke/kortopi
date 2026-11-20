@@ -117,6 +117,9 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 ポリシーが隠す行は、存在しないように見える。計画はそれらを挿入する行として示し、更新する行や削除する行としては決して示さない。
 セッションは `row_security` も off に固定する。そのため、ポリシーが絞り込む問い合わせは、少ない行を返さずに失敗する。
 
+削除する行を参照する行を数えるため、計画は参照しているテーブルも読む（[削除する行を参照する行](#削除する行を参照する行)）。
+ロールがそのスキーマに対する `USAGE` か外部キーの列に対する `SELECT` を欠くか、行単位セキュリティがかかるときは、数えられなかったと示して計画を続ける。
+
 計画がデータベースの中ですることは、次のことだけである。
 
 - 接続を1つ開く。`PGAPPNAME` が別の値を設定しない限り、`application_name` は `kortopi` にする。
@@ -209,6 +212,41 @@ Known after the schema is applied: 1 table, 1 column.
 
 綴りを誤ったテーブルや列の名前は、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読む。
 
+### 削除する行を参照する行
+
+テーブルの削除する行の下に、計画はそれを指すすべての外部キーを、テーブルごとに1回だけ示す。
+
+```text
+geo.regions (sync, key: code)
+  - code=north
+    referenced by 1 row of geo.prefectures (region), prefectures_region_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it
+    referenced by 1 row of geo.stations (region), stations_region_fkey: ON DELETE CASCADE, so the deletion deletes this row too
+  0 to insert, 0 to update, 1 to delete
+```
+
+各行は、参照しているテーブル・その列・制約を挙げ、削除する行を参照する行を数える。そして、それらがまだ参照している間に PostgreSQL が何をするかを、キーの `ON DELETE` の動作に応じて示す。
+
+| 動作 | 行の示すこと |
+|---|---|
+| `NO ACTION`、`RESTRICT` | the deletion fails while these rows reference them |
+| `CASCADE` | the deletion deletes these rows too |
+| `SET NULL` | the deletion sets the reference of these rows to NULL |
+| `SET DEFAULT` | the deletion sets the reference of these rows to the default |
+
+- どの外部キーも数える。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでも、テーブルの1つのパーティションを指すキーでも数える。
+- 件数は、照合キーではなく、外部キーの列で結び付ける。
+- テーブルから自分自身へのキーでは、残る行だけを数える。
+- 参照している行のないキーは除く。
+- ロールが参照しているテーブルを読めないときは、件数のかわりにそのことを示し、計画を続ける。
+
+  ```text
+  maybe referenced by rows of reservation.audit (room_type_id), audit_room_type_fkey: the role may not read the table to count them; ON DELETE NO ACTION, so the deletion fails while such rows reference them
+  ```
+
+apply は、削除の前に参照している行を変えたり削除したりしうる。そのため、各行が示すのは計画が読んだ状態で起きることであり、それが起きるということではない。
+カスケードは1段目だけを示し、参照される列の更新には件数を示さない。
+[kortopi apply](apply.ja.md#削除の安全策) は、削除の上限にこの件数を使う。
+
 ### 値と名前
 
 値は PostgreSQL が出力するとおりに示し、NULL は `NULL` と示す。
@@ -244,8 +282,9 @@ Known after the schema is applied: 1 table, 1 column.
 kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
-2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。すべてのテーブルのすべての誤りを、まとめて報告する。
+2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
+4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言が挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 
 よくある誤りとそのメッセージは、[宣言のファイル](declaration.ja.md#よくある誤り)にある。
 
@@ -276,4 +315,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:8424d5b2e33e36dcdbfdf66d88409056fdc8b00b8f2cf0512e2b5b01beefb0d2 -->
+<!-- i18n-source: plan.md sha256:d1d792c397329180f7d0375ec541a2ccc309d998317a7799953902ce4efa0d52 -->

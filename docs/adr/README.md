@@ -31,3 +31,5 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0023](ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md) | Compare values with the equality of their column's type, in a session with pinned settings | accepted | 2026-11-19 |
 | [ADR-0024](ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md) | Plan in one transaction that is rolled back, and print only what differs | accepted | 2026-11-19 |
 | [ADR-0025](ADR-0025-pgx-go-toml-and-test-containers-in-the-root-module.md) | Talk to PostgreSQL with pgx, read the settings with go-toml, and start test servers with testcontainers-go in the root module | accepted | 2026-11-19 |
+| [ADR-0026](ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md) | Run an apply in one snapshot, under a lock of its transaction, with set-based statements | accepted | 2026-11-20 |
+| [ADR-0027](ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md) | Allow deletions with `--allow-delete`, limit them over the whole run with `--max-delete`, and count the rows that reference them | accepted | 2026-11-20 |

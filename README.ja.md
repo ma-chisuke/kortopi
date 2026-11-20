@@ -8,7 +8,7 @@ kortopi は、PostgreSQL のマスタテーブルの行を宣言的に管理す�
 
 > [!NOTE]
 > kortopi は開発中で、まだリリースがない。
-> `kortopi plan` は動く。`apply` と `export` は、まだできていない。
+> `kortopi plan` と `kortopi apply` は動く。`export` と、計画の SQL の出力は、まだできていない。
 > このページは最初の版の設計を説明する。詳細と理由は[決定の記録](docs/adr/README.ja.md)にある。
 
 ## 何をするか
@@ -75,9 +75,33 @@ Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
 計画は、データベースの何も変えていない。
 このテーブルには設定がないので、主キーで行を照合し、削除をしないモード `upsert` を使う。
 
+計画を適用し、もう一度計画を立てる。
+
+```sh
+PGHOST=db.example.test PGUSER=deployer PGDATABASE=app bin/kortopi apply --dir data
+```
+
+```text
+facility.room_types (upsert, key: code)
+  + code=suite  name=Suite  capacity=4
+  ~ code=twin  capacity: 2 -> 3
+  1 to insert, 1 to update
+
+Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
+
+Applied: 1 inserted, 1 updated, 0 deleted.
+```
+
+```text
+No changes. The database matches the declaration.
+```
+
+apply は、テーブルに対する `INSERT` と `UPDATE` を持つロールで、2つの変更を1つのトランザクションで書き込んだ。
+
 - [宣言のファイル](docs/reference/declaration.ja.md)：データのディレクトリ、CSV と SQL のファイル、`kortopi.toml`。
 - [値の比べ方](docs/reference/comparison.ja.md)：宣言の値が保存されている値と等しくなる条件を、型ごとに示す。
 - [kortopi plan](docs/reference/plan.ja.md)：フラグ、接続、出力、終了コード。
+- [kortopi apply](docs/reference/apply.ja.md)：apply に要るものとすること、削除の安全策、エラー。
 
 ## どう動くか
 
@@ -85,7 +109,7 @@ Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
 - **宣言した列だけを管理する。** ほかの列は比べず、更新もしない。新しい行では、その列に既定値が入る。
 - **行は主キーで照合する。テーブルごとに一意キー（`code` など）を選ぶこともできる。** 一意キーを選べば、宣言は生成された ID を含まずに済む。
 - **テーブルごとにモードがある。** `insert` は足りない行を足す。既定の `upsert` は、行の更新もする。`sync` は、宣言にない行の削除もする。
-- **削除には安全策がある。** 行が消えるのは `sync` のテーブルだけである。明示のフラグがなければ、適用では何も消さない。件数の上限が、大きな削除を止める。計画は、消える行がほかのテーブルから何件参照されているかを示す。
+- **削除には安全策がある。** 行が消えるのは `sync` のテーブルだけである。`--allow-delete` がなければ、適用では何も消さない。`--max-delete`（既定は 100 行で、カスケードも含む）が、大きな削除を止める。計画は、消える行がほかのテーブルから何件参照されているかを示す。
 - **データベースを汚さない。** kortopi は自分用のテーブルを作らない。履歴も状態も持たない。
 
 最初の版は、PostgreSQL 15〜18 と Aurora PostgreSQL に対応する。
@@ -126,4 +150,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:8f2e9afb0654821847c61f2463c1c7c433ff1074f7c7d88890ae4d29a77ff3ba -->
+<!-- i18n-source: README.md sha256:3afe680495d64f858c3134c45d998817384047575c1286f6eaf96a78a2cd0f46 -->

@@ -8,7 +8,7 @@ It does for rows what a declarative schema tool does for a schema.
 
 > [!NOTE]
 > kortopi is under development and has no release yet.
-> `kortopi plan` works. `apply` and `export` are not built yet.
+> `kortopi plan` and `kortopi apply` work. `export` and the SQL output of a plan are not built yet.
 > This page describes the design of the first version. The [decision records](docs/adr/README.md) hold the details and the reasons.
 
 ## What it does
@@ -75,9 +75,33 @@ Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
 The plan changed nothing in the database.
 The table has no settings, so it matches rows by its primary key and uses mode `upsert`, which never deletes.
 
+Apply the plan, then plan again:
+
+```sh
+PGHOST=db.example.test PGUSER=deployer PGDATABASE=app bin/kortopi apply --dir data
+```
+
+```text
+facility.room_types (upsert, key: code)
+  + code=suite  name=Suite  capacity=4
+  ~ code=twin  capacity: 2 -> 3
+  1 to insert, 1 to update
+
+Plan: 1 to insert, 1 to update, 0 to delete in 1 table.
+
+Applied: 1 inserted, 1 updated, 0 deleted.
+```
+
+```text
+No changes. The database matches the declaration.
+```
+
+The apply wrote both changes in one transaction, as a role with `INSERT` and `UPDATE` on the table.
+
 - [Declaration files](docs/reference/declaration.md): the data directory, CSV and SQL files, and `kortopi.toml`.
 - [How values are compared](docs/reference/comparison.md): when a declared value equals a stored one, type by type.
 - [kortopi plan](docs/reference/plan.md): the flags, the connection, the output, and the exit statuses.
+- [kortopi apply](docs/reference/apply.md): what an apply needs and does, the guards on deletions, and its errors.
 
 ## How it behaves
 
@@ -85,7 +109,7 @@ The table has no settings, so it matches rows by its primary key and uses mode `
 - **Only the columns that you declare are managed.** Other columns are neither compared nor updated, and get their default in a new row.
 - **Rows match by the primary key, or by a unique key that you choose for a table**, such as `code`. A declaration then needs no generated IDs.
 - **Each table has a mode.** `insert` adds missing rows. `upsert`, the default, also updates rows. `sync` also deletes the rows that the declaration lacks.
-- **Deletions are guarded.** Only `sync` tables lose rows, an apply deletes nothing without an explicit flag, a limit stops a large deletion, and the plan shows how many rows of other tables reference a row before it goes.
+- **Deletions are guarded.** Only `sync` tables lose rows, an apply deletes nothing without `--allow-delete`, `--max-delete` (100 rows by default, cascades included) stops a large deletion, and the plan shows how many rows of other tables reference a row before it goes.
 - **The database stays clean.** kortopi creates no table of its own: no history and no state.
 
 The first version supports PostgreSQL 15 to 18 and Aurora PostgreSQL.

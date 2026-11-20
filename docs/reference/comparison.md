@@ -94,6 +94,10 @@ After loading a table and before comparing it, a plan checks the declared rows:
 - No row holds NULL in a declared column that the table declares `NOT NULL`, because an apply of the row would fail. The error lists the keys of up to five such rows for each column. In mode `insert`, only the rows to insert are checked, because an apply writes no other row.
 - No row holds `now`, `today`, `tomorrow`, or `yesterday`, in any case, in a column of a date or time type: the type itself, a domain over it, an array of it, or a range or a multirange of it. PostgreSQL reads these words as the moment of reading, so the value would differ from the database on every plan. To find them, the plan loads the rows of such a table once more as text, before PostgreSQL turns the words into dates. It does not look into the fields of a composite type, and in a SQL file it sees a value after its casts ([Declaration files](declaration.md#values)).
 
+After it has compared every table, a plan checks that the rows to insert get a value for every column that needs one:
+
+- A column that is `NOT NULL`, has no default, and is not named by the declaration gets no value in a new row, so an apply of the rows to insert would fail. A plan reports such a column for every table with rows to insert, all tables together. A default here is a default of the column or of its domain, a `serial`, an identity column, or a generated column.
+
 A plan also checks the declared columns against the table:
 
 - A generated column, which the database computes from other columns, cannot be declared.
@@ -107,7 +111,6 @@ A plan therefore does not check:
 - the `CHECK` constraints of the table;
 - foreign keys;
 - unique keys other than the match key;
-- `NOT NULL` in a column that the declaration does not name and that has no default;
 - triggers, and the privileges to write;
 - the values of a table or a column that the database does not have yet.
 

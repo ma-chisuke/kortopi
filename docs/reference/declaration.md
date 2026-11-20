@@ -335,6 +335,15 @@ kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans i
 
 Add the key columns to the file, or name a unique key whose columns the file has with `key`.
 
+### A key that cannot match rows
+
+```text
+kortopi: table facility.room_types has no primary key that can match rows; the unique key ("code") cannot, because its index uses another collation than column "code": name the columns of a unique key that can with key in [tables."facility.room_types"] of data/kortopi.toml
+kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a unique key that cannot match rows, because its index uses an operator class that is not the default for column "code": name the columns of the primary key or of another unique key
+```
+
+A unique index that uses another collation than its column, or an operator class that is not the default, cannot match rows as a plan compares them. Create a unique index on the column itself, or name another key.
+
 ### A key that two rows hold
 
 ```text
@@ -346,6 +355,14 @@ kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would
 ```text
 kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
 ```
+
+### A column that the rows to insert would lack
+
+```text
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+```
+
+Declare the column with a value for every row, or give it a default with the tool that changes your schema.
 
 ### A word for the current time in a CSV file
 
@@ -359,6 +376,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last five mistakes need the database, so kortopi reports them after it connects.
-The first of them is reported for every table at once, before any row is loaded.
-The other four stop the plan at the first table that has them, as a value that the column rejects does.
+The last seven mistakes need the database, so kortopi reports them after it connects:
+
+- A file without the columns of the key, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
+- A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
+- A column that the rows to insert would lack is reported for every table at once, after the tables are compared.

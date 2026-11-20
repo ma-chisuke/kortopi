@@ -81,7 +81,7 @@ The flags are parsed with the `flag` package of the Go standard library. No libr
 ### Confirmation
 
 - Tests of the command line confirm the subcommands, that a flag of one subcommand is rejected by another, and the three exit statuses. They arrive with the implementation of each command.
-- `kortopi plan` and `kortopi version` exist, and their tests are in `cmd/kortopi`. `apply` and `export` arrive later.
+- `kortopi plan`, `kortopi apply`, and `kortopi version` exist, and their tests are in `cmd/kortopi`. `export` arrives later.
 
 ## Pros and Cons of the Options
 

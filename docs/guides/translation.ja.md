@@ -188,5 +188,14 @@
 | container runtime | コンテナの実行環境 |
 | B-tree ordering（型の） | B-tree の順序 |
 | nondeterministic collation | 非決定的な照合順序 |
+| advisory lock | アドバイザリロック |
+| serialization failure, deadlock | 直列化の失敗、デッドロック |
+| connection pooler, transaction mode（プーラーの） | コネクションプーラー、トランザクションモード |
+| defer（制約を） | 遅らせる |
+| cascade（外部キーの） | カスケード |
+| trigger, rule（PostgreSQL の） | トリガー、ルール |
+| set-based statement | 集合単位の文 |
+| phase（apply の） | 段階 |
+| outcome（コミットの） | 結果 |
 
-<!-- i18n-source: translation.md sha256:18bd8285a35fa6420a803150b1fe77a1f7fc7475b4e8d7f1abfde9a0eeff0675 -->
+<!-- i18n-source: translation.md sha256:5b658ede5163d2902cde7c27697ef8120c4ed02c47b471fd9c6e7913c3c59697 -->
