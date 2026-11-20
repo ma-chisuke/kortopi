@@ -100,6 +100,12 @@ func TestFlagOutput(t *testing.T) {
 			wantStderr: "kortopi: flag provided but not defined: --dir\n\n" + versionUsage,
 		},
 		{name: "help of apply", args: []string{"apply", "--help"}, wantCode: exitOK, wantStdout: applyHelp},
+		{name: "help of export", args: []string{"export", "-h"}, wantCode: exitOK, wantStdout: exportHelp},
+		{name: "help command of export", args: []string{"help", "export"}, wantCode: exitOK, wantStdout: exportHelp},
+		{
+			name: "flag of apply given to export", args: []string{"export", "--allow-delete"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --allow-delete\n\n" + exportUsage,
+		},
 		{name: "help command of apply", args: []string{"help", "apply"}, wantCode: exitOK, wantStdout: applyHelp},
 		{
 			name: "unknown flag of apply", args: []string{"apply", "--allow-deletes"}, wantCode: exitError,
@@ -131,7 +137,7 @@ func TestFlagOutput(t *testing.T) {
 			}
 		})
 	}
-	for _, h := range [][2]string{{planUsage, planHelp}, {applyUsage, applyHelp}} {
+	for _, h := range [][2]string{{planUsage, planHelp}, {applyUsage, applyHelp}, {exportUsage, exportHelp}} {
 		if strings.Contains(h[0], "exit status") || !strings.Contains(h[1], "exit status") {
 			t.Error("a short usage holds the exit statuses, or a help lacks them")
 		}
@@ -150,6 +156,7 @@ func TestHelpListsTheFlags(t *testing.T) {
 	}{
 		{"plan", planFlagSet(&planOptions{})},
 		{"apply", applyFlagSet(&applyOptions{})},
+		{"export", exportFlagSet(&exportOptions{})},
 	} {
 		var names []string
 		c.fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
