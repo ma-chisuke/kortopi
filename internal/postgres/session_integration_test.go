@@ -127,7 +127,7 @@ func TestPlanWithoutSelect(t *testing.T) {
 			// Without USAGE on the schema.
 			err := diffError(t, s, req)
 			want := `a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "` + cfg.User +
-				`" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table`
+				`" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use`
 			if err.Error() != want {
 				t.Errorf("Diff:\n%v\nwant\n%s", err, want)
 			}

@@ -71,6 +71,7 @@ func TestSettingsFromTheEnvironment(t *testing.T) {
 			if err := tx.Rollback(t.Context()); err != nil {
 				t.Fatal(err)
 			}
+			t.Setenv("PGOPTIONS", "")
 			code, stdout, stderr = e.command(t, "plan", "--dir", dir, "--exit-code")
 			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
 		})
