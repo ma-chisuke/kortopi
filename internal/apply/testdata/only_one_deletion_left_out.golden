@@ -1,0 +1,7 @@
+catalog.plans (sync, key: code)
+  - code=legacy
+  0 to insert, 0 to update, 1 to delete
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+
+Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.

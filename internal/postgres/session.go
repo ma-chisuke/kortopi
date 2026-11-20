@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -13,9 +14,10 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
-// Options name the database. An empty field falls back to the environment
-// variables of libpq (PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD,
-// PGSSLMODE, PGSERVICE, the password file), which pgx reads.
+// Options name the database and say what the session is for. An empty field
+// of the connection falls back to the environment variables of libpq
+// (PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD, PGSSLMODE, PGSERVICE, the
+// password file), which pgx reads.
 type Options struct {
 	Host     string
 	Port     string
@@ -24,6 +26,15 @@ type Options struct {
 	// Dir is the data directory of the declaration. Diff and CountRows read
 	// the CSV files of the tables from it.
 	Dir string
+	// Apply opens a session that can write, for an apply (ADR-0017): it takes
+	// the lock of kortopi on the database before its transaction starts,
+	// keeps the declared rows that Diff loads until it ends, and implements
+	// apply.Database. Without it, the session is for a plan, and writes
+	// nothing.
+	Apply bool
+	// Wait gets one line when an apply waits for another apply to finish. It
+	// may be nil.
+	Wait io.Writer
 }
 
 // settings are the settings that change how PostgreSQL reads and prints a
@@ -50,16 +61,26 @@ var settings = [...][2]string{
 // the application.
 const applicationName = "kortopi"
 
-// Session is a connection to the database that a plan reads. Everything that
-// it does runs in one transaction, at the isolation level REPEATABLE READ, so
-// every query sees the same snapshot. Close rolls the transaction back, so
-// the session leaves nothing behind (ADR-0010).
+// Session is a connection to the database that a plan reads, or that an
+// apply writes. Everything that it does runs in one transaction, at the
+// isolation level REPEATABLE READ, so every query sees the same snapshot.
+// Close rolls the transaction back, unless Commit made it lasting, so the
+// session leaves nothing behind (ADR-0010).
 //
-// A Session implements plan.Database. It is not safe for concurrent use.
+// A Session implements plan.Database, and, when Options.Apply opened it,
+// apply.Database. It is not safe for concurrent use.
 type Session struct {
 	conn *pgx.Conn
 	tx   pgx.Tx
 	dir  string
+	// apply is true for a session of an apply. loaded holds the declared
+	// rows that Diff loaded for it, and committed is true after Commit.
+	apply     bool
+	loaded    map[declaration.TableName]*loadedTable
+	committed bool
+	// deletesChecked is true after the privileges of the deletions were
+	// checked.
+	deletesChecked bool
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.
@@ -80,13 +101,13 @@ type Session struct {
 var _ plan.Database = (*Session)(nil)
 
 // Connect connects to the database that opts name, and starts the
-// transaction of the plan.
+// transaction of the plan or the apply.
 func Connect(ctx context.Context, opts Options) (*Session, error) {
 	cfg, err := opts.connConfig()
 	if err != nil {
 		return nil, err
 	}
-	return ConnectConfig(ctx, cfg, opts.Dir)
+	return ConnectConfig(ctx, cfg, opts)
 }
 
 // connConfig returns the connection settings that o names, completed from
@@ -139,10 +160,10 @@ func (o Options) connString() string {
 	return b.String()
 }
 
-// ConnectConfig connects with cfg, and starts the transaction of the plan.
-// dir is the data directory of the declaration. Unlike Connect, it reads no
-// environment variable, so tests use it.
-func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, dir string) (*Session, error) {
+// ConnectConfig connects with cfg, in place of the fields of opts that name
+// the database, and starts the transaction of the plan or the apply. Unlike
+// Connect, it reads no environment variable, so tests use it.
+func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Session, error) {
 	cfg = cfg.Copy()
 	// Describe each query in an unnamed statement, so the session prepares
 	// no statement that outlives a query.
@@ -154,37 +175,138 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, dir string) (*Sessi
 	if err != nil {
 		return nil, fmt.Errorf("connect to the database: %w", err)
 	}
-	s := &Session{conn: conn, dir: dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn)}
-	if err := s.begin(ctx); err != nil {
+	s := &Session{
+		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
+		apply: opts.Apply, loaded: make(map[declaration.TableName]*loadedTable),
+	}
+	if err := s.begin(ctx, opts.Wait); err != nil {
 		_ = conn.Close(ctx)
 		return nil, err
 	}
 	return s, nil
 }
 
+// lockKey is the key of the advisory lock that keeps two applies on one
+// database apart: the bytes of "kortopi" in ASCII. It is a lock of the
+// server, not an object in the database (ADR-0010).
+const lockKey = 0x6b6f72746f7069
+
 // begin starts the transaction and pins the settings of the session inside
 // it, as SET LOCAL does.
-func (s *Session) begin(ctx context.Context) error {
-	tx, err := s.conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
-	if err != nil {
-		return fmt.Errorf("begin the transaction of the plan: %w", err)
+//
+// In an apply, the first statement of the transaction tries to take the
+// advisory lock of kortopi, for the transaction only, so that its end
+// releases the lock, also through a connection pooler. When another apply
+// holds the lock, begin rolls back, writes one line to wait, waits in a
+// short transaction of its own until the other apply ends, and starts again.
+// The snapshot of REPEATABLE READ is taken by that first statement, a moment
+// before the lock: an apply that commits in that moment makes the writes of
+// this apply fail with ErrConflict instead of overwriting its rows.
+func (s *Session) begin(ctx context.Context, wait io.Writer) error {
+	waited := false
+	for {
+		tx, err := s.conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+		if err != nil {
+			return fmt.Errorf("begin the transaction of the %s: %w", s.work(), err)
+		}
+		if !s.apply {
+			s.tx = tx
+			break
+		}
+		var locked bool
+		var database string
+		err = tx.QueryRow(ctx, "SELECT pg_catalog.pg_try_advisory_xact_lock($1), pg_catalog.current_database()::pg_catalog.text",
+			int64(lockKey)).Scan(&locked, &database)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("take the lock of kortopi: %w", err)
+		}
+		if locked {
+			s.tx = tx
+			break
+		}
+		if err := tx.Rollback(ctx); err != nil {
+			return fmt.Errorf("take the lock of kortopi: %w", err)
+		}
+		if !waited && wait != nil {
+			_, _ = fmt.Fprintf(wait, "kortopi: waiting for another apply on database %q to finish\n", database)
+		}
+		waited = true
+		if err := s.waitForLock(ctx, database); err != nil {
+			return err
+		}
 	}
-	s.tx = tx
+
 	names := make([]string, len(settings))
 	values := make([]string, len(settings))
 	for i, setting := range settings {
 		names[i], values[i] = setting[0], setting[1]
 	}
-	_, err = tx.Exec(ctx, `SELECT pg_catalog.set_config(s.name, s.value, true)
+	_, err := s.tx.Exec(ctx, `SELECT pg_catalog.set_config(s.name, s.value, true)
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS s(name, value)`, names, values)
 	if err != nil {
 		return fmt.Errorf("set the settings of the session: %w", err)
 	}
+	if s.apply {
+		return s.checkReplicationRole(ctx)
+	}
 	return nil
 }
 
-// Close rolls the transaction back and closes the connection. Every
-// temporary table of the session disappears with it.
+// waitForLock waits until the apply that holds the lock of kortopi ends, in
+// a transaction of its own that takes the lock and lets it go at once.
+func (s *Session) waitForLock(ctx context.Context, database string) error {
+	tx, err := s.conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1)", int64(lockKey)); err != nil {
+		_ = tx.Rollback(ctx)
+		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+	}
+	return nil
+}
+
+// checkReplicationRole returns an error when session_replication_role is
+// not origin. A superuser can set it to replica or local, and then the
+// triggers of foreign keys do not fire, so an apply could commit rows that
+// break its foreign keys. kortopi reads the setting, and does not change it.
+func (s *Session) checkReplicationRole(ctx context.Context) error {
+	var role string
+	if err := s.tx.QueryRow(ctx, "SELECT pg_catalog.current_setting('session_replication_role')").Scan(&role); err != nil {
+		return fmt.Errorf("read session_replication_role: %w", err)
+	}
+	if role != "origin" {
+		return fmt.Errorf("an apply needs session_replication_role = origin, but the session has %q: "+
+			"the triggers of foreign keys do not fire then, and the apply could commit rows that break them: "+
+			"apply in a session that leaves session_replication_role at origin", role)
+	}
+	return nil
+}
+
+// work returns what the session is for, plan or apply, for messages.
+func (s *Session) work() string {
+	if s.apply {
+		return "apply"
+	}
+	return "plan"
+}
+
+// needs returns "a plan" or "an apply", for messages that say what the
+// session needs.
+func (s *Session) needs() string {
+	if s.apply {
+		return "an apply"
+	}
+	return "a plan"
+}
+
+// Close rolls the transaction back, unless Commit made it lasting, and
+// closes the connection. Every temporary table of the session disappears
+// with it, and so does the lock of an apply.
 func (s *Session) Close(ctx context.Context) error {
 	if s.closed {
 		return nil
@@ -203,8 +325,23 @@ func (s *Session) Close(ctx context.Context) error {
 // ErrTemporaryTables is the error of a session that cannot create temporary
 // tables. A plan loads the declared rows into temporary tables, so it needs a
 // session that can write, on the primary, with the TEMPORARY privilege on the
-// database (ADR-0016).
+// database (ADR-0016), and so does an apply.
 var ErrTemporaryTables = errors.New("a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database")
+
+// temporaryTablesError is ErrTemporaryTables with the database, the reason,
+// and what the session is for.
+type temporaryTablesError struct {
+	msg string
+}
+
+func (e *temporaryTablesError) Error() string {
+	return e.msg
+}
+
+// Is makes the error match ErrTemporaryTables.
+func (e *temporaryTablesError) Is(target error) bool {
+	return target == ErrTemporaryTables
+}
 
 // checkTemporary returns ErrTemporaryTables, with the reason, when the
 // session cannot create temporary tables. It asks the database once.
@@ -225,18 +362,20 @@ func (s *Session) checkTemporary(ctx context.Context) error {
 	s.tempChecked = true
 	switch {
 	case standby:
-		s.tempErr = temporaryError(s.databaseName, "the server is a standby")
+		s.tempErr = s.temporaryError("the server is a standby")
 	case readOnly:
-		s.tempErr = temporaryError(s.databaseName, "the transaction is read-only")
+		s.tempErr = s.temporaryError("the transaction is read-only")
 	case !privileged:
-		s.tempErr = temporaryError(s.databaseName, "the role lacks the TEMPORARY privilege on the database")
+		s.tempErr = s.temporaryError("the role lacks the TEMPORARY privilege on the database")
 	}
 	return s.tempErr
 }
 
 // temporaryError returns ErrTemporaryTables with the database and the reason.
-func temporaryError(database, reason string) error {
-	return fmt.Errorf("cannot create temporary tables in database %q, because %s; %w", database, reason, ErrTemporaryTables)
+func (s *Session) temporaryError(reason string) error {
+	return &temporaryTablesError{msg: fmt.Sprintf("cannot create temporary tables in database %q, because %s; "+
+		"%s needs a session that can write, on the primary, with the TEMPORARY privilege on the database",
+		s.databaseName, reason, s.needs())}
 }
 
 // serverMajor returns the major version of the server that conn reached, as

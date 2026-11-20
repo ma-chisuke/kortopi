@@ -46,6 +46,22 @@ type TableInfo struct {
 	// the primary key: a UNIQUE constraint, or a unique index over plain
 	// columns that covers every row.
 	UniqueKeys [][]string
+	// SetAsideKeys holds the unique indexes and constraints that cannot
+	// match rows as a plan compares them, with the reason. Build names them
+	// in its errors, so that a user learns why a key that exists is not
+	// used.
+	SetAsideKeys []SetAsideKey
+}
+
+// SetAsideKey is a unique index or constraint that cannot match rows as a
+// plan compares them.
+type SetAsideKey struct {
+	// Columns holds the columns of the key, in the order of the key.
+	Columns []string
+	// Reason says why the key cannot match rows, as a short phrase of the
+	// database package, such as "its index uses another collation than the
+	// column".
+	Reason string
 }
 
 // ColumnInfo is what the database knows about a column.
@@ -55,6 +71,11 @@ type ColumnInfo struct {
 	// Generated is true for a column whose value the database computes from
 	// other columns, so a declaration cannot set it.
 	Generated bool
+	// HasDefault is true when a new row gets a value for the column without
+	// the declaration naming it: the column has a default, is an identity
+	// column, or is generated. A column that is NotNull, has no default, and
+	// is not declared makes every insert fail.
+	HasDefault bool
 	// IdentityAlways is true for an identity column that the database fills
 	// in unless a statement overrides it. A declaration can set it in a new
 	// row, so it may be part of the match key, but an update cannot change
@@ -120,6 +141,30 @@ type TableDiff struct {
 	Inserts []Row
 	Updates []Update
 	Deletes []Row
+	// References says, for each foreign key that points at the table, how
+	// many rows reference the rows to delete (ADR-0018). It is empty when
+	// there is nothing to delete. It is sorted by the referencing table and
+	// then by the name of the constraint.
+	References []Reference
+}
+
+// Reference is one foreign key that points at rows to delete.
+type Reference struct {
+	// Table and Columns are the referencing table and its columns.
+	Table   declaration.TableName
+	Columns []string
+	// Constraint is the name of the foreign key.
+	Constraint string
+	// OnDelete is what the foreign key does when a referenced row is
+	// deleted, as SQL writes it: NO ACTION, RESTRICT, CASCADE, SET NULL, or
+	// SET DEFAULT.
+	OnDelete string
+	// Rows is the number of rows of Table that reference a row to delete. A
+	// foreign key with no such row is left out.
+	Rows int
+	// Unreadable is true when the role may not read Table, so the rows
+	// could not be counted. Rows is then 0.
+	Unreadable bool
 }
 
 // Table is the plan of one table.

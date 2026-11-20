@@ -1,0 +1,11 @@
+catalog.plans (sync, key: code)
+  + code=team  name=Team
+  ~ code=pro  name: Pro -> "Pro Plan"
+  - code=legacy
+    referenced by 2 rows of billing.subscriptions (plan_code), subscriptions_plan_code_fkey: ON DELETE NO ACTION, so the deletion fails while these rows reference it
+  1 to insert, 1 to update, 1 to delete
+
+Plan: 1 to insert, 1 to update, 1 to delete in 1 table.
+
+Applied: 1 inserted, 1 updated, 0 deleted.
+Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.

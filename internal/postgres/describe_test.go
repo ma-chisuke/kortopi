@@ -143,8 +143,8 @@ func testMeta() *tableMeta {
 			{name: "id", notNull: true, typ: 23, eq: op, ordered: true},
 			{name: "name", typ: 25, eq: op, ordered: true},
 			{name: "p", typ: 600, eq: textEquality},
-			{name: "gen", generated: true, typ: 23, eq: op, ordered: true},
-			{name: "ident", notNull: true, identityAlways: true, typ: 23, eq: op, ordered: true},
+			{name: "gen", generated: true, hasDefault: true, typ: 23, eq: op, ordered: true},
+			{name: "ident", notNull: true, identityAlways: true, hasDefault: true, typ: 23, eq: op, ordered: true},
 			{name: "x", typ: 28, eq: op},
 		},
 		primaryKey: []string{"id"},
@@ -157,8 +157,8 @@ func TestTableMetaInfo(t *testing.T) {
 	want := plan.TableInfo{
 		Exists: true,
 		Columns: []plan.ColumnInfo{
-			{Name: "id", NotNull: true}, {Name: "name"}, {Name: "p"}, {Name: "gen", Generated: true},
-			{Name: "ident", NotNull: true, IdentityAlways: true},
+			{Name: "id", NotNull: true}, {Name: "name"}, {Name: "p"}, {Name: "gen", Generated: true, HasDefault: true},
+			{Name: "ident", NotNull: true, IdentityAlways: true, HasDefault: true},
 			{Name: "x"},
 		},
 		PrimaryKey: []string{"id"},

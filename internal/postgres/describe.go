@@ -25,6 +25,18 @@ type tableMeta struct {
 	columns     []columnMeta
 	primaryKey  []string
 	uniqueKeys  [][]string
+	// setAsideKeys are the unique keys that cannot match rows as a plan
+	// compares them.
+	setAsideKeys []plan.SetAsideKey
+	// oid is the OID of the table.
+	oid uint32
+	// keyIndexes holds the columns of the index of each key, by the name of
+	// the index, which is also the name of its constraint, and by the names
+	// of the indexes of its partitions.
+	keyIndexes map[string][]string
+	// deletable is true when the role of the session may delete rows of the
+	// table.
+	deletable bool
 }
 
 // columnMeta is what a session knows about a column from the catalogs.
@@ -35,24 +47,31 @@ type columnMeta struct {
 	// identityAlways is true for an identity column declared GENERATED
 	// ALWAYS.
 	identityAlways bool
-	typ            uint32
-	eq             equality
+	// hasDefault is true when a new row gets a value for the column without
+	// naming it: the column has a default, its type is a domain with a
+	// default, or it is an identity or a generated column.
+	hasDefault bool
+	typ        uint32
+	eq         equality
 	// ordered is true when the type has a B-tree ordering, which a key
 	// column needs to sort and to match rows.
 	ordered bool
 	// dateTime is true when the type involves a date or time type, which
 	// reads words such as now as the time of the plan.
 	dateTime bool
-	// selectable is true when the role of the session may read the column.
+	// selectable, insertable, and updatable are true when the role of the
+	// session may read the column, insert into it, and update it.
 	selectable bool
+	insertable bool
+	updatable  bool
 }
 
 // info returns what the plan needs to know about the table.
 func (m *tableMeta) info() plan.TableInfo {
-	info := plan.TableInfo{Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys}
+	info := plan.TableInfo{Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys}
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
-			Name: c.name, NotNull: c.notNull, Generated: c.generated, IdentityAlways: c.identityAlways,
+			Name: c.name, NotNull: c.notNull, Generated: c.generated, IdentityAlways: c.identityAlways, HasDefault: c.hasDefault,
 		})
 	}
 	return info
@@ -122,7 +141,7 @@ func (s *Session) describe(ctx context.Context, names []declaration.TableName) (
 		if _, ok := metas[name]; ok {
 			continue
 		}
-		metas[name] = &tableMeta{name: name}
+		metas[name] = &tableMeta{name: name, keyIndexes: make(map[string][]string)}
 		schemas = append(schemas, name.Schema)
 		tables = append(tables, name.Name)
 	}
@@ -150,7 +169,12 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			c.relkind IN ('r', 'p') AND pg_catalog.row_security_active(c.oid),
 			pg_catalog.has_schema_privilege(n.oid, 'USAGE'),
 			a.attname::pg_catalog.text, a.attnotnull, a.attgenerated <> '', a.attidentity = 'a', a.atttypid,
-			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT')
+			a.atthasdef OR a.attidentity <> '' OR a.attgenerated <> ''
+				OR EXISTS (SELECT FROM pg_catalog.pg_type AS ty WHERE ty.oid = a.atttypid AND ty.typdefaultbin IS NOT NULL),
+			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT'),
+			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'INSERT'),
+			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'UPDATE'),
+			c.relkind IN ('r', 'p') AND pg_catalog.has_table_privilege(c.oid, 'DELETE')
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 		JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 		JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
@@ -167,12 +191,12 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 	for rows.Next() {
 		var schema, table, kind string
 		var oid uint32
-		var rowSecurity, schemaUsage, selectable bool
+		var rowSecurity, schemaUsage, selectable, insertable, updatable, deletable bool
 		var column *string
-		var notNull, generated, identityAlways *bool
+		var notNull, generated, identityAlways, hasDefault *bool
 		var typ *uint32
-		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ,
-			&selectable); err != nil {
+		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault,
+			&selectable, &insertable, &updatable, &deletable); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
@@ -189,11 +213,14 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.partitioned = kind == "p"
 		m.rowSecurity = rowSecurity
 		m.schemaUsage = schemaUsage
+		m.deletable = deletable
+		m.oid = oid
 		byOID[oid] = m
 		if column != nil {
 			m.columns = append(m.columns, columnMeta{
 				name: *column, notNull: *notNull, generated: *generated, identityAlways: *identityAlways, typ: *typ,
-				selectable: selectable,
+				hasDefault: *hasDefault,
+				selectable: selectable, insertable: insertable, updatable: updatable,
 			})
 		}
 	}
@@ -215,29 +242,34 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 // equality of its type. A key is kept only when its index agrees: for every
 // key column, the collation of the index is that of the column, and the
 // operator class is a default one. Otherwise the index could hold two rows
-// that a plan takes for one, or tell apart two rows that a plan matches.
+// that a plan takes for one, or tell apart two rows that a plan matches; such
+// a key is set aside, with the reason, so that an error can name it.
 func (s *Session) readKeys(ctx context.Context, byOID map[uint32]*tableMeta) error {
 	oids := make([]uint32, 0, len(byOID))
 	for oid := range byOID {
 		oids = append(oids, oid)
 	}
-	rows, err := s.tx.Query(ctx, `SELECT i.indrelid, i.indisprimary,
+	rows, err := s.tx.Query(ctx, `SELECT i.indrelid, i.indisprimary, ic.relname::pg_catalog.text,
+			ARRAY(SELECT pc.relname::pg_catalog.text FROM pg_catalog.pg_partition_tree(i.indexrelid::pg_catalog.regclass) AS pt
+				JOIN pg_catalog.pg_class AS pc ON pc.oid = pt.relid),
 			ARRAY(SELECT a.attname::pg_catalog.text
 				FROM pg_catalog.unnest(i.indkey::pg_catalog.int2[]) WITH ORDINALITY AS k(attnum, n)
 				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
 				WHERE k.n <= i.indnkeyatts
-				ORDER BY k.n)
-		FROM pg_catalog.pg_index AS i
-		JOIN pg_catalog.pg_class AS ic ON ic.oid = i.indexrelid
-		WHERE i.indrelid = ANY ($1::pg_catalog.oid[]) AND i.indisunique
-			AND (i.indisprimary OR (i.indisvalid AND i.indimmediate AND i.indpred IS NULL AND i.indexprs IS NULL))
-			AND NOT EXISTS (SELECT
+				ORDER BY k.n),
+			(SELECT ARRAY[CASE WHEN k.coll IS DISTINCT FROM a.attcollation THEN 'collation' ELSE 'class' END,
+					a.attname::pg_catalog.text]
 				FROM ROWS FROM (pg_catalog.unnest(i.indkey::pg_catalog.int2[]),
 					pg_catalog.unnest(i.indcollation::pg_catalog.oid[]),
 					pg_catalog.unnest(i.indclass::pg_catalog.oid[])) WITH ORDINALITY AS k(attnum, coll, opclass, n)
 				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
 				JOIN pg_catalog.pg_opclass AS oc ON oc.oid = k.opclass
-				WHERE k.n <= i.indnkeyatts AND (k.coll IS DISTINCT FROM a.attcollation OR NOT oc.opcdefault))
+				WHERE k.n <= i.indnkeyatts AND (k.coll IS DISTINCT FROM a.attcollation OR NOT oc.opcdefault)
+				ORDER BY k.n LIMIT 1)
+		FROM pg_catalog.pg_index AS i
+		JOIN pg_catalog.pg_class AS ic ON ic.oid = i.indexrelid
+		WHERE i.indrelid = ANY ($1::pg_catalog.oid[]) AND i.indisunique
+			AND (i.indisprimary OR (i.indisvalid AND i.indimmediate AND i.indpred IS NULL AND i.indexprs IS NULL))
 		ORDER BY i.indrelid, i.indisprimary DESC, ic.relname`, oids)
 	if err != nil {
 		return fmt.Errorf("read the keys of the tables: %w", err)
@@ -246,15 +278,30 @@ func (s *Session) readKeys(ctx context.Context, byOID map[uint32]*tableMeta) err
 	for rows.Next() {
 		var oid uint32
 		var primary bool
-		var columns []string
-		if err := rows.Scan(&oid, &primary, &columns); err != nil {
+		var index string
+		var partitions, columns, setAside []string
+		if err := rows.Scan(&oid, &primary, &index, &partitions, &columns, &setAside); err != nil {
 			return fmt.Errorf("read the keys of the tables: %w", err)
 		}
 		m := byOID[oid]
-		if primary {
+		switch {
+		case len(setAside) == 2:
+			reason := fmt.Sprintf("its index uses another collation than column %q", setAside[1])
+			if setAside[0] == "class" {
+				reason = fmt.Sprintf("its index uses an operator class that is not the default for column %q", setAside[1])
+			}
+			m.setAsideKeys = append(m.setAsideKeys, plan.SetAsideKey{Columns: columns, Reason: reason})
+		case primary:
 			m.primaryKey = columns
-		} else {
+		default:
 			m.uniqueKeys = append(m.uniqueKeys, columns)
+		}
+		if len(setAside) != 2 {
+			// The index of a partition names an error on a row of that
+			// partition: it is the key of the partitioned table too.
+			for _, name := range append(partitions, index) {
+				m.keyIndexes[name] = columns
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {

@@ -336,6 +336,15 @@ kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans i
 
 キーの列をファイルに足すか、ファイルにある列からなる一意キーを `key` で指定する。
 
+### 行を照合できないキー
+
+```text
+kortopi: table facility.room_types has no primary key that can match rows; the unique key ("code") cannot, because its index uses another collation than column "code": name the columns of a unique key that can with key in [tables."facility.room_types"] of data/kortopi.toml
+kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a unique key that cannot match rows, because its index uses an operator class that is not the default for column "code": name the columns of the primary key or of another unique key
+```
+
+列とは違う照合順序や、既定でない演算子クラスを使う一意インデックスは、計画が比べるとおりには行を照合できない。列そのものに一意インデックスを作るか、別のキーを指定する。
+
 ### 2つの行が持つキー
 
 ```text
@@ -347,6 +356,14 @@ kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would
 ```text
 kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
 ```
+
+### 挿入する行が値を得られない列
+
+```text
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+```
+
+どの行にも値を書いてその列を宣言するか、スキーマを変える道具でその列に既定値を与える。
 
 ### CSV ファイルの中の現在の時刻を表す語
 
@@ -360,8 +377,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の5つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
-そのうち最初のものは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
-残りの4つは、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
+最後の7つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
-<!-- i18n-source: declaration.md sha256:6dd1d5f76b62df72f53a90a31fa6a334c6d5ebde482c3f3aa1c5ad56c8d000cf -->
+- キーの列のないファイルと、行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
+- 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
+- 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
+
+<!-- i18n-source: declaration.md sha256:63151c0a7ff0a062d5a5027fd8a5789ab2d8ec6f29fba61658e7231e52a47318 -->

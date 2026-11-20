@@ -56,7 +56,7 @@ func (db testDB) session(t *testing.T, dir string) *Session {
 // sessionWith connects a session with cfg, and closes it when the test ends.
 func (db testDB) sessionWith(t *testing.T, cfg *pgx.ConnConfig, dir string) *Session {
 	t.Helper()
-	s, err := ConnectConfig(t.Context(), cfg, dir)
+	s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

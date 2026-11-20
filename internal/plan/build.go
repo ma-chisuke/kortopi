@@ -22,11 +22,14 @@ import (
 // with the kinds of change that the mode of the table allows (ADR-0013).
 //
 // Mistakes in the declaration or the settings are reported together, one error
-// for each, before the database loads any row. An error of the database stops
-// the build at once. The contract does not tie such an error to one table, so
-// Build cannot tell an error in the rows of one table, after which the next
-// table could still be compared, from an error of the session, such as a
-// broken connection, which would repeat for every table that follows.
+// for each, before the database loads any row. A column that the rows to
+// insert of a table would lack, NOT NULL and without a default, shows only
+// with the difference; such mistakes of all tables are reported together
+// after the comparison. An error of the database stops the build at once.
+// The contract does not tie such an error to one table, so Build cannot tell
+// an error in the rows of one table, after which the next table could still
+// be compared, from an error of the session, such as a broken connection,
+// which would repeat for every table that follows.
 func Build(ctx context.Context, decl *declaration.Declaration, settings *config.Settings, db Database) (*Plan, error) {
 	if len(decl.Tables) == 0 {
 		return &Plan{}, nil
@@ -79,22 +82,59 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		return nil, errors.Join(errs...)
 	}
 
+	// A table whose rows to insert lack a value that the table needs is a
+	// mistake that only the difference shows. Such mistakes are collected,
+	// and the error of the database that stops the build comes after them.
 	for i := range tables {
 		if tables[i].PendingTable {
 			n, err := db.CountRows(ctx, decl.Tables[i])
 			if err != nil {
-				return nil, err
+				return nil, joinAfter(errs, err)
 			}
 			tables[i].DeclaredRows = n
 			continue
 		}
 		diff, err := db.Diff(ctx, requests[i])
 		if err != nil {
-			return nil, err
+			return nil, joinAfter(errs, err)
 		}
 		tables[i].Diff = diff
+		if n := len(diff.Inserts); n > 0 {
+			dt := &decl.Tables[i]
+			errs = append(errs, missingValues(dt, dt.Path(decl.Dir), infos[dt.Name], n)...)
+		}
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return &Plan{Tables: tables}, nil
+}
+
+// joinAfter returns err after the mistakes in errs, or err alone.
+func joinAfter(errs []error, err error) error {
+	if len(errs) == 0 {
+		return err
+	}
+	return errors.Join(append(errs, err)...)
+}
+
+// missingValues returns an error for each column that a new row of the table
+// needs and the declaration does not name: NOT NULL, and without a default.
+// Each of the inserts rows to insert would fail on it.
+func missingValues(t *declaration.Table, file string, info TableInfo, inserts int) []error {
+	rows := "the " + strconv.Itoa(inserts) + " rows"
+	if inserts == 1 {
+		rows = "the row"
+	}
+	var errs []error
+	for _, c := range info.Columns {
+		if c.NotNull && !c.HasDefault && !slices.Contains(t.Columns, c.Name) {
+			errs = append(errs, fmt.Errorf("%s: column %q of table %s is NOT NULL and has no default, and the declaration does not name it, "+
+				"so %s to insert would get no value for it: declare the column, or give it a default in the schema",
+				file, c.Name, t.Name, rows))
+		}
+	}
+	return errs
 }
 
 // kinds returns whether the mode of a table allows updates and deletes.
@@ -198,6 +238,16 @@ func (c *check) notNull(compare []string) []string {
 // primaryKey returns the primary key of the table as its match key.
 func (c *check) primaryKey() ([]string, []error) {
 	if len(c.info.PrimaryKey) == 0 {
+		if len(c.info.SetAsideKeys) > 0 {
+			// The table has a key, maybe its primary key, that the plan
+			// cannot use: say which, and why.
+			var unusable []string
+			for _, k := range c.info.SetAsideKeys {
+				unusable = append(unusable, fmt.Sprintf("; the unique key (%s) cannot, because %s", quoteAll(k.Columns), k.Reason))
+			}
+			return nil, []error{fmt.Errorf("table %s has no primary key that can match rows%s: name the columns of a unique key that can with key in [tables.%s] of %s",
+				c.table.Name, strings.Join(unusable, ""), strconv.Quote(c.table.Name.String()), c.settingsFile)}
+		}
 		return nil, []error{fmt.Errorf("table %s has no primary key: name the columns of a unique key with key in [tables.%s] of %s",
 			c.table.Name, strconv.Quote(c.table.Name.String()), c.settingsFile)}
 	}
@@ -245,6 +295,12 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 	}
 
 	if !c.isKey(key) {
+		for _, k := range c.info.SetAsideKeys {
+			if sameColumns(key, k.Columns) {
+				return nil, []error{fmt.Errorf("%s: key (%s) of table %s is a unique key that cannot match rows, because %s: name the columns of the primary key or of another unique key",
+					c.settingsFile, quoteAll(key), c.table.Name, k.Reason)}
+			}
+		}
 		return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint",
 			c.settingsFile, quoteAll(key), c.table.Name)}
 	}

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -188,14 +189,8 @@ func tableReplacement(temp string) string {
 // declared rows d and the stored rows s, and takes the conditions from the
 // methods match and differs.
 //
-// Apply builds its statements from the same parts, so that it changes
-// exactly the rows that a plan shows:
-//
-//	INSERT INTO <stored> (<key>, <compare>)
-//	  SELECT <key>, <compare> FROM <declared> AS d WHERE <missing>
-//	UPDATE <stored> AS s SET <c> = d.<c>, ...
-//	  FROM <declared> AS d WHERE <match> AND (<differs c> OR ...)
-//	DELETE FROM <stored> AS s WHERE <unmatched>
+// An apply builds its statements from the same parts, so that it changes
+// exactly the rows that a plan shows: insertSQL, updateSQL, and deleteSQL.
 type comparison struct {
 	// stored is the real table: qualified, quoted, and after ONLY for a table
 	// that is not partitioned, so that the rows of a child table that
@@ -207,15 +202,28 @@ type comparison struct {
 	compare  []column
 	// notNull holds the compared columns that the table declares NOT NULL.
 	notNull []column
+	// table is the real table, qualified and quoted, without ONLY, for
+	// INSERT, which takes no ONLY.
+	table string
+	// overriding is true when a declared column is an identity column that
+	// is GENERATED ALWAYS, which an insert sets only with OVERRIDING SYSTEM
+	// VALUE.
+	overriding bool
 }
 
 // match returns the condition that pairs a declared row with a stored row:
 // every key column is equal. Key columns are never NULL here: the real table
 // holds no NULL in them, and keyNullsSQL finds the declared rows that do.
 func (c *comparison) match() string {
+	return c.matchWith(storedAlias)
+}
+
+// matchWith returns the condition of match, with the stored row called
+// alias.
+func (c *comparison) matchWith(alias string) string {
 	parts := make([]string, len(c.key))
 	for i, k := range c.key {
-		parts[i] = equalExpr(k.eq, declaredAlias+"."+quoteIdent(k.name), storedAlias+"."+quoteIdent(k.name))
+		parts[i] = equalExpr(k.eq, declaredAlias+"."+quoteIdent(k.name), alias+"."+quoteIdent(k.name))
 	}
 	return strings.Join(parts, " AND ")
 }
@@ -382,6 +390,110 @@ func (c *comparison) updatesSQL() string {
 	b.WriteString(" WHERE " + strings.Join(conds, " OR "))
 	b.WriteString(" ORDER BY " + c.orderBy(declaredAlias))
 	return b.String()
+}
+
+// insertSQL inserts the declared rows that no stored row matches: the rows of
+// insertsSQL. It names the key and the compared columns, so that every other
+// column gets its default (ADR-0011).
+func (c *comparison) insertSQL() string {
+	columns := slices.Concat(c.key, c.compare)
+	names := make([]string, len(columns))
+	for i, col := range columns {
+		names[i] = col.name
+	}
+	overriding := ""
+	if c.overriding {
+		overriding = " OVERRIDING SYSTEM VALUE"
+	}
+	return "INSERT INTO " + c.table + " (" + quoteColumns("", names) + ")" + overriding +
+		" SELECT " + quoteColumns(declaredAlias+".", names) + " FROM " + c.declared + " AS " + declaredAlias +
+		" WHERE " + c.missing()
+}
+
+// updateSQL updates the stored rows in which a compared column differs from
+// the declared row: the rows of updatesSQL. Every compared column is a
+// target of the statement, so the role needs UPDATE on each, and a trigger
+// UPDATE OF one of them fires; a column whose value does not differ gets its
+// stored value back, so an equal value stays as it is stored, such as 1.0
+// for a declared 1.00.
+func (c *comparison) updateSQL() string {
+	sets := make([]string, len(c.compare))
+	conds := make([]string, len(c.compare))
+	for i, col := range c.compare {
+		conds[i] = c.differs(col)
+		sets[i] = quoteIdent(col.name) + " = CASE WHEN " + conds[i] + " THEN " + declaredAlias + "." + quoteIdent(col.name) +
+			" ELSE " + storedAlias + "." + quoteIdent(col.name) + " END"
+	}
+	return "UPDATE " + c.stored + " AS " + storedAlias + " SET " + strings.Join(sets, ", ") +
+		" FROM " + c.declared + " AS " + declaredAlias + " WHERE " + c.match() + " AND (" + strings.Join(conds, " OR ") + ")"
+}
+
+// deleteSQL deletes the stored rows that no declared row matches: the rows
+// of deletesSQL.
+func (c *comparison) deleteSQL() string {
+	return "DELETE FROM " + c.stored + " AS " + storedAlias + " WHERE " + c.unmatched()
+}
+
+// referencingAlias is the alias of the referencing rows in referencesSQL.
+const referencingAlias = "r"
+
+// foreignKey is a foreign key that points at the table of a comparison, or
+// at one of its partitions.
+type foreignKey struct {
+	name string
+	// table is the referencing table, and from its name, qualified and
+	// quoted, after ONLY for a table that is not partitioned.
+	table declaration.TableName
+	from  string
+	// to is the referenced relation, as from: the table of the comparison,
+	// or a partition of it.
+	to string
+	// columns are the referencing columns, and referenced the columns of
+	// the table that they point at, in the same order. ops are the equality
+	// operators of the foreign key, one for each pair, and collations the
+	// collation of each referenced column, qualified and quoted, where it
+	// differs from that of the referencing column, as PostgreSQL itself
+	// compares them.
+	columns    []string
+	referenced []string
+	ops        []equality
+	collations []string
+	onDelete   string
+	// readable is false when the role may not read the referencing columns
+	// or the referenced columns.
+	readable bool
+	// self is true for a foreign key from the table to itself.
+	self bool
+}
+
+// referencesSQL counts the rows of the referencing table of fk that point
+// at a row to delete, joined on the columns of the foreign key with its own
+// equality, not on the match key. For a foreign key from the table to
+// itself, it counts only the rows that stay. With written, it also counts,
+// in a second column, the rows among them that the current transaction
+// wrote.
+func (c *comparison) referencesSQL(fk foreignKey, written bool) string {
+	parts := make([]string, 0, len(fk.columns)+1)
+	for i := range fk.columns {
+		ref := referencingAlias + "." + quoteIdent(fk.columns[i])
+		if i < len(fk.collations) && fk.collations[i] != "" {
+			ref = "(" + ref + " COLLATE " + fk.collations[i] + ")"
+		}
+		// The operators of a foreign key take the referenced value first.
+		parts = append(parts, equalExpr(fk.ops[i], storedAlias+"."+quoteIdent(fk.referenced[i]), ref))
+	}
+	parts = append(parts, c.unmatched())
+	counts := "pg_catalog.count(*)"
+	if written {
+		counts += ", pg_catalog.count(*) FILTER (WHERE " + referencingAlias +
+			".xmin OPERATOR(pg_catalog.=) pg_catalog.pg_current_xact_id()::pg_catalog.xid)"
+	}
+	sql := "SELECT " + counts + " FROM " + fk.from + " AS " + referencingAlias +
+		" WHERE EXISTS (SELECT FROM " + fk.to + " AS " + storedAlias + " WHERE " + strings.Join(parts, " AND ") + ")"
+	if fk.self {
+		sql += " AND EXISTS (SELECT FROM " + c.declared + " AS " + declaredAlias + " WHERE " + c.matchWith(referencingAlias) + ")"
+	}
+	return sql
 }
 
 // deletesSQL lists the keys of the stored rows that no declared row matches.

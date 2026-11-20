@@ -1,0 +1,11 @@
+catalog.plans (sync, key: code)
+  + code=team  name=Team
+  ~ code=pro  name: Pro -> "Pro Plan"
+  - code=legacy
+    referenced by 2 rows of billing.subscriptions (plan_code), subscriptions_plan_code_fkey: ON DELETE NO ACTION, so the deletion fails while these rows reference it
+  1 to insert, 1 to update, 1 to delete
+
+Plan: 1 to insert, 1 to update, 1 to delete in 2 tables.
+1 table without changes is not shown.
+
+Applied: 1 inserted, 1 updated, 1 deleted.

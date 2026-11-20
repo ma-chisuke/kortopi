@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -289,14 +290,24 @@ UNION ALL SELECT 'operator ' || oid::regoperator::text FROM pg_operator
 UNION ALL SELECT 'extension ' || extname FROM pg_extension
 ORDER BY 1`
 
+// temporarySchema matches the temporary schemas of PostgreSQL itself,
+// pg_temp_N and pg_toast_temp_N. A backend makes them the first time that a
+// session creates a temporary table, and keeps them, empty, after the
+// session: a commit of an apply leaves them in the catalogs. They are not
+// objects of kortopi.
+var temporarySchema = regexp.MustCompile(`^schema pg_(toast_)?temp_\d+$`)
+
 // Objects lists the objects that the catalogs of the database hold, sorted,
-// so that a test can show that a plan left none behind (ADR-0010).
+// so that a test can show that a plan or an apply left none behind
+// (ADR-0010). It leaves out the temporary schemas of PostgreSQL itself.
 func (db *DB) Objects(t *testing.T) []string {
 	t.Helper()
 	rows := db.Query(t, objectsSQL)
-	out := make([]string, len(rows))
-	for i, r := range rows {
-		out[i] = r[0]
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if !temporarySchema.MatchString(r[0]) {
+			out = append(out, r[0])
+		}
 	}
 	return out
 }

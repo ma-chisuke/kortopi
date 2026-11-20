@@ -213,6 +213,39 @@ func TestRender(t *testing.T) {
 			name: "no_changes",
 			plan: &Plan{Tables: []Table{unchangedTable("app", "a"), unchangedTable("app", "b")}},
 		},
+		{
+			name: "references",
+			plan: &Plan{Tables: []Table{
+				{
+					Name: name("facility", "room_types"), Mode: config.ModeSync,
+					Key: []string{"code"}, Compare: []string{"name"},
+					Diff: TableDiff{
+						Inserts: []Row{{Key: values("suite"), Values: values("Suite")}},
+						Deletes: []Row{{Key: values("old")}, {Key: values("older")}},
+						References: []Reference{
+							{Table: name("facility", "room_types"), Columns: []string{"replaced_by"}, Constraint: "room_types_replaced_by_fkey", OnDelete: "SET NULL", Rows: 1},
+							{Table: name("facility", "rooms"), Columns: []string{"room_type"}, Constraint: "rooms_room_type_fkey", OnDelete: "CASCADE", Rows: 3},
+							{Table: name("reservation", "audit"), Columns: []string{"room_type_id"}, Constraint: "audit_room_type_fkey", OnDelete: "NO ACTION", Unreadable: true},
+							{Table: name("reservation", "bookings"), Columns: []string{"room_type_id"}, Constraint: "fk_bookings_room_type", OnDelete: "NO ACTION", Rows: 12},
+							{Table: name("reservation", "holds"), Columns: []string{"room_type", "hotel"}, Constraint: "holds fk", OnDelete: "RESTRICT", Rows: 2},
+							{Table: name("reservation", "quotes"), Columns: []string{"room_type"}, Constraint: "quotes_room_type_fkey", OnDelete: "SET DEFAULT", Rows: 4},
+							{Table: name("reservation", "waits"), Columns: []string{"room_type"}, Constraint: "waits_room_type_fkey", OnDelete: "SOMETHING NEW", Rows: 5},
+						},
+					},
+				},
+				{
+					Name: name("geo", "regions"), Mode: config.ModeSync,
+					Key: []string{"code"}, Compare: []string{"name"},
+					Diff: TableDiff{
+						Deletes: []Row{{Key: values("north")}},
+						References: []Reference{
+							{Table: name("geo", "prefectures"), Columns: []string{"region"}, Constraint: "prefectures_region_fkey", OnDelete: "NO ACTION", Rows: 1},
+							{Table: name("geo", "stations"), Columns: []string{"region"}, Constraint: "stations_region_fkey", OnDelete: "CASCADE", Rows: 1},
+						},
+					},
+				},
+			}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

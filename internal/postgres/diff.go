@@ -30,9 +30,14 @@ const maxFlaggedRows = 5
 // delete, each sorted by the match key in the order of the key's types.
 // Values are text as PostgreSQL prints them.
 //
-// The work of one table runs inside a savepoint that is rolled back at the
-// end, so the temporary table goes away at once, and an error leaves the
-// session usable.
+// The work of one table runs inside a savepoint, so that an error leaves the
+// session usable. In a plan, the savepoint is rolled back at the end, so the
+// temporary table goes away at once. In an apply, it is released, and the
+// declared rows stay loaded until the session ends, for Insert, Update, and
+// Delete.
+//
+// When the table has rows to delete, Diff also counts the rows of other
+// tables that reference them (ADR-0018).
 func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
 	table := req.Table
 	meta, err := s.table(ctx, table.Name)
@@ -40,7 +45,7 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDif
 		return plan.TableDiff{}, err
 	}
 	if !meta.exists {
-		return plan.TableDiff{}, fmt.Errorf("table %s does not exist: a plan compares the rows of existing tables only", table.Name)
+		return plan.TableDiff{}, fmt.Errorf("table %s does not exist: %s compares the rows of existing tables only", table.Name, s.needs())
 	}
 	columns, c, err := s.prepare(meta, req)
 	if err != nil {
@@ -55,12 +60,13 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDif
 	}
 	if meta.rowSecurity {
 		return plan.TableDiff{}, fmt.Errorf("table %s has row-level security, so the role %q sees only the rows that its policies allow, "+
-			"and a plan would take the others for missing rows: plan as a role with BYPASSRLS, "+
-			"or as the owner of the table if the table does not force row-level security", table.Name, s.role)
+			"and %s would take the others for missing rows: %s as a role with BYPASSRLS, "+
+			"or as the owner of the table if the table does not force row-level security", table.Name, s.role, s.needs(), s.work())
 	}
 
 	var diff plan.TableDiff
-	err = s.savepoint(ctx, func(tx pgx.Tx) error {
+	var keys []foreignKey
+	err = s.savepoint(ctx, s.apply, func(tx pgx.Tx) error {
 		// The words for relative times are checked before the typed load
 		// turns them into dates.
 		if err := s.checkRelativeTimes(ctx, tx, table, c, dateTimeColumns(meta, table)); err != nil {
@@ -95,10 +101,25 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDif
 				return fmt.Errorf("find the rows to delete from table %s: %w", table.Name, err)
 			}
 		}
+		if len(diff.Deletes) > 0 {
+			if diff.References, keys, err = s.references(ctx, tx, meta, c); err != nil {
+				return fmt.Errorf("count the references to the rows to delete from table %s: %w", table.Name, err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return plan.TableDiff{}, err
+	}
+	if s.apply {
+		lt := &loadedTable{
+			meta: meta, c: c, inserts: len(diff.Inserts), updates: len(diff.Updates), deletes: len(diff.Deletes),
+			refs: diff.References, keys: keys,
+		}
+		if err := s.checkWrites(lt, table); err != nil {
+			return plan.TableDiff{}, err
+		}
+		s.loaded[table.Name] = lt
 	}
 	return diff, nil
 }
@@ -120,9 +141,14 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 		_, typed := meta.column(name)
 		columns[i] = tempColumn{name: name, typed: typed}
 	}
-	c := &comparison{stored: quoteTable(table.Name), declared: s.nextTemp()}
+	c := &comparison{stored: quoteTable(table.Name), table: quoteTable(table.Name), declared: s.nextTemp()}
 	if !meta.partitioned {
 		c.stored = "ONLY " + c.stored
+	}
+	for _, name := range req.Key {
+		if col, ok := meta.column(name); ok && col.identityAlways {
+			c.overriding = true
+		}
 	}
 	var err error
 	if c.key, err = requestColumns(meta, table, req.Key); err != nil {
@@ -161,8 +187,8 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 // statements that compare the rows.
 func (s *Session) checkPrivileges(meta *tableMeta, table declaration.Table) error {
 	if !meta.schemaUsage {
-		return fmt.Errorf("a plan needs USAGE on schema %q and SELECT on table %s, and the role %q lacks USAGE on the schema: "+
-			"grant the role USAGE on the schema and SELECT on the table", table.Name.Schema, table.Name, s.role)
+		return fmt.Errorf("%s needs USAGE on schema %q and SELECT on table %s, and the role %q lacks USAGE on the schema: "+
+			"grant the role USAGE on the schema and SELECT on the table", s.needs(), table.Name.Schema, table.Name, s.role)
 	}
 	var denied []string
 	declared := 0
@@ -178,11 +204,11 @@ func (s *Session) checkPrivileges(meta *tableMeta, table declaration.Table) erro
 	case len(denied) == 0:
 		return nil
 	case len(denied) == declared:
-		return fmt.Errorf("a plan needs SELECT on table %s, and the role %q lacks it: grant the role SELECT on the table",
-			table.Name, s.role)
+		return fmt.Errorf("%s needs SELECT on table %s, and the role %q lacks it: grant the role SELECT on the table",
+			s.needs(), table.Name, s.role)
 	}
-	return fmt.Errorf("a plan needs SELECT on table %s, and the role %q may not read its column %q: grant the role SELECT on the table",
-		table.Name, s.role, denied[0])
+	return fmt.Errorf("%s needs SELECT on table %s, and the role %q may not read its column %q: grant the role SELECT on the table",
+		s.needs(), table.Name, s.role, denied[0])
 }
 
 // dateTimeColumns returns the declared columns of table that the real table
@@ -250,7 +276,7 @@ func (s *Session) CountRows(ctx context.Context, table declaration.Table) (int, 
 		return 0, err
 	}
 	var n int64
-	err := s.savepoint(ctx, func(tx pgx.Tx) error {
+	err := s.savepoint(ctx, false, func(tx pgx.Tx) error {
 		temp := s.nextTemp()
 		if err := s.create(ctx, tx, table, createTextSQL(temp, table.Columns)); err != nil {
 			return err
@@ -271,17 +297,24 @@ func (s *Session) nextTemp() string {
 	return tempTable(s.temps)
 }
 
-// savepoint runs f inside a savepoint, and rolls back to the savepoint when
-// f returns.
-func (s *Session) savepoint(ctx context.Context, f func(tx pgx.Tx) error) error {
-	if s.closed {
-		return errors.New("the session is closed")
+// savepoint runs f inside a savepoint. It rolls back to the savepoint when f
+// fails, or when keep is false. When keep is true and f succeeds, it
+// releases the savepoint, so that what f did stays.
+func (s *Session) savepoint(ctx context.Context, keep bool, f func(tx pgx.Tx) error) error {
+	if s.closed || s.committed {
+		return errors.New("the session has ended")
 	}
 	tx, err := s.tx.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("start a savepoint: %w", err)
 	}
 	ferr := f(tx)
+	if keep && ferr == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("release the savepoint: %w", err)
+		}
+		return nil
+	}
 	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
 		return errors.Join(ferr, fmt.Errorf("roll back to the savepoint: %w", err))
 	}
@@ -294,7 +327,7 @@ func (s *Session) create(ctx context.Context, tx pgx.Tx, table declaration.Table
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "25006" {
 			// read_only_sql_transaction: checkTemporary did not see it coming.
-			return temporaryError(s.databaseName, "the transaction is read-only")
+			return s.temporaryError("the transaction is read-only")
 		}
 		return fmt.Errorf("create the temporary table of table %s: %w", table.Name, err)
 	}
@@ -516,6 +549,13 @@ func (s *Session) checkRelativeTimes(ctx context.Context, tx pgx.Tx, table decla
 	found, err := queryFlagged(ctx, tx, c.flaggedSQL(temp, relativeTimeFlags(columns), false), c.key)
 	if err != nil {
 		return fmt.Errorf("check the dates and times of the declared rows of table %s: %w", table.Name, err)
+	}
+	if s.apply {
+		// The savepoint of an apply keeps what it made; this table is no
+		// longer needed.
+		if _, err := tx.Exec(ctx, "DROP TABLE "+temp); err != nil {
+			return fmt.Errorf("drop the text of the declared rows of table %s: %w", table.Name, err)
+		}
 	}
 	errs := make([]error, 0, len(found))
 	for _, f := range found {

@@ -22,17 +22,25 @@ import (
 // a build with `go install` takes it from the module information instead.
 var version = ""
 
-const usage = "kortopi manages the rows of PostgreSQL master tables declaratively.\n" +
+var usage = "kortopi manages the rows of PostgreSQL master tables declaratively.\n" +
 	"\n" +
 	"usage: kortopi <command> [flags]\n" +
 	"\n" +
 	"commands:\n" +
 	"  plan      show how the database differs from the declaration\n" +
+	"  apply     change the rows of the database to match the declaration\n" +
 	"  version   print the version of kortopi\n" +
 	"  help      print this help, or the help of a command\n" +
 	"\n" +
+	"flags of plan and apply:\n" +
+	sourceFlags("use") +
+	connectionFlags +
+	"\n" +
 	"flags of plan:\n" +
-	planFlags +
+	planOnlyFlags +
+	"\n" +
+	"flags of apply:\n" +
+	applyOnlyFlags +
 	"\n" +
 	connectionHelp
 
@@ -75,6 +83,8 @@ func run(ctx context.Context, args []string, e env) int {
 	switch args[0] {
 	case "plan":
 		return runPlan(ctx, args[1:], e)
+	case "apply":
+		return runApply(ctx, args[1:], e)
 	case "version", "--version":
 		return runVersion(args[1:], e)
 	case "help", "--help", "-h":
@@ -106,6 +116,8 @@ func runHelp(args []string, e env) int {
 		_, _ = io.WriteString(e.stdout, usage)
 	case len(args) == 1 && args[0] == "plan":
 		_, _ = io.WriteString(e.stdout, planHelp)
+	case len(args) == 1 && args[0] == "apply":
+		_, _ = io.WriteString(e.stdout, applyHelp)
 	case len(args) == 1 && args[0] == "version":
 		_, _ = io.WriteString(e.stdout, versionHelp)
 	default:
@@ -153,7 +165,8 @@ func connectionString(s string) bool {
 // The errors of the flag package, which name a flag with one dash.
 var (
 	undefinedFlag = regexp.MustCompile(`^flag provided but not defined: -(.*)$`)
-	invalidValue  = regexp.MustCompile(`(?s)^invalid (?:boolean )?value .* for (?:flag )?-([A-Za-z0-9_-]+): (.*)$`)
+	invalidBool   = regexp.MustCompile(`(?s)^invalid boolean value .* for (?:flag )?-([A-Za-z0-9_-]+): `)
+	invalidValue  = regexp.MustCompile(`(?s)^invalid value .* for (?:flag )?-([A-Za-z0-9_-]+): (.*)$`)
 	missingValue  = regexp.MustCompile(`^flag needs an argument: -(.*)$`)
 	flagName      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 )
@@ -171,6 +184,9 @@ func flagMessage(err error) error {
 			return errors.New("flag provided but not defined: write a flag as --name or --name=value")
 		}
 		return fmt.Errorf("flag provided but not defined: --%s", m[1])
+	}
+	if m := invalidBool.FindStringSubmatch(msg); m != nil {
+		return fmt.Errorf("invalid value for flag --%s: give the flag alone, or --%s=true or --%s=false", m[1], m[1], m[1])
 	}
 	if m := invalidValue.FindStringSubmatch(msg); m != nil {
 		return fmt.Errorf("invalid value for flag --%s: %s", m[1], m[2])

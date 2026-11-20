@@ -13,73 +13,6 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
-// fakeSession is a session that answers from its fields and records the calls.
-type fakeSession struct {
-	diffs    map[declaration.TableName]plan.TableDiff
-	diffErr  error
-	closeErr error
-	// missing names the tables that the database does not have.
-	missing map[declaration.TableName]bool
-
-	described []declaration.TableName
-	closed    bool
-}
-
-// Describe reports every table that is not missing with a primary key id and
-// the columns id and name.
-func (s *fakeSession) Describe(_ context.Context, names []declaration.TableName) (map[declaration.TableName]plan.TableInfo, error) {
-	s.described = append(s.described, names...)
-	infos := make(map[declaration.TableName]plan.TableInfo, len(names))
-	for _, n := range names {
-		if s.missing[n] {
-			infos[n] = plan.TableInfo{}
-			continue
-		}
-		infos[n] = plan.TableInfo{
-			Exists:     true,
-			Columns:    []plan.ColumnInfo{{Name: "id", NotNull: true}, {Name: "name"}},
-			PrimaryKey: []string{"id"},
-		}
-	}
-	return infos, nil
-}
-
-func (s *fakeSession) Diff(_ context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
-	return s.diffs[req.Table.Name], s.diffErr
-}
-
-func (s *fakeSession) CountRows(context.Context, declaration.Table) (int, error) {
-	return 2, nil
-}
-
-func (s *fakeSession) Close(ctx context.Context) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	s.closed = true
-	return s.closeErr
-}
-
-// fakeConnect returns a connectFunc that records its call and returns s, or
-// err when it is not nil.
-type fakeConnect struct {
-	session *fakeSession
-	err     error
-
-	calls int
-	conn  connection
-	dir   string
-}
-
-func (f *fakeConnect) connect(_ context.Context, c connection, dir string) (session, error) {
-	f.calls++
-	f.conn, f.dir = c, dir
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.session, nil
-}
-
 // writeFiles writes files, by their paths with forward slashes, into a new
 // data directory and returns it.
 func writeFiles(t *testing.T, files map[string]string) string {
@@ -133,7 +66,7 @@ func TestParsePlan(t *testing.T) {
 		want    planOptions
 		wantErr string
 	}{
-		{name: "defaults", args: nil, want: planOptions{dir: "."}},
+		{name: "defaults", args: nil, want: planOptions{common: common{dir: "."}}},
 		{
 			name: "every flag",
 			args: []string{
@@ -141,11 +74,14 @@ func TestParsePlan(t *testing.T) {
 				"--host", "db.example.test", "--port", "5433", "--user", "planner", "--dbname", "shop",
 			},
 			want: planOptions{
-				dir: "data", schemas: []string{"app"}, exitCode: true,
-				conn: connection{host: "db.example.test", port: "5433", user: "planner", dbname: "shop"},
+				common: common{
+					dir: "data", schemas: []string{"app"},
+					conn: connection{host: "db.example.test", port: "5433", user: "planner", dbname: "shop"},
+				},
+				exitCode: true,
 			},
 		},
-		{name: "repeated schema", args: []string{"--schema", "app", "-schema=geo", "--schema=app"}, want: planOptions{dir: ".", schemas: []string{"app", "geo", "app"}}},
+		{name: "repeated schema", args: []string{"--schema", "app", "-schema=geo", "--schema=app"}, want: planOptions{common: common{dir: ".", schemas: []string{"app", "geo", "app"}}}},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: "flag provided but not defined: --nope"},
 		{name: "flag of another command", args: []string{"--format", "csv"}, wantErr: "flag provided but not defined: --format"},
 		{name: "flag of the password", args: []string{"--password", "x"}, wantErr: "flag provided but not defined: --password"},
@@ -158,7 +94,7 @@ func TestParsePlan(t *testing.T) {
 		{name: "port 0", args: []string{"--port", "0"}, wantErr: `invalid value for flag --port: give a port number from 1 to 65535`},
 		{name: "port too large", args: []string{"--port", "65536"}, wantErr: `invalid value for flag --port: give a port number from 1 to 65535`},
 		{name: "value of a flag without a value", args: []string{"--exit-code=maybe"},
-			wantErr: `invalid value for flag --exit-code: parse error`},
+			wantErr: `invalid value for flag --exit-code: give the flag alone, or --exit-code=true or --exit-code=false`},
 		{name: "bad flag syntax", args: []string{"---dir", "x"}, wantErr: "bad flag syntax: write a flag as --name or --name=value"},
 		{name: "unknown flag that is a connection string", args: []string{"--postgresql://app:secret@db/prod"},
 			wantErr: "flag provided but not defined: write a flag as --name or --name=value"},
@@ -405,8 +341,8 @@ func TestRunPlan(t *testing.T) {
 			if got := fc.calls > 0; got != tt.wantConnect {
 				t.Errorf("kortopi plan connected = %v, want %v", got, tt.wantConnect)
 			}
-			if fc.calls > 0 && fc.dir != dir {
-				t.Errorf("kortopi plan connected with the data directory %q, want %q", fc.dir, dir)
+			if fc.calls > 0 && (fc.target.dir != dir || fc.target.apply) {
+				t.Errorf("kortopi plan connected to %+v, want the data directory %q and a session for a plan", fc.target, dir)
 			}
 			if tt.session != nil && fc.calls > 0 && fc.err == nil && !tt.session.closed {
 				t.Error("kortopi plan left the session open")
@@ -428,8 +364,8 @@ func TestRunPlanConnection(t *testing.T) {
 		t.Fatalf("kortopi plan exit status = %d, want %d (stderr %q)", code, exitOK, stderr)
 	}
 	want := connection{host: "h", port: "6543", user: "u", dbname: "d"}
-	if fc.conn != want {
-		t.Errorf("kortopi plan connected with %+v, want %+v", fc.conn, want)
+	if fc.target.conn != want {
+		t.Errorf("kortopi plan connected with %+v, want %+v", fc.target.conn, want)
 	}
 }
 
@@ -439,7 +375,7 @@ func TestRunPlanInterrupted(t *testing.T) {
 	dir := writeFiles(t, twoTables)
 	ctx, cancel := context.WithCancel(t.Context())
 	fake := &fakeSession{}
-	connect := func(ctx context.Context, _ connection, _ string) (session, error) {
+	connect := func(ctx context.Context, _ target) (session, error) {
 		cancel()
 		fake.diffErr = ctx.Err()
 		return fake, nil

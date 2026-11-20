@@ -117,6 +117,9 @@ Row-level security is an error because a plan would see only the rows that the p
 The rows that they hide would look missing: the plan would show them as rows to insert, and never as rows to update or to delete.
 The session also pins `row_security` off, so a query that a policy would filter fails instead of returning fewer rows.
 
+To count the rows that reference rows to delete, a plan also reads the referencing tables ([Rows that reference rows to delete](#rows-that-reference-rows-to-delete)).
+Where the role lacks `USAGE` on their schema or `SELECT` on the columns of the foreign key, or where row-level security applies, the plan says that it could not count them, and goes on.
+
 In the database, a plan does the following and nothing else:
 
 - It opens one connection, with `application_name` set to `kortopi` unless `PGAPPNAME` sets another.
@@ -209,6 +212,41 @@ Known after the schema is applied: 1 table, 1 column.
 
 A misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review.
 
+### Rows that reference rows to delete
+
+Under the rows to delete of a table, a plan shows every foreign key that points at them, once per table:
+
+```text
+geo.regions (sync, key: code)
+  - code=north
+    referenced by 1 row of geo.prefectures (region), prefectures_region_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it
+    referenced by 1 row of geo.stations (region), stations_region_fkey: ON DELETE CASCADE, so the deletion deletes this row too
+  0 to insert, 0 to update, 1 to delete
+```
+
+Each line names the referencing table, its columns, and the constraint, counts the rows that reference a row to delete, and says what PostgreSQL does while they still do, by the action `ON DELETE` of the key:
+
+| Action | The line says |
+|---|---|
+| `NO ACTION`, `RESTRICT` | the deletion fails while these rows reference them |
+| `CASCADE` | the deletion deletes these rows too |
+| `SET NULL` | the deletion sets the reference of these rows to NULL |
+| `SET DEFAULT` | the deletion sets the reference of these rows to the default |
+
+- Every foreign key counts: from any table, declared or not, in any schema, from the table itself, and a key that points at one partition of the table.
+- A count joins on the columns of the foreign key, not on the match key.
+- For a key from the table to itself, only rows that stay are counted.
+- A key with no referencing row is left out.
+- When the role may not read the referencing table, the line says so instead of a count, and the plan goes on:
+
+  ```text
+  maybe referenced by rows of reservation.audit (room_type_id), audit_room_type_fkey: the role may not read the table to count them; ON DELETE NO ACTION, so the deletion fails while such rows reference them
+  ```
+
+An apply may change or delete the referencing rows before it deletes, so a line says what happens in the state that the plan read, not that it will happen.
+Only the first level of a cascade is shown, and an update of a referenced column shows no count.
+[kortopi apply](apply.md#the-guards-on-deletions) uses these counts for its limit on deletions.
+
 ### Values and names
 
 A value prints as PostgreSQL prints it, and NULL prints as `NULL`.
@@ -244,8 +282,9 @@ A failed plan prints nothing on standard output.
 kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
-2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table. Every mistake of every table is reported together.
+2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
+4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that the declaration does not name is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 
 [Declaration files](declaration.md#common-mistakes) lists the common mistakes and their messages.
 

@@ -13,7 +13,7 @@ import (
 // noConnect is a connectFunc for commands that must not reach a database.
 func noConnect(t *testing.T) connectFunc {
 	t.Helper()
-	return func(_ context.Context, _ connection, _ string) (session, error) {
+	return func(context.Context, target) (session, error) {
 		t.Error("the command connected to the database, want no connection")
 		return nil, errors.New("no database in this test")
 	}
@@ -46,6 +46,7 @@ func TestRun(t *testing.T) {
 		{name: "help", args: []string{"help"}, wantCode: exitOK, wantStdout: "usage: kortopi <command>"},
 		{name: "help flag", args: []string{"--help"}, wantCode: exitOK, wantStdout: "usage: kortopi <command>"},
 		{name: "help of plan", args: []string{"help", "plan"}, wantCode: exitOK, wantStdout: "usage: kortopi plan [flags]"},
+		{name: "help of apply", args: []string{"help", "apply"}, wantCode: exitOK, wantStdout: "usage: kortopi apply [flags]"},
 		{name: "help of version", args: []string{"help", "version"}, wantCode: exitOK, wantStdout: "usage: kortopi version"},
 		{name: "help of an unknown command", args: []string{"help", "nope"}, wantCode: exitError, wantStderr: `kortopi: no help for "nope"`},
 		{name: "unknown command", args: []string{"nope"}, wantCode: exitError, wantStderr: `unknown command "nope"`},
@@ -98,6 +99,24 @@ func TestFlagOutput(t *testing.T) {
 			name: "flag of plan given to version", args: []string{"version", "--dir", "data"}, wantCode: exitError,
 			wantStderr: "kortopi: flag provided but not defined: --dir\n\n" + versionUsage,
 		},
+		{name: "help of apply", args: []string{"apply", "--help"}, wantCode: exitOK, wantStdout: applyHelp},
+		{name: "help command of apply", args: []string{"help", "apply"}, wantCode: exitOK, wantStdout: applyHelp},
+		{
+			name: "unknown flag of apply", args: []string{"apply", "--allow-deletes"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --allow-deletes\n\n" + applyUsage,
+		},
+		{
+			name: "flag of plan given to apply", args: []string{"apply", "--exit-code"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --exit-code\n\n" + applyUsage,
+		},
+		{
+			name: "flag of apply given to plan", args: []string{"plan", "--allow-delete"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --allow-delete\n\n" + planUsage,
+		},
+		{
+			name: "limit without deletions", args: []string{"apply", "--max-delete", "5"}, wantCode: exitError,
+			wantStderr: "kortopi: flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete\n\n" + applyUsage,
+		},
 		{name: "help of version", args: []string{"version", "--help"}, wantCode: exitOK, wantStdout: versionHelp},
 		{name: "help command of version", args: []string{"help", "version"}, wantCode: exitOK, wantStdout: versionHelp},
 	}
@@ -112,31 +131,48 @@ func TestFlagOutput(t *testing.T) {
 			}
 		})
 	}
-	if strings.Contains(planUsage, "exit status") || !strings.Contains(planHelp, "exit status") {
-		t.Error("the short usage of plan holds the exit statuses, or its help lacks them")
+	for _, h := range [][2]string{{planUsage, planHelp}, {applyUsage, applyHelp}} {
+		if strings.Contains(h[0], "exit status") || !strings.Contains(h[1], "exit status") {
+			t.Error("a short usage holds the exit statuses, or a help lacks them")
+		}
 	}
 }
 
 // TestHelpListsTheFlags checks that the help texts name every flag that plan
-// defines.
+// and apply define, and no flag that they lack.
 func TestHelpListsTheFlags(t *testing.T) {
 	t.Parallel()
 
-	var names []string
-	planFlagSet(&planOptions{}).VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
-	if len(names) == 0 {
-		t.Fatal("plan defines no flag")
-	}
-
 	_, help, _ := runTest(t, []string{"help"}, noConnect(t))
-	_, planHelp, _ := runTest(t, []string{"plan", "--help"}, noConnect(t))
-	for _, name := range names {
-		flagName := fmt.Sprintf("--%s ", name)
-		if !strings.Contains(help, flagName) {
-			t.Errorf("kortopi help does not list %s", flagName)
+	for _, c := range []struct {
+		command string
+		fs      *flag.FlagSet
+	}{
+		{"plan", planFlagSet(&planOptions{})},
+		{"apply", applyFlagSet(&applyOptions{})},
+	} {
+		var names []string
+		c.fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
+		if len(names) == 0 {
+			t.Fatalf("%s defines no flag", c.command)
 		}
-		if !strings.Contains(planHelp, flagName) {
-			t.Errorf("kortopi plan --help does not list %s", flagName)
+		_, commandHelp, _ := runTest(t, []string{c.command, "--help"}, noConnect(t))
+		for _, name := range names {
+			flagName := fmt.Sprintf("--%s ", name)
+			if !strings.Contains(help, flagName) {
+				t.Errorf("kortopi help does not list %s", flagName)
+			}
+			if !strings.Contains(commandHelp, flagName) {
+				t.Errorf("kortopi %s --help does not list %s", c.command, flagName)
+			}
+		}
+		for line := range strings.Lines(commandHelp) {
+			if f, ok := strings.CutPrefix(line, "  --"); ok {
+				name, _, _ := strings.Cut(f, " ")
+				if c.fs.Lookup(strings.TrimSpace(name)) == nil {
+					t.Errorf("kortopi %s --help lists --%s, which it does not define", c.command, name)
+				}
+			}
 		}
 	}
 }
