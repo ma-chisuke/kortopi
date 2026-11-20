@@ -46,10 +46,10 @@ Partitions:
 
 Names that differ only in white space or case:
 
-- A declared column that the table does not have, and that equals a column of the table once white space is trimmed and case is folded, is an error. The error names the file, the column as the file writes it, in quotes so that a space shows, and the column of the table. It is no longer shown as a column that waits for the schema change.
-- A declared table that the database does not have is an error when the database has a table whose schema and name equal the declared ones in that way. When it has no such table, but a schema that equals the declared schema in that way, the error names that schema. One query of the catalogs finds these names, only for the declared tables that do not exist, with `lower()` in the collation of the type `name`.
+- A declared column that the table does not have, and that equals a column of the table once the white space around the declared name is trimmed and case is folded, is an error. The error names the file, the column as the file writes it, in quotes so that a space shows, and the column of the table. It is no longer shown as a column that waits for the schema change.
+- A declared table that the database does not have is an error when the database has a table whose schema and name equal the declared ones in that way. When it has no such table, but a schema that equals the declared schema in that way, the error names that schema. When the declared schema exists as it is written, only its own tables count, and no other schema does: a new table of a schema that exists may well wait for the schema change. One query of the catalogs finds these names, only for the declared tables that do not exist. Only the declared names are trimmed, and both sides are folded with `lower()` in the collation `"C"`, which folds ASCII letters only.
 - Every other name that the database lacks still waits for the schema change, as ADR-0016 decided. A flag that turns every pending name into an error is not part of this record.
-- This refines ADR-0016, whose consequence that a misspelled table or column name looks the same as one that waits for a schema change now holds only for names that differ in more than white space and case.
+- This refines ADR-0016 and ADR-0024, whose rules show a declared table or column that the database does not have as known after the schema is applied: a name that differs from a name of the database only in white space or case is now an error instead. The consequence of ADR-0016 that a misspelled table or column name looks the same as one that waits for a schema change now holds only for names that differ in more than white space and case.
 
 The empty plan:
 
@@ -57,6 +57,7 @@ The empty plan:
 - When a table of the plan has mode `insert`, an empty plan prints `No changes. There is nothing to apply.` and a second line that names the tables of mode `insert` and says that they are compared by their keys only: up to five names, and then a count of the others. No query is added.
 - The plan as SQL (ADR-0029) writes these lines as comments, with `-- No changes: there is nothing to do.` as the first.
 - This refines ADR-0024, which gives an empty plan one line, and ADR-0029, which gives an empty script one comment line.
+- It also refines ADR-0021, whose status 0 of `plan --exit-code` means that the database matches the declaration: it now means that there is nothing to apply, which for a table of mode `insert` says nothing of the values of its rows that exist. The help of plan says so.
 
 ### Consequences
 
@@ -64,9 +65,10 @@ The empty plan:
 - Good, because the most common mistakes in a header, a space after a comma and a name in another case, stop the plan of the pull request that makes them.
 - Good, because an empty plan no longer says that the database matches a table whose values it did not compare.
 - Bad, because a misspelling that differs in more than white space or case, such as `sortorder` for `sort_order`, still looks like a column that waits for the schema change. A run on a throwaway PostgreSQL finds it (ADR-0016).
-- Bad, because `lower()` in the collation of the type `name` folds ASCII letters only, so a table whose name differs only in the case of other letters still waits for the schema change. Columns are folded in kortopi, for every letter.
+- Bad, because `lower()` in the collation `"C"` folds ASCII letters only, so a table whose name differs only in the case of other letters still waits for the schema change. Columns are folded in kortopi, for every letter.
 - Bad, because a plan narrowed with `--schema` sees only the declared tables of its schemas, so a partition and its partitioned table in two schemas pass a run that names only one of them.
-- Bad, because a new table whose name differs from an existing one only in case cannot be declared until the schema change has created it.
+- Bad, because a new table whose name differs from an existing one only in case cannot be declared until the schema change has created it, unless its schema exists as it is written.
+- Bad, because a new column whose name differs from an existing column only in case or outer white space cannot be declared as pending: it is an error until the schema change has created it.
 - Bad, because an empty plan has two forms, and a script that reads the output must accept both.
 
 ### Confirmation
