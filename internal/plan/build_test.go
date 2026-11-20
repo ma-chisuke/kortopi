@@ -458,6 +458,18 @@ func TestBuildErrors(t *testing.T) {
 			want: `data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key`,
 		},
 		{
+			name:  "a column with a space before its name",
+			table: csvTable(tableT, "id", " name", "floor"),
+			info:  existing(pk, "id", "name"),
+			want:  `data/a/t.csv: column " name" is not a column of table a.t, but column "name" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
+			name:  "a column in another case",
+			table: csvTable(tableT, "id", "NAME"),
+			info:  existing(pk, "id", "name", "Name"),
+			want:  `data/a/t.csv: column "NAME" is not a column of table a.t, but column "name" or column "Name" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
 			name:     "unknown mode",
 			table:    csvTable(tableT, "id"),
 			info:     existing(pk, "id"),
@@ -656,6 +668,58 @@ func TestBuildMissingValues(t *testing.T) {
 			}
 			if tt.diffErrs != nil && !errors.Is(err, errDB) {
 				t.Errorf("Build() error = %v, want it to hold %v", err, errDB)
+			}
+		})
+	}
+}
+
+// A declared table that the database does not have, while it has a table or
+// a schema whose name differs only in white space or case, is a mistake that
+// Build reports with the other mistakes, before any row is loaded. Without
+// such a name, the table waits for the schema change.
+func TestBuildNearNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		info TableInfo
+		want string
+	}{
+		{
+			name: "a table in another case",
+			info: TableInfo{NearNames: []declaration.TableName{{Schema: "a", Name: "T"}, {Schema: "A", Name: "t"}}},
+			want: `data/a/t.csv: table a.t does not exist, but table a.T or table A.t does, whose name differs only in white space or case: write the name as the database has it`,
+		},
+		{
+			name: "a schema in another case",
+			info: TableInfo{NearSchemas: []string{"A"}},
+			want: `data/a/t.csv: schema "a" of table a.t does not exist, but schema "A" does, whose name differs only in white space or case: write the name as the database has it`,
+		},
+		{name: "a table that waits for the schema change", info: TableInfo{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: tt.info, tableU: existing([]string{"id"}, "id", "NAME")}}
+			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id"), csvTable(tableU, "id", "name")}}
+			if tt.want == "" {
+				decl.Tables = decl.Tables[:1]
+			}
+			p, err := Build(t.Context(), decl, nil, db)
+			if tt.want == "" {
+				if err != nil || !p.Tables[0].PendingTable {
+					t.Errorf("Build() = %+v, %v, want table a.t pending", p, err)
+				}
+				return
+			}
+			// The column of b.u in another case is reported in the same run.
+			want := filepath.FromSlash(tt.want) + "\n" + filepath.FromSlash(`data/b/u.csv: column "name" is not a column of table b.u, but column "NAME" is`)
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, want)
+			}
+			if len(db.requests) != 0 || len(db.counted) != 0 {
+				t.Errorf("Build() called Diff %d times and CountRows %d times, want no call", len(db.requests), len(db.counted))
 			}
 		})
 	}

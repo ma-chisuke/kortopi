@@ -203,6 +203,18 @@ func TestPlanCommand(t *testing.T) {
 			checkRun(t, code, stdout, stderr, exitError, "",
 				"kortopi: "+filepath.Join(bad, "facility", "room_types.csv")+`:3: column "capacity": invalid input syntax for type integer: "many"`)
 
+			// Names that differ from those of the database only in white
+			// space or case are mistakes, not names that wait for the schema
+			// change, and are reported together.
+			near := writeFiles(t, map[string]string{
+				"facility/room_types.csv": "code, name,capacity\nsingle,Single,1\n",
+				"facility/Rooms.csv":      "id,room_type,note\n101,single,\n",
+			})
+			code, stdout, stderr = e.plan(t, "--dir", near)
+			checkRun(t, code, stdout, stderr, exitError, "",
+				"kortopi: "+filepath.Join(near, "facility", "Rooms.csv")+": table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case",
+				"kortopi: "+filepath.Join(near, "facility", "room_types.csv")+`: column " name" is not a column of table facility.room_types, but column "name" is`)
+
 			// NULL in a NOT NULL column.
 			null := writeFiles(t, map[string]string{"facility/room_types.csv": "code,name,capacity\nsingle,,1\n"})
 			code, stdout, stderr = e.plan(t, "--dir", null)

@@ -60,6 +60,9 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		}
 		tables[i] = Table{Name: dt.Name, Mode: s.Mode}
 		if !info.Exists {
+			if err := nearTable(dt.Path(decl.Dir), dt.Name, info); err != nil {
+				errs = append(errs, err)
+			}
 			tables[i].PendingTable = true
 			continue
 		}
@@ -153,6 +156,48 @@ func PartitionPhrase(partitionOf []declaration.TableName, i int) string {
 	return phrase
 }
 
+// nearTable returns an error for a declared table that does not exist when
+// the database has a table, or else a schema, whose name differs from the
+// declared one only in white space or case: such a name is a mistake, not a
+// table that waits for a schema change. file is the declaring file.
+func nearTable(file string, name declaration.TableName, info TableInfo) error {
+	switch {
+	case len(info.NearNames) > 0:
+		near := make([]string, len(info.NearNames))
+		for i, n := range info.NearNames {
+			near[i] = "table " + FormatTable(n)
+		}
+		return fmt.Errorf("%s: table %s does not exist, but %s does, whose name differs only in white space or case: write the name as the database has it",
+			file, FormatTable(name), strings.Join(near, " or "))
+	case len(info.NearSchemas) > 0:
+		return fmt.Errorf("%s: schema %s of table %s does not exist, but %s does, whose name differs only in white space or case: write the name as the database has it",
+			file, strconv.Quote(name.Schema), FormatTable(name), alternatives("schema", info.NearSchemas))
+	}
+	return nil
+}
+
+// nearColumns returns the columns of the table whose names equal name once
+// white space is trimmed and case is folded.
+func (c *check) nearColumns(name string) []string {
+	var near []string
+	for _, col := range c.info.Columns {
+		if strings.EqualFold(strings.TrimSpace(col.Name), strings.TrimSpace(name)) {
+			near = append(near, col.Name)
+		}
+	}
+	return near
+}
+
+// alternatives returns the names, each quoted after the word what and
+// separated by "or", as in `column "a" or column "A"`.
+func alternatives(what string, names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = what + " " + strconv.Quote(n)
+	}
+	return strings.Join(quoted, " or ")
+}
+
 // joinAfter returns err after the mistakes in errs, or err alone.
 func joinAfter(errs []error, err error) error {
 	if len(errs) == 0 {
@@ -231,6 +276,14 @@ func (c *check) settle(chosen []string) (columns, []error) {
 		col, ok := c.byName[name]
 		switch {
 		case !ok:
+			// A name that differs from a column of the table only in white
+			// space or case is a mistake, not a column that waits for the
+			// schema change.
+			if near := c.nearColumns(name); len(near) > 0 {
+				errs = append(errs, fmt.Errorf("%s: column %s is not a column of table %s, but %s is, whose name differs only in white space or case: write the name as the table has it",
+					c.file, strconv.Quote(name), c.table.Name, alternatives("column", near)))
+				continue
+			}
 			cols.pending = append(cols.pending, name)
 		case col.Generated:
 			errs = append(errs, fmt.Errorf("%s: column %q of table %s is generated, so the database computes its value: remove the column from the file",

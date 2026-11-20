@@ -114,6 +114,8 @@ func database() *fakeDB {
 		tn("part.events"):         table("id", "day"),
 		tn("part.events_2026"):    partition,
 		tn("part.events_2026_06"): subPartition,
+		// A name that does not exist, in another case than a table that does.
+		tn("Billing.plans"): {NearNames: []declaration.TableName{tn("billing.plans")}},
 	}, empty: []string{"nothing"}}
 }
 
@@ -345,6 +347,11 @@ func TestRunErrors(t *testing.T) {
 			name: "a table that does not exist",
 			opts: Options{Tables: []declaration.TableName{tn("facility.room")}, Format: csv},
 			want: "table facility.room does not exist: correct the name, or apply the schema first",
+		},
+		{
+			name: "a table in another case than a table that exists",
+			opts: Options{Tables: []declaration.TableName{tn("Billing.plans")}, Format: csv},
+			want: "table Billing.plans does not exist, but table billing.plans does, whose name differs only in white space or case: write the name as the database has it",
 		},
 		{
 			name: "a declared table without --overwrite",

@@ -97,7 +97,12 @@ func TestDescribe(t *testing.T) {
 					Columns:    []plan.ColumnInfo{{Name: "ID", NotNull: true}, {Name: "Name"}},
 					PrimaryKey: []string{"ID"},
 				},
-				name("mixed", "case table"): {},
+				// A name that does not exist names the tables, or else the
+				// schemas, that differ from it only in white space or case.
+				name("mixed", "case table"): {NearNames: []declaration.TableName{name("Mixed", "Case Table")}},
+				name("S", "KEYS"):           {NearNames: []declaration.TableName{name("s", "keys")}},
+				name(" s ", "nothing"):      {NearSchemas: []string{"s"}},
+				name("S", "nothing"):        {NearSchemas: []string{"s"}},
 				name("s", "parted"): {
 					Exists:     true,
 					Columns:    []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},

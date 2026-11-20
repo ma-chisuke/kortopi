@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -19,6 +20,11 @@ type tableMeta struct {
 	// partitionOf holds, for a partition, its parent and the ancestors of the
 	// parent up to the root, nearest first.
 	partitionOf []declaration.TableName
+	// nearNames and nearSchemas hold, for a table that does not exist, the
+	// tables and the schemas whose names differ from the named ones only in
+	// white space or case.
+	nearNames   []declaration.TableName
+	nearSchemas []string
 	// rowSecurity is true when row-level security applies to the role of
 	// the session: its policies would hide rows from a plan.
 	rowSecurity bool
@@ -79,6 +85,7 @@ type columnMeta struct {
 func (m *tableMeta) info() plan.TableInfo {
 	info := plan.TableInfo{
 		Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys, PartitionOf: m.partitionOf,
+		NearNames: m.nearNames, NearSchemas: m.nearSchemas,
 	}
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
@@ -159,6 +166,9 @@ func (s *Session) describe(ctx context.Context, names []declaration.TableName) (
 
 	byOID, err := s.readColumns(ctx, metas, schemas, tables)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.readNearNames(ctx, metas); err != nil {
 		return nil, err
 	}
 	if len(byOID) == 0 {
@@ -267,6 +277,61 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		return nil, errors.Join(errs...)
 	}
 	return byOID, nil
+}
+
+// readNearNames fills in, for each named table that does not exist, the
+// tables whose schema and name equal the named ones once white space is
+// trimmed and case is folded, or else the schemas that equal its schema so.
+// It is one query, and only when a named table does not exist. lower()
+// folds the names in the collation of their type name, "C", so it folds the
+// case of ASCII letters, as PostgreSQL folds a name that is not quoted.
+func (s *Session) readNearNames(ctx context.Context, metas map[declaration.TableName]*tableMeta) error {
+	var missing []*tableMeta
+	var schemas, tables []string
+	for _, m := range metas {
+		if !m.exists {
+			missing = append(missing, m)
+			schemas = append(schemas, strings.TrimSpace(m.name.Schema))
+			tables = append(tables, strings.TrimSpace(m.name.Name))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	rows, err := s.tx.Query(ctx, `SELECT r.i, n.nspname::pg_catalog.text, c.relname::pg_catalog.text
+		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) WITH ORDINALITY AS r(nspname, relname, i)
+		JOIN pg_catalog.pg_namespace AS n ON pg_catalog.lower(n.nspname) = pg_catalog.lower(r.nspname)
+		LEFT JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relkind IN ('r', 'p')
+			AND pg_catalog.lower(c.relname) = pg_catalog.lower(r.relname)
+		ORDER BY r.i, n.nspname COLLATE pg_catalog."C", c.relname COLLATE pg_catalog."C"`, schemas, tables)
+	if err != nil {
+		return fmt.Errorf("look for names that differ only in case: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var i int
+		var schema string
+		var table *string
+		if err := rows.Scan(&i, &schema, &table); err != nil {
+			return fmt.Errorf("look for names that differ only in case: %w", err)
+		}
+		m := missing[i-1]
+		switch {
+		case table != nil:
+			m.nearNames = append(m.nearNames, declaration.TableName{Schema: schema, Name: *table})
+		case schema != m.name.Schema:
+			m.nearSchemas = append(m.nearSchemas, schema)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("look for names that differ only in case: %w", err)
+	}
+	for _, m := range missing {
+		if len(m.nearNames) > 0 {
+			m.nearSchemas = nil
+		}
+	}
+	return nil
 }
 
 // readKeys fills in the primary key and the unique keys of the tables. A

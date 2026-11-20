@@ -121,6 +121,15 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	for _, name := range names {
 		info, ok := infos[name]
 		if !ok || !info.Exists {
+			if len(info.NearNames) > 0 {
+				near := make([]string, len(info.NearNames))
+				for i, n := range info.NearNames {
+					near[i] = "table " + plan.FormatTable(n)
+				}
+				errs = append(errs, fmt.Errorf("table %s does not exist, but %s does, whose name differs only in white space or case: write the name as the database has it",
+					plan.FormatTable(name), strings.Join(near, " or ")))
+				continue
+			}
 			errs = append(errs, fmt.Errorf("table %s does not exist: correct the name, or apply the schema first", name))
 			continue
 		}
