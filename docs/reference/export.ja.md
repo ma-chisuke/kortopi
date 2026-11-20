@@ -178,7 +178,7 @@ SQL ファイルでは、各 `INSERT` の列の一覧とその行の値が一致
 note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key ("label") with key in [tables."misc.labels"] of data/kortopi.toml
 ```
 
-テーブルにどちらのキーもなければ、どんな設定でも足りない。スキーマがテーブルに主キーか一意キーを与えるまで、テーブルの計画は失敗する。
+テーブルにどちらのキーもなければ、設定では解決しない。スキーマがテーブルに主キーか一意キーを与えるまで、テーブルの計画は失敗する。
 
 ```text
 note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: a match key must be a primary key or a unique key of the table, so give the table one in the schema

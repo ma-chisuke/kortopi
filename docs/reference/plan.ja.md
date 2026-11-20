@@ -115,7 +115,7 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 `PGOPTIONS` の設定は、kortopi が固定する設定を変えない（[値の比べ方](comparison.ja.md#セッションの設定)）。
 kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
 
-`ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
+`ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが、計画や apply の読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
 kortopi にはこのための独自の設定がない。`PGOPTIONS` で `lock_timeout` を設定する。
 
 ```sh

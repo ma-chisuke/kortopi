@@ -187,7 +187,7 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- 違いがなければ、apply は空の計画の行だけを出す。それは `No changes. The database matches the declaration.` である。モード `insert` のテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行である（[kortopi plan](plan.ja.md#出力の読み方)）。
+- 違いがなければ、apply は空の計画の行だけを出す。その行は、`No changes. The database matches the declaration.` である。モード `insert` のテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行になる（[kortopi plan](plan.ja.md#出力の読み方)）。
 - 失敗したときは、エラーを標準エラー出力に出し、最後の行は `kortopi: nothing was changed` になる。
 - コミットの答えが届かないときは、変更がなされたかどうかを apply は知ることができず、何も変えなかったとは言わない。
 
