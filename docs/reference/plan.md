@@ -129,7 +129,7 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 ```
 
 `statement_timeout` ends a statement that runs too long, for whatever reason, with an error of the same kind.
-Set a lock timeout for every run at deploy time, where a run that waits holds up the deployment.
+Set a lock timeout for every run at deploy time, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
 
 ## What the session needs
 
@@ -293,7 +293,7 @@ Known after the schema is applied: 1 table, 1 column.
   ```
 
 A name that differs from a name of the database only in white space or case does not wait: it is a mistake, and the plan stops ([Declaration files](declaration.md#a-name-in-another-case)).
-Any other misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review.
+Any other misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review, and apply the declaration in the check of the pull request ([Run kortopi from scripts](automation.md#in-a-pull-request)).
 
 ### Rows that reference rows to delete
 

@@ -153,6 +153,7 @@ The apply wrote both changes in one transaction, as a role with `INSERT` and `UP
 - [kortopi plan](docs/reference/plan.md): the flags, the connection, the output, the plan as SQL, and the exit statuses.
 - [kortopi apply](docs/reference/apply.md): what an apply needs and does, the guards on deletions, and its errors.
 - [kortopi export](docs/reference/export.md): what an export writes, what to edit after it, refreshing a declared table, and its errors.
+- [Run kortopi from scripts](docs/reference/automation.md): at deploy time, in the check of a pull request, in a scheduled drift check, and as reviewed SQL.
 
 ## How it behaves
 

@@ -129,7 +129,7 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 ```
 
 `statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、同じ種類のエラーを出す。
-デプロイのときの実行には、毎回ロックのタイムアウトを設定する。そこでは、待っている実行がデプロイ全体を止めてしまうからである。
+デプロイのときの実行には、毎回ロックのタイムアウトを設定する。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
 
 ## セッションに要るもの
 
@@ -293,7 +293,7 @@ Known after the schema is applied: 1 table, 1 column.
   ```
 
 データベースの名前と空白か大小だけが違う名前は、スキーマの変更を待たない。それは誤りであり、計画は止まる（[宣言のファイル](declaration.ja.md#大小の違う名前)）。
-そのほかの綴りを誤ったテーブルや列の名前は、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読む。
+そのほかの綴りを誤ったテーブルや列の名前は、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読み、プルリクエストのチェックで宣言を適用する（[スクリプトから kortopi を実行する](automation.ja.md#プルリクエストで)）。
 
 ### 削除する行を参照する行
 
@@ -545,4 +545,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:f4eb354519e650e8a96701fa98915ee8dc0f884869308224f5b360812eb7cd4e -->
+<!-- i18n-source: plan.md sha256:1aabc390e50b2cc81e3aee1a108bffdbec62a534f71c7fc05e484c6a3d6fa8e4 -->
