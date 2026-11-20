@@ -304,7 +304,7 @@ kortopi: data/seed.sql:2: facility.room_types, column created_at: the function c
 ### 1つのテーブルで列の違う INSERT 文
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name); every INSERT of one table must name the same columns
+kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name): every INSERT of one table must name the same columns
 ```
 
 ### --column-inserts なしのダンプ
@@ -427,4 +427,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:bf5b2f6823ee8efe2262ecda535f60e176b0f2edaa2067ec28eafbd6498df5f2 -->
+<!-- i18n-source: declaration.md sha256:930c0c0878751266e33345aa1cd9bb88c8ab519b78d5a294f81a30f783a2309b -->

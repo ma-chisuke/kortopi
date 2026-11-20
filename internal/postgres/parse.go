@@ -112,11 +112,11 @@ func newParseReader(file string, src []byte) (*parseReader, error) {
 	}
 	r.bom = strings.HasPrefix(r.src, parseBOM)
 	if i := parseInvalidUTF8(r.src); i >= 0 {
-		return nil, r.errorAtColumn(i, "the file is not valid UTF-8; save it as UTF-8")
+		return nil, r.errorAtColumn(i, "the file is not valid UTF-8: save it as UTF-8")
 	}
 	// The parser reads its input as a C string, which ends at a NUL byte.
 	if i := strings.IndexByte(r.src, 0); i >= 0 {
-		return nil, r.errorAtColumn(i, "the file holds a NUL byte; a SQL file must be text")
+		return nil, r.errorAtColumn(i, "the file holds a NUL byte, and a SQL file must be text: save it as text")
 	}
 	return r, nil
 }
@@ -174,7 +174,7 @@ func (r *parseReader) parse() (*pg.ParseResult, error) {
 	if inside >= 0 {
 		m := metas[inside]
 		return nil, r.errorf(m.start,
-			"the psql meta-command %s stands inside a statement; a declaration accepts it only between statements",
+			"the psql meta-command %s stands inside a statement: a declaration accepts it only between statements, so move it there or remove it",
 			parseMetaName(base[m.start:m.end]))
 	}
 	return tree, nil
@@ -207,7 +207,7 @@ func (r *parseReader) inserts(stmts []*pg.RawStmt, limit int) ([]declaration.Ins
 		if i, ok := first[ins.Table]; ok {
 			if prev := inserts[i]; !parseSameColumns(prev.Columns, ins.Columns) {
 				return nil, r.errorf(st.start,
-					"%s: the INSERT names the columns (%s), but the INSERT on line %d names (%s); every INSERT of one table must name the same columns",
+					"%s: the INSERT names the columns (%s), but the INSERT on line %d names (%s): every INSERT of one table must name the same columns",
 					ins.Table, strings.Join(ins.Columns, ", "), prev.Line, strings.Join(prev.Columns, ", "))
 			}
 		} else {

@@ -347,12 +347,12 @@ func TestParseInsertsClauseErrors(t *testing.T) {
 		{
 			name: "another set of columns for the same table",
 			src:  "INSERT INTO s.t (a, b) VALUES (1, 2);\nINSERT INTO s.u (a) VALUES (1);\n\nINSERT INTO s.t (a, c) VALUES (1, 2);",
-			want: "seed.sql:4: s.t: the INSERT names the columns (a, c), but the INSERT on line 1 names (a, b); every INSERT of one table must name the same columns",
+			want: "seed.sql:4: s.t: the INSERT names the columns (a, c), but the INSERT on line 1 names (a, b): every INSERT of one table must name the same columns",
 		},
 		{
 			name: "fewer columns for the same table",
 			src:  "INSERT INTO s.t (a, b) VALUES (1, 2);\nINSERT INTO s.t (a) VALUES (1);",
-			want: "seed.sql:2: s.t: the INSERT names the columns (a), but the INSERT on line 1 names (a, b); every INSERT of one table must name the same columns",
+			want: "seed.sql:2: s.t: the INSERT names the columns (a), but the INSERT on line 1 names (a, b): every INSERT of one table must name the same columns",
 		},
 	})
 }

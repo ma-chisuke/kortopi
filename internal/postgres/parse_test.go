@@ -454,17 +454,17 @@ func TestParseInsertsFileErrors(t *testing.T) {
 		{
 			name: "a meta-command inside a statement",
 			src:  "INSERT INTO s.t (a)\n\\restrict x\nVALUES (1);\n",
-			want: `seed.sql:2: the psql meta-command \restrict stands inside a statement; a declaration accepts it only between statements`,
+			want: `seed.sql:2: the psql meta-command \restrict stands inside a statement: a declaration accepts it only between statements, so move it there or remove it`,
 		},
 		{
 			name: "invalid UTF-8",
 			src:  "INSERT INTO s.t (a) VALUES ('é');\nINSERT INTO s.t (a) VALUES ('\xff');\n",
-			want: "seed.sql:2:30: the file is not valid UTF-8; save it as UTF-8",
+			want: "seed.sql:2:30: the file is not valid UTF-8: save it as UTF-8",
 		},
 		{
 			name: "NUL byte",
 			src:  "INSERT INTO s.t (a) VALUES (1);\x00INSERT INTO s.u (a) VALUES (1);\n",
-			want: "seed.sql:1:32: the file holds a NUL byte; a SQL file must be text",
+			want: "seed.sql:1:32: the file holds a NUL byte, and a SQL file must be text: save it as text",
 		},
 	})
 }

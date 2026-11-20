@@ -303,7 +303,7 @@ Write the value itself, or leave the column out of the file so that a new row ge
 ### INSERT statements of one table with other columns
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name); every INSERT of one table must name the same columns
+kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name): every INSERT of one table must name the same columns
 ```
 
 ### A dump without --column-inserts
