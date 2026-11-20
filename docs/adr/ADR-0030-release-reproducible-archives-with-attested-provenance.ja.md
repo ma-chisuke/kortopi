@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-11-20
 ---
 
@@ -150,4 +150,4 @@ kortopi のリリースを、どうビルドし、どう公開し、どう証明
 - [SLSA のビルドのレベル](https://slsa.dev/spec/v1.0/levels)と [`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/docs/source-date-epoch/)
 - メンテナーの手順は `docs/guides/release.md` に、設定は `docs/guides/github-settings.md` にある。
 
-<!-- i18n-source: ADR-0030-release-reproducible-archives-with-attested-provenance.md sha256:1b1dc02633e62db80b728119fa02b975e59860ec691478f14f11c1e9a7b8b51e -->
+<!-- i18n-source: ADR-0030-release-reproducible-archives-with-attested-provenance.md sha256:bef8964c866067dde12ee1b11ede4497a2df4fd24ae474dce71cf33b1eeaea52 -->
