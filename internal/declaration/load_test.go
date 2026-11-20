@@ -721,3 +721,47 @@ func TestTablePath(t *testing.T) {
 		t.Errorf("Path() = %q, want %q", got, want)
 	}
 }
+
+// LoadExisting accepts a directory that is missing or declares no table, and
+// keeps every other rule of Load.
+func TestLoadExisting(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	empty := writeTree(t, map[string]string{"README.md": "rows\n"})
+	declared := writeTree(t, map[string]string{"facility/rooms.csv": "code\n"})
+	file := filepath.Join(writeTree(t, map[string]string{"rows.sql": ""}), "rows.sql")
+	broken := writeTree(t, map[string]string{"rooms.csv": "code\n"})
+	tests := []struct {
+		dir     string
+		want    []declaration.Table
+		wantErr string
+	}{
+		{dir: missing},
+		{dir: empty},
+		{dir: declared, want: []declaration.Table{csvTable("facility", "rooms", "code")}},
+		{dir: file, wantErr: "the data directory " + file + " is not a directory: give the directory that holds the declaration"},
+		{dir: broken, wantErr: filepath.Join(broken, "rooms.csv") + ": "},
+	}
+	for _, tt := range tests {
+		got, err := declaration.LoadExisting(tt.dir, &fakeParser{})
+		if tt.wantErr != "" {
+			if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
+				t.Errorf("LoadExisting(%q) error = %v, want %q", tt.dir, err, tt.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("LoadExisting(%q) error = %v", tt.dir, err)
+		}
+		if got.Dir != tt.dir || len(got.Tables)+len(tt.want) > 0 && !reflect.DeepEqual(got.Tables, tt.want) {
+			t.Errorf("LoadExisting(%q) = %+v, want the tables %+v", tt.dir, got, tt.want)
+		}
+	}
+	// Load still refuses both.
+	for _, dir := range []string{missing, empty} {
+		if _, err := declaration.Load(dir, &fakeParser{}); err == nil {
+			t.Errorf("Load(%q) succeeded, want an error", dir)
+		}
+	}
+}

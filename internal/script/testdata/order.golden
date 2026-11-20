@@ -1,0 +1,17 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 3 to insert, 2 to update, 0 to delete in 4 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- app.plans: 1 to update
+UPDATE app.plans SET 1 columns WHERE (7);
+
+-- geo.regions: 1 to insert
+INSERT INTO geo.regions (1, n1);
+
+-- geo.cities: 2 to insert, 1 to update
+INSERT INTO geo.cities (10, n10);
+INSERT INTO geo.cities (11, n11);
+UPDATE geo.cities SET 1 columns WHERE (12);

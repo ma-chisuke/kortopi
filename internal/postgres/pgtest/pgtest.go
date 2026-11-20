@@ -213,8 +213,16 @@ type DB struct {
 // Database creates a database for the test, and drops it when the test ends.
 func (s *Server) Database(t *testing.T) *DB {
 	t.Helper()
+	return s.DatabaseWith(t, "")
+}
+
+// DatabaseWith creates a database for the test with the options of CREATE
+// DATABASE, such as ENCODING 'SQL_ASCII' TEMPLATE template0, and drops it
+// when the test ends.
+func (s *Server) DatabaseWith(t *testing.T, options string) *DB {
+	t.Helper()
 	name := "test_" + strconv.FormatInt(s.databases.Add(1), 10)
-	s.admin(t, "CREATE DATABASE "+quoteIdent(name))
+	s.admin(t, "CREATE DATABASE "+quoteIdent(name)+" "+options)
 	db := &DB{Server: s, Name: name, Config: s.config.Copy()}
 	db.Config.Database = name
 	conn, err := pgx.ConnectConfig(t.Context(), db.Config)

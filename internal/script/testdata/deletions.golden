@@ -1,0 +1,21 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 1 to insert, 0 to update, 3 to delete in 2 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- geo.regions: 1 to insert
+INSERT INTO geo.regions (2, n2);
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- geo.cities: 2 to delete
+-- DELETE FROM geo.cities WHERE (10);
+-- DELETE FROM geo.cities WHERE (11);
+
+-- geo.regions: 1 to delete
+--   referenced by 2 rows of geo.cities (region), cities_region: ON DELETE NO ACTION, so the deletion fails while these rows reference it
+--   maybe referenced by rows of geo.stations (region), stations_region: the role may not read the table to count them; ON DELETE CASCADE, so the deletion deletes such rows too
+-- DELETE FROM geo.regions WHERE (1);

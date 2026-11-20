@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
 // tn returns the table name "schema.name".
@@ -316,5 +317,50 @@ func TestJoinAnd(t *testing.T) {
 		if got := joinAnd(tt.items); got != tt.want {
 			t.Errorf("joinAnd(%q) = %q, want %q", tt.items, got, tt.want)
 		}
+	}
+}
+
+// Arrange returns a cycle that an apply refuses, with its tables placed by
+// name, and the rest of the order and the deferral as for an apply.
+func TestArrangeCycles(t *testing.T) {
+	t.Parallel()
+
+	keys := []ForeignKey{
+		fk("a_b", "a.a", "a.b"), fk("b_a", "a.b", "a.a"),
+		fk("c_a", "a.c", "a.a"),
+		deferrable(fk("x_y", "x.x", "x.y")), fk("y_x", "x.y", "x.x"),
+	}
+	o := Arrange(tns("a.c", "a.b", "a.a", "x.y", "x.x"), keys, writing("a.a", "a.b", "a.c", "x.x", "x.y"))
+	want := Order{
+		Tables:   tns("a.a", "a.b", "a.c", "x.x", "x.y"),
+		Deferred: []ForeignKey{deferrable(fk("x_y", "x.x", "x.y"))},
+		Cycles: []Cycle{{
+			Tables:  tns("a.a", "a.b"),
+			Keys:    []ForeignKey{fk("a_b", "a.a", "a.b"), fk("b_a", "a.b", "a.a")},
+			Writing: tns("a.a", "a.b"),
+		}},
+	}
+	if !reflect.DeepEqual(o, want) {
+		t.Errorf("Arrange() = %+v, want %+v", o, want)
+	}
+	if got := o.Cycles[0].Error(); !strings.HasPrefix(got, `tables a.a and a.b reference each other through foreign keys that are not deferrable, "a_b" of a.a and "b_a" of a.b,`) {
+		t.Errorf("Cycle.Error() = %q", got)
+	}
+}
+
+func TestWrites(t *testing.T) {
+	t.Parallel()
+
+	p := &plan.Plan{Tables: []plan.Table{
+		{Name: tn("a.inserts"), Diff: plan.TableDiff{Inserts: []plan.Row{{}}}},
+		{Name: tn("a.updates"), Diff: plan.TableDiff{Updates: []plan.Update{{}}}},
+		{Name: tn("a.deletes"), Diff: plan.TableDiff{Deletes: []plan.Row{{}}}},
+		{Name: tn("a.none")},
+	}}
+	if got, want := Writes(p, false), writing("a.inserts", "a.updates"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Writes(false) = %v, want %v", got, want)
+	}
+	if got, want := Writes(p, true), writing("a.inserts", "a.updates", "a.deletes"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Writes(true) = %v, want %v", got, want)
 	}
 }

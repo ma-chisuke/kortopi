@@ -29,8 +29,26 @@ import (
 // first error are the same on every run. A table that two files declare is an
 // error, and so is a data directory that declares no table.
 func Load(dir string, parser SQLParser) (*Declaration, error) {
+	return load(dir, parser, false)
+}
+
+// LoadExisting reads the declaration of the data directory dir as Load does,
+// for a command that writes into it, such as an export. A directory that
+// does not exist, or that declares no table, gives a declaration without
+// tables instead of an error. Every other rule of Load holds.
+func LoadExisting(dir string, parser SQLParser) (*Declaration, error) {
+	return load(dir, parser, true)
+}
+
+// load is Load, and LoadExisting when empty is true.
+func load(dir string, parser SQLParser, empty bool) (*Declaration, error) {
 	if dir == "" {
 		dir = "."
+	}
+	if empty {
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			return &Declaration{Dir: dir}, nil
+		}
 	}
 	if err := checkDir(dir); err != nil {
 		return nil, err
@@ -55,7 +73,7 @@ func Load(dir string, parser SQLParser) (*Declaration, error) {
 			return nil, err
 		}
 	}
-	if len(l.tables) == 0 {
+	if len(l.tables) == 0 && !empty {
 		return nil, fmt.Errorf("the data directory %s declares no table: add a CSV file <schema>/<table>.csv, or a .sql file of INSERT statements", dir)
 	}
 	decl := &Declaration{Dir: dir, Tables: make([]Table, 0, len(l.tables))}
