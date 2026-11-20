@@ -97,13 +97,16 @@ A new file holds every column, so it holds columns that a declaration usually le
 A column that a file names is a column that kortopi manages: a plan compares it, and an apply writes it in every environment.
 Before the first apply, go through each file:
 
-- Remove the IDs that the database assigns, when the rows should match by a natural key. In the example, `catalog/plans.csv` starts with `id,code,name,price`, and `id` is a UUID that each environment generates: remove the column, and match the rows by `code`.
-- Remove the columns that the database or other programs set, such as the time a row was created or changed.
+- Remove the IDs that the database assigns, when the rows should match by a natural key, and when matching by it suits the table ([A natural key in place of a generated ID](#a-natural-key-in-place-of-a-generated-id)). In the example, `catalog/plans.csv` starts with `id,code,name,price`, and `id` is a UUID that each environment generates: remove the column, and match the rows by `code`.
+- Remove a column that the database or other programs set, such as the time a row was changed, when the column has a default: a new row then gets the default.
+- Keep a column that is `NOT NULL` and has no default, such as the time a row was created when the application writes it. A new row would get no value for it, and a plan stops on such a column ([Declaration files](declaration.md#a-column-that-the-rows-to-insert-would-lack)). Kept in the file, the column is managed as any other: a value that differs from the database is an update. kortopi has no column that is set on insert only.
 - Remove an identity column that is `GENERATED ALWAYS` unless it is part of the match key. A plan stops on it, because an update cannot change it:
 
   ```text
   kortopi: data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key
   ```
+
+To remove columns from a file, follow [Drop columns after an export](#drop-columns-after-an-export).
 
 Then write the settings of the tables in `kortopi.toml` ([Declaration files](declaration.md#kortopitoml)): the `key` of a table that matches by a natural key, and the `mode` of a table that should lose the rows that the declaration lacks:
 
@@ -133,6 +136,37 @@ pro,Pro,20.00
 ```
 
 A plan now finds no change, with the settings that a plan of this declaration will use from here on.
+
+### Drop columns after an export
+
+To stop managing columns of a CSV file, remove their names from the header alone, and export the table again with `--overwrite`.
+The export keeps the columns that the header names, and writes every row again with those fields:
+
+```sh
+# facility/rooms.csv: the header was id,room_type,note, and is now id,room_type
+kortopi export --dir data --table facility.rooms --overwrite
+```
+
+Until that refresh, a plan stops on the rows, which still have a field for each removed column:
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+```
+
+In a SQL file, the column list of each `INSERT` and the values of its rows must agree, so editing the column list alone does not work.
+Keep one `INSERT` of the table, remove the columns from its column list and their values from its rows, delete the other `INSERT` statements of the table, and export the table with `--overwrite`: the export writes every row again in the columns of that `INSERT`.
+
+### A natural key in place of a generated ID
+
+Matching by a natural key, such as `code`, lets one declaration serve environments whose generated IDs differ.
+A change of the value of that key is then a deletion of the old row and an insertion of a new one, not an update ([ADR-0012](../adr/ADR-0012-match-rows-by-primary-key-or-a-chosen-unique-key.md)):
+
+- The new row gets a new ID, from the default of the column.
+- A row of another table that holds the old ID through a foreign key stops the deletion, or follows the action `ON DELETE` of the key, and a plan shows it under the row to delete. A row that holds the old ID without a foreign key, such as a column without a constraint or a copy in another service, is not seen by kortopi, and is left pointing at nothing.
+- In mode `upsert`, which never deletes, the old row stays, and the table holds the row twice: under the old key and under the new one.
+
+Match by a natural key when no row holds the ID without a foreign key, or when the natural key never changes.
+Otherwise keep the ID in the declaration and match by it, so that a change of the natural key is an update of the row, which keeps its ID.
 
 ### A table without a primary key
 

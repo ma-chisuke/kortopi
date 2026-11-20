@@ -97,13 +97,16 @@ No changes. The database matches the declaration.
 ファイルが挙げる列は、kortopi の管理する列である。計画はそれを比べ、適用はそれをすべての環境に書く。
 最初の適用の前に、各ファイルを見直す。
 
-- 行を自然キーで照合するなら、データベースが割り当てる ID を除く。この例の `catalog/plans.csv` は `id,code,name,price` で始まる。`id` は環境ごとに生成される UUID なので、その列を除き、行を `code` で照合する。
-- 行を作った時刻や変えた時刻など、データベースやほかのプログラムの設定する列を除く。
+- 行を自然キーで照合し、しかもその照合がテーブルに合っているなら、データベースが割り当てる ID を除く（[生成される ID の代わりの自然キー](#生成される-id-の代わりの自然キー)）。この例の `catalog/plans.csv` は `id,code,name,price` で始まる。`id` は環境ごとに生成される UUID なので、その列を除き、行を `code` で照合する。
+- 行を変えた時刻のように、データベースやほかのプログラムの設定する列は、既定値があれば除く。新しい行はその既定値を得る。
+- 行を作った時刻をアプリケーションが書く場合のように、`NOT NULL` で既定値のない列は残す。新しい行がその列の値を得られず、計画はそうした列で止まる（[宣言のファイル](declaration.ja.md#挿入する行が値を得られない列)）。ファイルに残した列は、ほかの列と同じく管理される。データベースと違う値は更新になる。kortopi には、挿入のときだけ設定する列はない。
 - `GENERATED ALWAYS` の識別列は、照合キーに含まれない限り除く。更新ではその列を変えられないので、計画がそこで止まる。
 
   ```text
   kortopi: data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key
   ```
+
+ファイルから列を除くには、[書き出しのあとで列を除く](#書き出しのあとで列を除く)に従う。
 
 次に、テーブルの設定を `kortopi.toml` に書く（[宣言のファイル](declaration.ja.md#kortopitoml)）。自然キーで照合するテーブルの `key` と、宣言にない行を失うべきテーブルの `mode` である。
 
@@ -133,6 +136,37 @@ pro,Pro,20.00
 ```
 
 これで計画は、この宣言の計画がこの先使う設定のもとで、変更を見つけない。
+
+### 書き出しのあとで列を除く
+
+CSV ファイルの列の管理をやめるには、見出しの行からだけその名前を除き、`--overwrite` でテーブルをもう一度書き出す。
+書き出しは見出しの行が挙げる列を保ち、すべての行をそのフィールドで書き直す。
+
+```sh
+# facility/rooms.csv: the header was id,room_type,note, and is now id,room_type
+kortopi export --dir data --table facility.rooms --overwrite
+```
+
+書き出し直すまでは、計画は行で止まる。行には、除いた列のフィールドがまだあるからである。
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+```
+
+SQL ファイルでは、各 `INSERT` の列の一覧とその行の値が一致していなければならない。そのため、列の一覧だけを直してもうまくいかない。
+テーブルの `INSERT` を1つだけ残し、その列の一覧から列を、その行から値を除き、テーブルのほかの `INSERT` を消す。それから `--overwrite` でテーブルを書き出す。書き出しは、すべての行をその `INSERT` の列で書き直す。
+
+### 生成される ID の代わりの自然キー
+
+`code` のような自然キーで照合すると、生成される ID が違う複数の環境に、1つの宣言で対応できる。
+ただしそのキーの値を変えると、更新ではなく、古い行の削除と新しい行の挿入になる（[ADR-0012](../adr/ADR-0012-match-rows-by-primary-key-or-a-chosen-unique-key.ja.md)）。
+
+- 新しい行は、列の既定値から新しい ID を得る。
+- 別のテーブルの行が外部キーを通じて古い ID を持っていれば、その行が削除を止めるか、キーの `ON DELETE` の動作に従う。計画はそれを削除する行の下に示す。外部キーなしで古い ID を持つ行、たとえば制約のない列や別のサービスにある写しは、kortopi には見えず、何も指さないまま残る。
+- 削除をしないモード `upsert` では古い行が残り、テーブルはその行を古いキーと新しいキーで2つ持つ。
+
+自然キーで照合するのは、外部キーなしで ID を持つ行がないときか、自然キーが決して変わらないときである。
+そうでなければ、宣言に ID を残してそれで照合する。そうすれば、自然キーの変更は行の更新になり、行は ID を保つ。
 
 ### 主キーのないテーブル
 
@@ -409,4 +443,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:8e93e1091f1e76f364226808f848dd153a269cf5307979c0396d2a5f7487cc59 -->
+<!-- i18n-source: export.md sha256:553e84a5e293b846f948b2ddf8152dca2418f05e2145464511ff69703eb06294 -->

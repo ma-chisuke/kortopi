@@ -153,7 +153,7 @@ Everything else is an error, because a plan must not change the database and mus
 - operators, such as `'a' || 'b'` and `1 + 2`;
 - subqueries, column references, parameters, `COLLATE`, `CASE`, and `DEFAULT`.
 
-To let the database fill a column, such as a generated ID or a timestamp, leave the column out of the file.
+To let the database fill a column, such as a generated ID or a timestamp with a default, leave the column out of the file. [kortopi export](export.md#what-to-edit-after-a-first-export) says when that suits a column: not for a column that is `NOT NULL` without a default, and not for an ID that other rows hold without a foreign key.
 
 The words `now`, `today`, `tomorrow`, and `yesterday`, in any case, are errors in a date or time value, because PostgreSQL reads them as the moment of reading, and the value would change from one plan to the next.
 Write the date or time itself.
@@ -234,6 +234,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   A unique index, the one of the primary key included, counts as a key only when it uses, for every key column, the collation of the column and the default operator class of its type. An index on `code COLLATE "C"` for a column with another collation, or on `slug text_pattern_ops`, is not a key, because it could tell apart two values that the plan takes for one, or the other way round.
 
   Their order decides the order in which the plan prints the key and sorts the rows.
+  A changed value of the key is a deletion and an insertion, not an update: [kortopi export](export.md#a-natural-key-in-place-of-a-generated-id) says what follows for an ID that the database generates.
 - Any other setting is an error, and so is `key = []`.
 - Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults. [kortopi export](export.md) does not check this, so that a `key` can sort the rows of a table at its first export.
 
@@ -270,7 +271,7 @@ kortopi: data/facility/room_types.csv:3: missing data for column "sort_order" (h
 ```
 
 PostgreSQL reads the rows and names the line; kortopi adds the hint.
-A column removed from the header but not from the rows gives the first error: remove its field from every row too, or let [kortopi export](export.md#refresh-a-declared-table) write the rows again with `--overwrite`.
+A column removed from the header but not from the rows gives the first error: remove its field from every row too, or let [kortopi export](export.md#drop-columns-after-an-export) write the rows again with `--overwrite`.
 A server whose messages are in another language than English gets the error without the hint.
 
 ### A table in two files
