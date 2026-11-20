@@ -378,8 +378,49 @@ func TestBuildErrors(t *testing.T) {
 					{Columns: []string{"code", "id"}, Reason: "its index is partial"},
 				}
 			}),
-			want: `table a.t has no primary key that can match rows; the unique key ("id") cannot, because its index uses another collation than the column; ` +
-				`the unique key ("code", "id") cannot, because its index is partial: name the columns of a unique key that can with key in [tables."a.t"] of data/kortopi.toml`,
+			want: `table a.t has no key that can match rows: the unique key ("id") cannot, because its index uses another collation than the column, ` +
+				`and the unique key ("code", "id") cannot, because its index is partial: ` +
+				`give the table a primary key or a unique key whose index uses the collation of each column and its default operator class, ` +
+				`and name it with key in [tables."a.t"] of data/kortopi.toml if it is a unique key`,
+		},
+		{
+			name:  "no primary key, a unique key, and a key that cannot match rows",
+			table: csvTable(tableT, "id", "code"),
+			info: with(with(existing(nil, "id", "code"), unique([]string{"id"})), func(i *TableInfo) {
+				i.SetAsideKeys = []SetAsideKey{{Columns: []string{"code"}, Reason: "its index is partial"}}
+			}),
+			want: `table a.t has no primary key: name its unique key ("id") with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "chosen key of a table whose keys cannot match rows",
+			table: csvTable(tableT, "label", "code"),
+			info: with(existing(nil, "label", "code"), func(i *TableInfo) {
+				i.SetAsideKeys = []SetAsideKey{{Columns: []string{"code"}, Reason: "its index uses an operator class that is not the default for column \"code\""}}
+			}),
+			settings: config.Table{Key: []string{"label"}},
+			want: `data/kortopi.toml: key ("label") of table a.t is neither the primary key nor a unique key of the table, and the table has no key that can match rows: ` +
+				`the unique key ("code") cannot, because its index uses an operator class that is not the default for column "code": ` +
+				`give the table a primary key or a unique key whose index uses the collation of each column and its default operator class`,
+		},
+		{
+			name:     "chosen key column in another case than the table",
+			table:    csvTable(tableT, "id", "Code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"Code"}},
+			want:     `data/a/t.csv: column "Code" is not a column of table a.t, but column "code" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
+			name:     "chosen key as the table names it, declared in another case",
+			table:    csvTable(tableT, "id", "Code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"code"}},
+			want:     `data/a/t.csv: column "Code" is not a column of table a.t, but column "code" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
+			name:  "primary key column declared in another case",
+			table: csvTable(tableT, "ID", "name"),
+			info:  existing(pk, "id", "name"),
+			want:  `data/a/t.csv: column "ID" is not a column of table a.t, but column "id" is, whose name differs only in white space or case: write the name as the table has it`,
 		},
 		{
 			name:  "primary key column not declared",

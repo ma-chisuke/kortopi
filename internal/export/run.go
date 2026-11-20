@@ -377,6 +377,12 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 		case len(info.UniqueKeys) > 1:
 			note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one of its unique keys, %s, with key in [tables.%s] of %s",
 				name, plan.KeyChoices(info.UniqueKeys), strconv.Quote(name.String()), settingsFile)
+		case len(info.SetAsideKeys) > 0:
+			// The table has keys, but none that can match rows as a plan
+			// compares them (ADR-0023).
+			note = fmt.Sprintf("note: table %s has no key that can match rows, so its rows are sorted by all their columns, and a plan of it fails: %s: "+
+				"give the table a primary key or a unique key whose index uses the collation of each column and its default operator class",
+				name, plan.SetAsidePhrase(info.SetAsideKeys))
 		default:
 			// A match key must be a primary key or a unique key (ADR-0012),
 			// so only a change of the schema lets a plan match the rows.

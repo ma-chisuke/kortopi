@@ -103,6 +103,8 @@ func database() *fakeDB {
 	noKey.PrimaryKey = nil
 	uniqueKey := table("label", "note")
 	uniqueKey.PrimaryKey, uniqueKey.UniqueKeys = nil, [][]string{{"label"}}
+	setAside := table("slug", "note")
+	setAside.PrimaryKey, setAside.SetAsideKeys = nil, []plan.SetAsideKey{{Columns: []string{"slug"}, Reason: "its index uses another collation than column \"slug\""}}
 	partition := table("id", "day")
 	partition.PartitionOf = []declaration.TableName{tn("part.events")}
 	subPartition := table("id", "day")
@@ -115,6 +117,7 @@ func database() *fakeDB {
 		tn("billing.plans"):       table("id", "code", "name"),
 		tn("misc.tags"):           noKey,
 		tn("misc.labels"):         uniqueKey,
+		tn("misc.slugs"):          setAside,
 		tn("misc.only_generated"): {Exists: true, Columns: []plan.ColumnInfo{{Name: "gen", Generated: true}}},
 		tn("part.events"):         parted,
 		tn("part.events_2026"):    partition,
@@ -218,6 +221,17 @@ func TestRun(t *testing.T) {
 			wantOut: "wrote DIR/misc/tags.csv (2 rows)\nExported 1 table with 2 rows.\n",
 			wantNotes: `note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: ` +
 				`a match key must be a primary key or a unique key of the table, so give the table one in the schema` + "\n",
+		},
+		{
+			name: "a table whose keys cannot match rows",
+			opts: Options{Tables: []declaration.TableName{tn("misc.slugs")}, Format: csv},
+			wantFiles: map[string]string{
+				"misc/slugs.csv": line("misc.slugs", csv, "slug,note", "slug,note"),
+			},
+			wantOut: "wrote DIR/misc/slugs.csv (2 rows)\nExported 1 table with 2 rows.\n",
+			wantNotes: `note: table misc.slugs has no key that can match rows, so its rows are sorted by all their columns, and a plan of it fails: ` +
+				`the unique key ("slug") cannot, because its index uses another collation than column "slug": ` +
+				`give the table a primary key or a unique key whose index uses the collation of each column and its default operator class` + "\n",
 		},
 		{
 			name: "a table with a unique key and without a primary key",

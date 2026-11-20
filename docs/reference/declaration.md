@@ -382,7 +382,7 @@ The check covers every depth of partitioning: a partition of a partition and the
 ### A key that cannot match rows
 
 ```text
-kortopi: table facility.room_types has no primary key that can match rows; the unique key ("code") cannot, because its index uses another collation than column "code": name the columns of a unique key that can with key in [tables."facility.room_types"] of data/kortopi.toml
+kortopi: table facility.room_types has no key that can match rows: the unique key ("code") cannot, because its index uses another collation than column "code": give the table a primary key or a unique key whose index uses the collation of each column and its default operator class, and name it with key in [tables."facility.room_types"] of data/kortopi.toml if it is a unique key
 kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a unique key that cannot match rows, because its index uses an operator class that is not the default for column "code": name the columns of the primary key or of another unique key
 ```
 

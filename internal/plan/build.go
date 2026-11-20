@@ -188,6 +188,20 @@ func (c *check) nearColumns(name string) []string {
 	return near
 }
 
+// keyThatCanMatch says what a table needs whose keys cannot match rows.
+const keyThatCanMatch = "give the table a primary key or a unique key whose index uses the collation of each column and its default operator class"
+
+// SetAsidePhrase names the keys that cannot match rows, each with the
+// reason, as in `the unique key ("code") cannot, because its index uses
+// another collation than column "code"`.
+func SetAsidePhrase(keys []SetAsideKey) string {
+	phrases := make([]string, len(keys))
+	for i, k := range keys {
+		phrases[i] = "the unique key (" + quoteAll(k.Columns) + ") cannot, because " + k.Reason
+	}
+	return strings.Join(phrases, ", and ")
+}
+
 // KeyChoices returns keys as a message names them: the columns of each key
 // in parentheses, as in ("code") or ("country", "zip").
 func KeyChoices(keys [][]string) string {
@@ -267,6 +281,12 @@ type check struct {
 	// columns.
 	byName   map[string]ColumnInfo
 	declared map[string]bool
+	// misnamed holds the declared columns whose names differ from a column
+	// of the table only in white space or case, and misnamedAs those columns
+	// of the table. Their error is reported once, not again as a key column
+	// that is missing or that waits for the schema change.
+	misnamed   map[string]bool
+	misnamedAs map[string]bool
 }
 
 // settle decides the match key of the table and sorts its declared columns
@@ -279,6 +299,7 @@ func (c *check) settle(chosen []string) (columns, []error) {
 		c.byName[col.Name] = col
 	}
 	c.declared = make(map[string]bool, len(c.table.Columns))
+	c.misnamed, c.misnamedAs = make(map[string]bool), make(map[string]bool)
 	var errs []error
 	var cols columns
 	for _, name := range c.table.Columns {
@@ -290,6 +311,10 @@ func (c *check) settle(chosen []string) (columns, []error) {
 			// space or case is a mistake, not a column that waits for the
 			// schema change.
 			if near := c.nearColumns(name); len(near) > 0 {
+				c.misnamed[name] = true
+				for _, n := range near {
+					c.misnamedAs[n] = true
+				}
 				errs = append(errs, fmt.Errorf("%s: column %s is not a column of table %s, but %s is, whose name differs only in white space or case: write the name as the table has it",
 					c.file, strconv.Quote(name), c.table.Name, alternatives("column", near)))
 				continue
@@ -344,15 +369,11 @@ func (c *check) notNull(compare []string) []string {
 // primaryKey returns the primary key of the table as its match key.
 func (c *check) primaryKey() ([]string, []error) {
 	if len(c.info.PrimaryKey) == 0 {
-		if len(c.info.SetAsideKeys) > 0 {
-			// The table has a key, maybe its primary key, that the plan
+		if len(c.info.UniqueKeys) == 0 && len(c.info.SetAsideKeys) > 0 {
+			// The table has keys, maybe its primary key, that the plan
 			// cannot use: say which, and why.
-			var unusable []string
-			for _, k := range c.info.SetAsideKeys {
-				unusable = append(unusable, fmt.Sprintf("; the unique key (%s) cannot, because %s", quoteAll(k.Columns), k.Reason))
-			}
-			return nil, []error{fmt.Errorf("table %s has no primary key that can match rows%s: name the columns of a unique key that can with key in [tables.%s] of %s",
-				c.table.Name, strings.Join(unusable, ""), strconv.Quote(c.table.Name.String()), c.settingsFile)}
+			return nil, []error{fmt.Errorf("table %s has no key that can match rows: %s: %s, and name it with key in [tables.%s] of %s if it is a unique key",
+				c.table.Name, SetAsidePhrase(c.info.SetAsideKeys), keyThatCanMatch, strconv.Quote(c.table.Name.String()), c.settingsFile)}
 		}
 		if len(c.info.UniqueKeys) > 0 {
 			which := "its unique key " + KeyChoices(c.info.UniqueKeys)
@@ -368,7 +389,7 @@ func (c *check) primaryKey() ([]string, []error) {
 	}
 	var errs []error
 	for _, name := range c.info.PrimaryKey {
-		if !c.declared[name] {
+		if !c.declared[name] && !c.misnamedAs[name] {
 			errs = append(errs, fmt.Errorf("%s: column %q of the primary key of table %s is not declared, so no row can be matched: add the column to the file, or name another key with key in %s",
 				c.file, name, c.table.Name, c.settingsFile))
 		}
@@ -397,6 +418,11 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		if _, ok := c.byName[name]; ok {
 			continue
 		}
+		if c.misnamed[name] {
+			// The error of the column says it all: the key names the column
+			// as the file does.
+			return nil, nil
+		}
 		if c.declared[name] {
 			errs = append(errs, fmt.Errorf("table %s has no column %q yet, and no row can be matched by a key column that waits for the schema change: apply the schema first, or name another key with key in %s",
 				c.table.Name, name, c.settingsFile))
@@ -420,6 +446,10 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		if len(c.info.PrimaryKey) > 0 {
 			keys = append([][]string{c.info.PrimaryKey}, keys...)
 		}
+		if len(keys) == 0 && len(c.info.SetAsideKeys) > 0 {
+			return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, and the table has no key that can match rows: %s: %s",
+				c.settingsFile, quoteAll(key), c.table.Name, SetAsidePhrase(c.info.SetAsideKeys), keyThatCanMatch)}
+		}
 		if len(keys) == 0 {
 			return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, and the table has neither: "+
 				"a match key must be one of them, so give the table a primary key or a unique key in the schema",
@@ -435,7 +465,7 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		}
 	}
 	for _, name := range key {
-		if !c.declared[name] {
+		if !c.declared[name] && !c.misnamedAs[name] {
 			errs = append(errs, fmt.Errorf("%s: key column %q of table %s is not declared, so no row can be matched: add the column to the file, or name another key with key in %s",
 				c.file, name, c.table.Name, c.settingsFile))
 		}

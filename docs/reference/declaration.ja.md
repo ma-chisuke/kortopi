@@ -383,7 +383,7 @@ kortopi: table facility.events_2026 is a partition of table facility.events, and
 ### 行を照合できないキー
 
 ```text
-kortopi: table facility.room_types has no primary key that can match rows; the unique key ("code") cannot, because its index uses another collation than column "code": name the columns of a unique key that can with key in [tables."facility.room_types"] of data/kortopi.toml
+kortopi: table facility.room_types has no key that can match rows: the unique key ("code") cannot, because its index uses another collation than column "code": give the table a primary key or a unique key whose index uses the collation of each column and its default operator class, and name it with key in [tables."facility.room_types"] of data/kortopi.toml if it is a unique key
 kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a unique key that cannot match rows, because its index uses an operator class that is not the default for column "code": name the columns of the primary key or of another unique key
 ```
 
@@ -427,4 +427,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:470a46666fdfc8d0fbafba4cd1166407f389051b6489632bbeafbce76111e7a4 -->
+<!-- i18n-source: declaration.md sha256:bf5b2f6823ee8efe2262ecda535f60e176b0f2edaa2067ec28eafbd6498df5f2 -->
