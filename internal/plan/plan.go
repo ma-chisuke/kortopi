@@ -51,6 +51,12 @@ type TableInfo struct {
 	// in its errors, so that a user learns why a key that exists is not
 	// used.
 	SetAsideKeys []SetAsideKey
+	// PartitionOf holds, for a partition, the partitioned tables whose rows
+	// include its rows: its parent first, then the parent of that table, up
+	// to the root. It is empty for a table that is not a partition. A
+	// declaration of a partition and of one of these tables declares the same
+	// rows twice.
+	PartitionOf []declaration.TableName
 }
 
 // SetAsideKey is a unique index or constraint that cannot match rows as a

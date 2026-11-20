@@ -133,6 +133,7 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 			}
 		}
 	}
+	errs = append(errs, partitions(decl.Dir, names, infos, declared)...)
 	errs = append(errs, collisions(decl.Dir, jobs)...)
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -321,6 +322,32 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 	}
 	j.req.OrderBy = slices.Clone(key)
 	return j, note, errs
+}
+
+// partitions returns an error for each exported partition whose partitioned
+// table, at any level, is exported too, or declared in the data directory
+// already: the rows of a partition are rows of its partitioned table too, so
+// the declaration would hold them twice, and a plan of it would stop.
+func partitions(dir string, names []declaration.TableName, infos map[declaration.TableName]plan.TableInfo,
+	declared map[declaration.TableName]*declaration.Table,
+) []error {
+	var errs []error
+	for _, name := range names {
+		partitionOf := infos[name].PartitionOf
+		for i, parent := range partitionOf {
+			switch {
+			case slices.Contains(names, parent):
+				errs = append(errs, fmt.Errorf("table %s is %s, and the export names both: "+
+					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables",
+					name, plan.PartitionPhrase(partitionOf, i)))
+			case declared[parent] != nil:
+				errs = append(errs, fmt.Errorf("table %s is %s, which %s declares already: "+
+					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: leave table %s out, or remove the declaration of table %s first",
+					name, plan.PartitionPhrase(partitionOf, i), declared[parent].Path(dir), name, parent))
+			}
+		}
+	}
+	return errs
 }
 
 // notAFileName says why name cannot be a part of a path on every file

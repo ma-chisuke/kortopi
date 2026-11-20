@@ -42,6 +42,10 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 	settingsFile := filepath.Join(decl.Dir, config.FileName)
 	tables := make([]Table, len(decl.Tables))
 	requests := make([]DiffRequest, len(decl.Tables))
+	declared := make(map[declaration.TableName]*declaration.Table, len(decl.Tables))
+	for i := range decl.Tables {
+		declared[decl.Tables[i].Name] = &decl.Tables[i]
+	}
 	var errs []error
 	for i := range decl.Tables {
 		dt := &decl.Tables[i]
@@ -59,6 +63,7 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 			tables[i].PendingTable = true
 			continue
 		}
+		errs = append(errs, declaredTwice(decl.Dir, dt, info.PartitionOf, declared)...)
 		c := &check{table: dt, file: dt.Path(decl.Dir), settingsFile: settingsFile, info: info}
 		cols, tableErrs := c.settle(s.Key)
 		if len(tableErrs) > 0 {
@@ -108,6 +113,44 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		return nil, errors.Join(errs...)
 	}
 	return &Plan{Tables: tables}, nil
+}
+
+// declaredTwice returns an error for each table of partitionOf, the
+// partitioned tables whose rows include the rows of the partition t, that
+// the declaration declares too: the files of the two tables would declare the
+// same rows twice, and an apply would insert them twice.
+func declaredTwice(dir string, t *declaration.Table, partitionOf []declaration.TableName, declared map[declaration.TableName]*declaration.Table) []error {
+	var errs []error
+	for i, name := range partitionOf {
+		parent, ok := declared[name]
+		if !ok {
+			continue
+		}
+		files := "in " + t.Path(dir) + " and " + parent.Path(dir)
+		if t.File == parent.File {
+			files = "both in " + t.Path(dir)
+		}
+		errs = append(errs, fmt.Errorf("table %s is %s, and both tables are declared, %s: "+
+			"the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables",
+			t.Name, PartitionPhrase(partitionOf, i), files))
+	}
+	return errs
+}
+
+// PartitionPhrase says how a partition belongs to the partitioned table
+// partitionOf[i], where partitionOf is TableInfo.PartitionOf of the
+// partition: "a partition of table s.p", or "a partition of table s.root,
+// through table s.p" for a partition of a partition.
+func PartitionPhrase(partitionOf []declaration.TableName, i int) string {
+	phrase := "a partition of table " + partitionOf[i].String()
+	if i > 0 {
+		through := make([]string, i)
+		for j, name := range partitionOf[:i] {
+			through[j] = name.String()
+		}
+		phrase += ", through table " + strings.Join(through, " and table ")
+	}
+	return phrase
 }
 
 // joinAfter returns err after the mistakes in errs, or err alone.

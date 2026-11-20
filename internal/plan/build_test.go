@@ -660,3 +660,84 @@ func TestBuildMissingValues(t *testing.T) {
 		})
 	}
 }
+
+// A partition declared together with a partitioned table above it declares
+// its rows twice, at any depth of partitioning: Build stops before any row is
+// loaded, and names both tables and both files. A partition alone, or a
+// partitioned table alone, is planned.
+func TestBuildPartitionDeclaredWithItsParent(t *testing.T) {
+	t.Parallel()
+
+	root := declaration.TableName{Schema: "s", Name: "events"}
+	child := declaration.TableName{Schema: "s", Name: "events_2026"}
+	grandchild := declaration.TableName{Schema: "s", Name: "events_2026_06"}
+	infos := map[declaration.TableName]TableInfo{
+		root:       existing([]string{"id"}, "id"),
+		child:      with(existing([]string{"id"}, "id"), func(i *TableInfo) { i.PartitionOf = []declaration.TableName{root} }),
+		grandchild: with(existing([]string{"id"}, "id"), func(i *TableInfo) { i.PartitionOf = []declaration.TableName{child, root} }),
+	}
+	twice := func(table, phrase, files string) string {
+		return "table " + table + " is " + phrase + ", and both tables are declared, " + filepath.FromSlash(files) + ": " +
+			"the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables"
+	}
+	inSQL := func(name declaration.TableName) declaration.Table {
+		table := csvTable(name, "id")
+		table.Format, table.File = declaration.SQL, "seed.sql"
+		return table
+	}
+	tests := []struct {
+		name   string
+		tables []declaration.Table
+		want   string
+	}{
+		{name: "a partition alone", tables: []declaration.Table{csvTable(child, "id")}},
+		{name: "a partitioned table alone", tables: []declaration.Table{csvTable(root, "id")}},
+		{
+			name:   "a partition and its parent",
+			tables: []declaration.Table{csvTable(root, "id"), csvTable(child, "id")},
+			want:   twice("s.events_2026", "a partition of table s.events", "in data/s/events_2026.csv and data/s/events.csv"),
+		},
+		{
+			name:   "a partition of a partition and the root",
+			tables: []declaration.Table{csvTable(root, "id"), csvTable(grandchild, "id")},
+			want: twice("s.events_2026_06", "a partition of table s.events, through table s.events_2026",
+				"in data/s/events_2026_06.csv and data/s/events.csv"),
+		},
+		{
+			name:   "three levels",
+			tables: []declaration.Table{csvTable(root, "id"), csvTable(child, "id"), csvTable(grandchild, "id")},
+			want: twice("s.events_2026", "a partition of table s.events", "in data/s/events_2026.csv and data/s/events.csv") + "\n" +
+				twice("s.events_2026_06", "a partition of table s.events_2026", "in data/s/events_2026_06.csv and data/s/events_2026.csv") + "\n" +
+				twice("s.events_2026_06", "a partition of table s.events, through table s.events_2026", "in data/s/events_2026_06.csv and data/s/events.csv"),
+		},
+		{
+			name:   "both in one SQL file",
+			tables: []declaration.Table{inSQL(root), inSQL(child)},
+			want:   twice("s.events_2026", "a partition of table s.events", "both in data/seed.sql"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: infos}
+			decl := &declaration.Declaration{Dir: "data", Tables: tt.tables}
+			p, err := Build(t.Context(), decl, nil, db)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("Build() error = %v", err)
+				}
+				if len(db.requests) != len(tt.tables) {
+					t.Errorf("Build() called Diff %d times, want %d", len(db.requests), len(tt.tables))
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, tt.want)
+			}
+			if len(db.requests) != 0 {
+				t.Errorf("Build() called Diff %d times, want no call", len(db.requests))
+			}
+		})
+	}
+}

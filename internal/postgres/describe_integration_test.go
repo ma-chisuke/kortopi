@@ -42,7 +42,9 @@ func TestDescribe(t *testing.T) {
 			CREATE SCHEMA "Mixed";
 			CREATE TABLE "Mixed"."Case Table" ("ID" integer PRIMARY KEY, "Name" text);
 			CREATE TABLE s.parted (country text, zip text, city text, PRIMARY KEY (country, zip)) PARTITION BY LIST (country);
-			CREATE TABLE s.parted_jp PARTITION OF s.parted FOR VALUES IN ('jp');
+			CREATE TABLE s.parted_jp PARTITION OF s.parted FOR VALUES IN ('jp') PARTITION BY RANGE (zip);
+			CREATE TABLE s.parted_jp_east PARTITION OF s.parted_jp FOR VALUES FROM ('0') TO ('5');
+			CREATE TABLE s.inherits (extra text) INHERITS (s.no_key);
 			CREATE TABLE s.empty ();
 			CREATE DOMAIN s.d_default AS integer DEFAULT 7;
 			CREATE DOMAIN s.d_inner AS integer DEFAULT 5;
@@ -100,6 +102,24 @@ func TestDescribe(t *testing.T) {
 					Exists:     true,
 					Columns:    []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
 					PrimaryKey: []string{"country", "zip"},
+				},
+				// A partition names the partitioned tables above it, nearest
+				// first; a table that inherits from another is no partition.
+				name("s", "parted_jp"): {
+					Exists:      true,
+					Columns:     []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
+					PrimaryKey:  []string{"country", "zip"},
+					PartitionOf: []declaration.TableName{name("s", "parted")},
+				},
+				name("s", "parted_jp_east"): {
+					Exists:      true,
+					Columns:     []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
+					PrimaryKey:  []string{"country", "zip"},
+					PartitionOf: []declaration.TableName{name("s", "parted_jp"), name("s", "parted")},
+				},
+				name("s", "inherits"): {
+					Exists:  true,
+					Columns: []plan.ColumnInfo{{Name: "a"}, {Name: "b", NotNull: true}, {Name: "extra"}},
 				},
 				name("s", "empty"): {Exists: true},
 				// A column of a domain over a domain with a default gets that

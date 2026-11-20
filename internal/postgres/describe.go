@@ -16,6 +16,9 @@ type tableMeta struct {
 	exists bool
 	// partitioned is true for a partitioned table.
 	partitioned bool
+	// partitionOf holds, for a partition, its parent and the ancestors of the
+	// parent up to the root, nearest first.
+	partitionOf []declaration.TableName
 	// rowSecurity is true when row-level security applies to the role of
 	// the session: its policies would hide rows from a plan.
 	rowSecurity bool
@@ -74,7 +77,9 @@ type columnMeta struct {
 
 // info returns what the plan needs to know about the table.
 func (m *tableMeta) info() plan.TableInfo {
-	info := plan.TableInfo{Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys}
+	info := plan.TableInfo{
+		Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys, PartitionOf: m.partitionOf,
+	}
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
 			Name: c.name, NotNull: c.notNull, Generated: c.generated, IdentityAlways: c.identityAlways, HasDefault: c.hasDefault,
@@ -183,7 +188,13 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'INSERT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'UPDATE'),
-			c.relkind IN ('r', 'p') AND pg_catalog.has_table_privilege(c.oid, 'DELETE')
+			c.relkind IN ('r', 'p') AND pg_catalog.has_table_privilege(c.oid, 'DELETE'),
+			ARRAY(SELECT ARRAY[an.nspname::pg_catalog.text, ac.relname::pg_catalog.text]
+				FROM pg_catalog.pg_partition_ancestors(c.oid::pg_catalog.regclass) WITH ORDINALITY AS pa(relid, n)
+				JOIN pg_catalog.pg_class AS ac ON ac.oid = pa.relid
+				JOIN pg_catalog.pg_namespace AS an ON an.oid = ac.relnamespace
+				WHERE c.relispartition AND pa.relid <> c.oid
+				ORDER BY pa.n)
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 		JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 		JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
@@ -206,8 +217,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var typeName []string
 		var collatable *bool
 		var typ *uint32
+		var partitionOf [][]string
 		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
-			&selectable, &insertable, &updatable, &deletable); err != nil {
+			&selectable, &insertable, &updatable, &deletable, &partitionOf); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
@@ -229,6 +241,12 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.schemaUsage = schemaUsage
 		m.deletable = deletable
 		m.oid = oid
+		m.partitionOf = nil
+		for _, name := range partitionOf {
+			if len(name) == 2 {
+				m.partitionOf = append(m.partitionOf, declaration.TableName{Schema: name[0], Name: name[1]})
+			}
+		}
 		byOID[oid] = m
 		if column != nil {
 			col := columnMeta{

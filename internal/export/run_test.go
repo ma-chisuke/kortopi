@@ -95,16 +95,25 @@ func table(cols ...string) plan.TableInfo {
 }
 
 // database is the database of most cases: two tables in facility, one in
-// billing, one without a primary key, and one with a generated column.
+// billing, one without a primary key, one with a generated column, and a
+// partitioned table in part with a partition that has a partition of its
+// own.
 func database() *fakeDB {
 	noKey := table("code", "name")
 	noKey.PrimaryKey = nil
+	partition := table("id", "day")
+	partition.PartitionOf = []declaration.TableName{tn("part.events")}
+	subPartition := table("id", "day")
+	subPartition.PartitionOf = []declaration.TableName{tn("part.events_2026"), tn("part.events")}
 	return &fakeDB{infos: map[declaration.TableName]plan.TableInfo{
 		tn("facility.room_types"): table("code", "name", "gen", "capacity"),
 		tn("facility.rooms"):      table("id", "room_type", "note"),
 		tn("billing.plans"):       table("id", "code", "name"),
 		tn("misc.tags"):           noKey,
 		tn("misc.only_generated"): {Exists: true, Columns: []plan.ColumnInfo{{Name: "gen", Generated: true}}},
+		tn("part.events"):         table("id", "day"),
+		tn("part.events_2026"):    partition,
+		tn("part.events_2026_06"): subPartition,
 	}, empty: []string{"nothing"}}
 }
 
@@ -385,6 +394,20 @@ func TestRunErrors(t *testing.T) {
 			name: "a table of generated columns only",
 			opts: Options{Tables: []declaration.TableName{tn("misc.only_generated")}, Format: csv},
 			want: "table misc.only_generated has no column that a declaration can set",
+		},
+		{
+			name: "a partition and its partitioned table",
+			opts: Options{Tables: []declaration.TableName{tn("part.events"), tn("part.events_2026")}, Format: csv},
+			want: "table part.events_2026 is a partition of table part.events, and the export names both: " +
+				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables",
+		},
+		{
+			name: "a partition of a partition whose root a file declares",
+			decl: []declaration.Table{{Name: tn("part.events"), Columns: []string{"id", "day"}, Format: csv, File: "part/events.csv"}},
+			opts: Options{Tables: []declaration.TableName{tn("part.events_2026_06")}, Format: csv},
+			want: "table part.events_2026_06 is a partition of table part.events, through table part.events_2026, which DIR/part/events.csv declares already: " +
+				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: " +
+				"leave table part.events_2026_06 out, or remove the declaration of table part.events first",
 		},
 	}
 	for _, tt := range tests {
