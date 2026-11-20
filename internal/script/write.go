@@ -45,12 +45,22 @@ type Header struct {
 //     comment. A pending table has no statement, and a pending column is
 //     left out of the statements of its table, as in a plan.
 //
-// An empty plan gives one comment line. The script is written to w only
-// when it is whole, so an error leaves nothing half written.
+// An empty plan gives one comment line, and a second one that names the
+// tables of mode insert, whose values were not compared, when the plan has
+// such tables. The script is written to w only when it is whole, so an error
+// leaves nothing half written.
 func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header) error {
 	var b bytes.Buffer
 	if p.Empty() {
-		comment(&b, "No changes: the database matches the declaration, so there is nothing to do.")
+		lines := p.EmptyLines()
+		if len(lines) == 1 {
+			comment(&b, "No changes: the database matches the declaration, so there is nothing to do.")
+		} else {
+			comment(&b, "No changes: there is nothing to do.")
+			for _, line := range lines[1:] {
+				comment(&b, line)
+			}
+		}
 		_, err := w.Write(b.Bytes())
 		return err
 	}

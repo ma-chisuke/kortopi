@@ -40,6 +40,14 @@ func unchangedTable(schema, table string) Table {
 	return Table{Name: name(schema, table), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"}}
 }
 
+// insertTable is a table of schema app in mode insert without rows to
+// insert.
+func insertTable(table string) Table {
+	t := unchangedTable("app", table)
+	t.Mode = config.ModeInsert
+	return t
+}
+
 // roomTypes is the plan of a table in mode sync with a change of each kind.
 var roomTypes = Table{
 	Name:    name("facility", "room_types"),
@@ -212,6 +220,19 @@ func TestRender(t *testing.T) {
 		{
 			name: "no_changes",
 			plan: &Plan{Tables: []Table{unchangedTable("app", "a"), unchangedTable("app", "b")}},
+		},
+		{
+			// A table of mode insert was compared by its key only, so an
+			// empty plan does not say that the database matches.
+			name: "no_changes_insert",
+			plan: &Plan{Tables: []Table{unchangedTable("app", "a"), insertTable("b")}},
+		},
+		{
+			name: "no_changes_insert_many",
+			plan: &Plan{Tables: []Table{
+				insertTable("a"), insertTable("b"), insertTable("c"), insertTable("d"),
+				unchangedTable("app", "e"), insertTable("f"), insertTable("g"), insertTable("h"),
+			}},
 		},
 		{
 			name: "references",

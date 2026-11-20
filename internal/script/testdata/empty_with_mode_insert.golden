@@ -1,0 +1,2 @@
+-- No changes: there is nothing to do.
+-- A table of mode insert is compared by its key only, not by its values: geo.cities.
