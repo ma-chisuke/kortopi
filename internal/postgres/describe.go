@@ -281,11 +281,14 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 }
 
 // readNearNames fills in, for each named table that does not exist, the
-// tables whose schema and name equal the named ones once white space is
-// trimmed and case is folded, or else the schemas that equal its schema so.
-// It is one query, and only when a named table does not exist. lower()
-// folds the names in the collation of their type name, "C", so it folds the
-// case of ASCII letters, as PostgreSQL folds a name that is not quoted.
+// tables whose schema and name equal the named ones once the white space
+// around the named ones is trimmed and case is folded, or else the schemas
+// that equal its schema so. When the named schema exists as it is written,
+// only its own tables count, and no other schema does: a table that waits for
+// the schema change may well be added to a schema that exists. It is one
+// query, and only when a named table does not exist. Both sides fold in the
+// collation "C", which folds the case of ASCII letters only, as PostgreSQL
+// folds a name that is not quoted.
 func (s *Session) readNearNames(ctx context.Context, metas map[declaration.TableName]*tableMeta) error {
 	var missing []*tableMeta
 	var schemas, tables []string
@@ -301,38 +304,62 @@ func (s *Session) readNearNames(ctx context.Context, metas map[declaration.Table
 	}
 	rows, err := s.tx.Query(ctx, `SELECT r.i, n.nspname::pg_catalog.text, c.relname::pg_catalog.text
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) WITH ORDINALITY AS r(nspname, relname, i)
-		JOIN pg_catalog.pg_namespace AS n ON pg_catalog.lower(n.nspname) = pg_catalog.lower(r.nspname)
+		JOIN pg_catalog.pg_namespace AS n
+			ON pg_catalog.lower(n.nspname::pg_catalog.text COLLATE pg_catalog."C") = pg_catalog.lower(r.nspname COLLATE pg_catalog."C")
 		LEFT JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relkind IN ('r', 'p')
-			AND pg_catalog.lower(c.relname) = pg_catalog.lower(r.relname)
+			AND pg_catalog.lower(c.relname::pg_catalog.text COLLATE pg_catalog."C") = pg_catalog.lower(r.relname COLLATE pg_catalog."C")
 		ORDER BY r.i, n.nspname COLLATE pg_catalog."C", c.relname COLLATE pg_catalog."C"`, schemas, tables)
 	if err != nil {
 		return fmt.Errorf("look for names that differ only in case: %w", err)
 	}
 	defer rows.Close()
+	// found holds, for each missing table, the schemas and tables of its rows.
+	found := make([][]nearRow, len(missing))
 	for rows.Next() {
 		var i int
-		var schema string
-		var table *string
-		if err := rows.Scan(&i, &schema, &table); err != nil {
+		var n nearRow
+		if err := rows.Scan(&i, &n.schema, &n.table); err != nil {
 			return fmt.Errorf("look for names that differ only in case: %w", err)
 		}
-		m := missing[i-1]
-		switch {
-		case table != nil:
-			m.nearNames = append(m.nearNames, declaration.TableName{Schema: schema, Name: *table})
-		case schema != m.name.Schema:
-			m.nearSchemas = append(m.nearSchemas, schema)
-		}
+		found[i-1] = append(found[i-1], n)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("look for names that differ only in case: %w", err)
 	}
-	for _, m := range missing {
-		if len(m.nearNames) > 0 {
-			m.nearSchemas = nil
-		}
+	for i, m := range missing {
+		m.nearNames, m.nearSchemas = nearNames(m.name, found[i])
 	}
 	return nil
+}
+
+// nearRow is a row of the query of readNearNames: a schema whose name
+// equals the named one once case is folded, and a table of it whose name
+// equals the named one so, or nil.
+type nearRow struct {
+	schema string
+	table  *string
+}
+
+// nearNames returns, from the rows that the query found for the named table
+// name, the tables whose names differ from it only in white space or case,
+// or else the schemas that do. When the named schema exists as it is
+// written, only its own tables count, and no schema does.
+func nearNames(name declaration.TableName, found []nearRow) ([]declaration.TableName, []string) {
+	exact := slices.ContainsFunc(found, func(n nearRow) bool { return n.schema == name.Schema })
+	var tables []declaration.TableName
+	var schemas []string
+	for _, n := range found {
+		switch {
+		case n.table != nil && (!exact || n.schema == name.Schema):
+			tables = append(tables, declaration.TableName{Schema: n.schema, Name: *n.table})
+		case n.table == nil && !exact:
+			schemas = append(schemas, n.schema)
+		}
+	}
+	if len(tables) > 0 {
+		return tables, nil
+	}
+	return nil, schemas
 }
 
 // readKeys fills in the primary key and the unique keys of the tables. A

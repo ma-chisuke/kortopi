@@ -8,6 +8,56 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
+// Of the rows that the catalogs give for a named table that does not exist,
+// a schema in another case counts only when the named schema does not exist
+// as it is written, and so does a table of such a schema.
+func TestNearNames(t *testing.T) {
+	str := func(s string) *string { return &s }
+	tests := []struct {
+		name        string
+		named       declaration.TableName
+		found       []nearRow
+		wantTables  []declaration.TableName
+		wantSchemas []string
+	}{
+		{
+			name:  "the named schema exists, and another in another case",
+			named: declaration.TableName{Schema: "sales", Name: "new_table"},
+			found: []nearRow{{schema: "Sales"}, {schema: "sales"}},
+		},
+		{
+			name:  "a table of another schema in another case, when the named schema exists",
+			named: declaration.TableName{Schema: "sales", Name: "rooms"},
+			found: []nearRow{{schema: "Sales", table: str("rooms")}, {schema: "sales"}},
+		},
+		{
+			name:       "a table in another case, in the named schema",
+			named:      declaration.TableName{Schema: "sales", Name: "Rooms"},
+			found:      []nearRow{{schema: "Sales"}, {schema: "sales", table: str("rooms")}},
+			wantTables: []declaration.TableName{{Schema: "sales", Name: "rooms"}},
+		},
+		{
+			name:       "a table of a schema in another case",
+			named:      declaration.TableName{Schema: "Sales", Name: "rooms"},
+			found:      []nearRow{{schema: "sales", table: str("rooms")}},
+			wantTables: []declaration.TableName{{Schema: "sales", Name: "rooms"}},
+		},
+		{
+			name:        "a schema in another case, without the table",
+			named:       declaration.TableName{Schema: "Sales", Name: "rooms"},
+			found:       []nearRow{{schema: "sales"}, {schema: "SALES"}},
+			wantSchemas: []string{"sales", "SALES"},
+		},
+		{name: "nothing", named: declaration.TableName{Schema: "billing", Name: "plans"}},
+	}
+	for _, tt := range tests {
+		tables, schemas := nearNames(tt.named, tt.found)
+		if !reflect.DeepEqual(tables, tt.wantTables) || !reflect.DeepEqual(schemas, tt.wantSchemas) {
+			t.Errorf("%s: nearNames = %v, %v, want %v, %v", tt.name, tables, schemas, tt.wantTables, tt.wantSchemas)
+		}
+	}
+}
+
 func TestResolverComparison(t *testing.T) {
 	textEq := &equality{kind: compareOperator, schema: "pg_catalog", op: "="}
 	citextEq := &equality{kind: compareOperator, schema: "ext", op: "="}

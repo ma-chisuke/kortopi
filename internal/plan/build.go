@@ -177,11 +177,11 @@ func nearTable(file string, name declaration.TableName, info TableInfo) error {
 }
 
 // nearColumns returns the columns of the table whose names equal name once
-// white space is trimmed and case is folded.
+// the white space around name is trimmed and case is folded.
 func (c *check) nearColumns(name string) []string {
 	var near []string
 	for _, col := range c.info.Columns {
-		if strings.EqualFold(strings.TrimSpace(col.Name), strings.TrimSpace(name)) {
+		if strings.EqualFold(col.Name, strings.TrimSpace(name)) {
 			near = append(near, col.Name)
 		}
 	}

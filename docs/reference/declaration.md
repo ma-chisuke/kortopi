@@ -366,8 +366,10 @@ kortopi: data/Facility/rooms.csv: schema "Facility" of table Facility.rooms does
 ```
 
 A space after a comma in the header is part of the name of the column, and a name is exact, with its case.
-A column, a table, or a schema that the database lacks, and whose name equals a name of the database once white space is trimmed and case is folded, is such a mistake, not a name that waits for a schema change.
-The names of tables and schemas are compared with ASCII letters folded, and the names of columns with every letter folded.
+A column, a table, or a schema that the database lacks is such a mistake, not a name that waits for a schema change, when its name, with the white space around it trimmed, equals a name of the database once case is folded.
+Only the declared name is trimmed.
+The names of tables and schemas fold ASCII letters only, and the names of columns fold every letter.
+A table of a schema that exists as it is written is compared with the tables of that schema alone: a new table there still waits for the schema change, also when another schema whose name differs only in case has a table of that name.
 
 ### A partition and its partitioned table
 
