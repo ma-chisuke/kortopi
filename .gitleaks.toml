@@ -4,7 +4,7 @@
 useDefault = true
 
 [[allowlists]]
-description = "Dependencies and caches that git ignores"
+description = "Dependencies, caches, and build output that git ignores"
 paths = [
   '''(^|/)node_modules/''',
   '''(^|/)\.venv/''',
@@ -12,6 +12,7 @@ paths = [
   '''(^|/)\.git/''',
   '''(^|/)\.claude/worktrees/''',
   '''(^|/)tmp/''',
+  '''(^|/)dist/''',
 ]
 
 [[allowlists]]
