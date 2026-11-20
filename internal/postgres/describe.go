@@ -51,6 +51,12 @@ type columnMeta struct {
 	// naming it: the column has a default, its type is a domain with a
 	// default, or it is an identity or a generated column.
 	hasDefault bool
+	// typeName is the type of the column, qualified with its schema and
+	// quoted, without a type modifier, so that a cast to it names that type
+	// whatever the search path is.
+	typeName string
+	// collatable is true when the column has a collation.
+	collatable bool
 	typ        uint32
 	eq         equality
 	// ordered is true when the type has a B-tree ordering, which a key
@@ -171,6 +177,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			a.attname::pg_catalog.text, a.attnotnull, a.attgenerated <> '', a.attidentity = 'a', a.atttypid,
 			a.atthasdef OR a.attidentity <> '' OR a.attgenerated <> ''
 				OR EXISTS (SELECT FROM pg_catalog.pg_type AS ty WHERE ty.oid = a.atttypid AND ty.typdefaultbin IS NOT NULL),
+			(SELECT ARRAY[tn.nspname::pg_catalog.text, ty.typname::pg_catalog.text] FROM pg_catalog.pg_type AS ty
+				JOIN pg_catalog.pg_namespace AS tn ON tn.oid = ty.typnamespace WHERE ty.oid = a.atttypid),
+			a.attcollation <> 0,
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'INSERT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'UPDATE'),
@@ -194,8 +203,10 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var rowSecurity, schemaUsage, selectable, insertable, updatable, deletable bool
 		var column *string
 		var notNull, generated, identityAlways, hasDefault *bool
+		var typeName []string
+		var collatable *bool
 		var typ *uint32
-		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault,
+		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
 			&selectable, &insertable, &updatable, &deletable); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
@@ -205,8 +216,11 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			if !ok {
 				what = "a relation of kind " + kind
 			}
-			errs = append(errs, fmt.Errorf("%s is %s, not a table: kortopi declares the rows of tables only, so remove its declaration",
-				m.name, what))
+			advice := "so remove its declaration"
+			if s.export {
+				advice = "so it cannot be exported"
+			}
+			errs = append(errs, fmt.Errorf("%s is %s, not a table: kortopi declares the rows of tables only, %s", m.name, what, advice))
 			continue
 		}
 		m.exists = true
@@ -217,11 +231,15 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.oid = oid
 		byOID[oid] = m
 		if column != nil {
-			m.columns = append(m.columns, columnMeta{
+			col := columnMeta{
 				name: *column, notNull: *notNull, generated: *generated, identityAlways: *identityAlways, typ: *typ,
-				hasDefault: *hasDefault,
+				hasDefault: *hasDefault, collatable: *collatable,
 				selectable: selectable, insertable: insertable, updatable: updatable,
-			})
+			}
+			if len(typeName) == 2 {
+				col.typeName = quoteIdent(typeName[0]) + "." + quoteIdent(typeName[1])
+			}
+			m.columns = append(m.columns, col)
 		}
 	}
 	if err := rows.Err(); err != nil {

@@ -21,6 +21,8 @@ flags:
                     kortopi.toml (default: the current directory)
   --schema <name>   plan only the tables of this schema; repeat the flag for
                     more schemas
+  --format <name>   text (the default), or sql: print the plan as SQL
+                    statements that run as they are
   --exit-code       exit with status 2 when the plan is not empty
   --host <host>     the host of the database server
   --port <port>     the port of the database server
@@ -42,6 +44,8 @@ exit status:
 `--schema` は、計画を、指定したスキーマの宣言したテーブルに絞る。
 テーブルを1つも宣言していないスキーマを指定するとエラーになる。そのため、綴りを誤った名前で計画が空に絞られることはない。
 `kortopi.toml` の設定は、`--schema` が外したスキーマのものも含め、宣言したすべてのテーブルと照らし合わせる。
+
+`--format sql` は、計画をテキストのかわりに SQL の文として出力する（[計画を SQL として出力する](#計画を-sql-として出力する)）。
 
 `kortopi plan --help` と `kortopi plan -h` も、同じヘルプを標準出力に出す。
 
@@ -274,6 +278,144 @@ apply は、削除の前に参照している行を変えたり削除したり�
 
 出力は色のないテキストであり、端末でも、CI のログでも、ファイルでも同じである。
 
+## 計画を SQL として出力する
+
+`kortopi plan --format sql` は、計画を SQL のスクリプトとして出力する。適用が実行する文に値を書き出したもので、kortopi なしで実行できる。
+データベースを版管理のマイグレーションだけで変えるチームは、スクリプトをレビューし、マイグレーションに貼る。
+計画はテキストのときと同じく同じセッションで立て、それ以上のものは要らない。
+
+[出力の読み方](#出力の読み方)の3つのテーブルの計画を SQL にすると、次のようになる。
+
+```sql
+-- Written by kortopi from the data directory data, against the database app.
+-- It is the difference at the moment of the plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL client_encoding = 'UTF8';
+SET LOCAL lc_monetary = 'C';
+SET LOCAL xmloption = content;
+
+-- catalog.plans: 1 to insert, 1 to update
+INSERT INTO "catalog"."plans" ("code", "name", "price") VALUES
+  ('team', 'Team', '40.00');
+UPDATE ONLY "catalog"."plans" SET "name" = 'Pro Plan', "price" = '25.00' WHERE "code" OPERATOR("pg_catalog".=) 'pro'::"pg_catalog"."text";
+
+-- facility.room_types: 1 to insert, 1 to update
+INSERT INTO "facility"."room_types" ("code", "name", "capacity") VALUES
+  ('suite', 'Suite Room', '4');
+UPDATE ONLY "facility"."room_types" SET "capacity" = '3' WHERE "code" OPERATOR("pg_catalog".=) 'twin'::"pg_catalog"."text";
+
+-- facility.rooms: 1 to insert
+INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
+  ('103', 'suite', NULL);
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- catalog.plans: 1 to delete
+-- DELETE FROM ONLY "catalog"."plans" AS s USING (VALUES
+--   ('legacy'::"pg_catalog"."text")
+-- ) AS d ("code") WHERE s."code" OPERATOR("pg_catalog".=) d."code";
+```
+
+### スクリプトの読み方
+
+- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。
+- コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。
+- 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
+- テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
+- 削除は最後に、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
+- 名前はすべて二重引用符で囲む。PostgreSQL のある版でそのまま書ける名前が、別の版ではキーワードでありうるからである。ふつうのテーブルには適用と同じく `ONLY` を付け、パーティションテーブルには付けない。
+- スキーマの変更を待つテーブルには文を書かない。スキーマの変更を待つ列は、そのテーブルの文から除く。
+
+することのない計画は、1行になる。
+
+```sql
+-- No changes: the database matches the declaration, so there is nothing to do.
+```
+
+スキーマの変更を待つテーブルと列しかない計画は、冒頭のコメントと次の行になる。
+
+```sql
+-- There is no statement to run until the schema is applied.
+```
+
+スクリプトには `BEGIN` も `COMMIT` もない。トランザクションは、実行する人が決める。
+スクリプトはそろってから標準出力に出すので、失敗した計画はそこに何も出さない。
+`--exit-code` は、テキストのときと同じ終了コードを返す。
+
+### スクリプトの実行
+
+スクリプトは、計画が読んだデータベースに対して、計画のすぐあとに、1つのトランザクションで実行する。
+
+```sh
+kortopi plan --dir data --format sql > rows.sql
+psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
+```
+
+`--single-transaction` はファイルを1つのトランザクションで実行し、`ON_ERROR_STOP=1` は最初のエラーで止める。そのため、トランザクションはロールバックされる。
+版管理のマイグレーションの道具は、ふつう各ファイルをそれぞれのトランザクションで実行する。使う道具がそうするかを確かめる。
+`SET LOCAL` の文には、そのトランザクションが要る。トランザクションの外では、警告を出すだけである。
+`SET LOCAL client_encoding` が効くのは、クライアントがそのあとに別のメッセージとして送る文である。`psql` はそう送る。スクリプト全体を1つのメッセージで送るクライアントでは、スクリプトはすでにそのクライアントの符号化方式で読まれている。そのため、そうしたクライアントは `client_encoding` を UTF8 にして接続する必要がある。データベースのドライバーは、ふつうそうする。
+
+スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除を示すか、何も示さない。
+
+### 削除
+
+削除はコメントである。その文のどの行も、コメントの印 `--` で始まる。
+適用がこれらの行を削除するのは `--allow-delete` のときだけである（[kortopi apply](apply.ja.md#削除の安全策)）。同じく、スクリプトがそれらを削除するのは、その印を外したときだけである。
+計画の参照の行は、各テーブルの削除の上にコメントとして置く。
+印を外す前に、それを読む。スクリプトの中には、`--max-delete` を当てはめるものも、参照を数え直すものもない。
+
+### スクリプトの値
+
+値はどれも文字列リテラルである。PostgreSQL は、それを受け取る列の型で読む。NULL は `NULL` と書く。
+リテラルは、どのセッションでも同じに読める。
+
+- そのテキストは、計画の設定で PostgreSQL が出力するとおりの値である（[値の比べ方](comparison.ja.md#セッションの設定)）。それは、ほかの設定でも同じに読める形である。日付は `YYYY-MM-DD`、`timestamptz` はオフセット付き、間隔は符号の要るフィールドすべてに符号付き、`bytea` は16進、浮動小数点数は同じ値に読み戻せる最短のテキストである。
+- バックスラッシュも制御文字も含まないテキストは、標準の文字列 `'...'` にする。これは、`standard_conforming_strings` がどうであれ同じに読める。
+- それ以外のテキストは、エスケープ文字列 `E'...'` にし、制御文字はエスケープで書く。そのため、リテラルはいつも1行である。
+
+| 値 | スクリプトでの形 |
+|---|---|
+| NULL | `NULL` |
+| 空文字列 | `''` |
+| 文字列の `NULL` | `'NULL'` |
+| `it's` | `'it''s'` |
+| バックスラッシュ（`a\b`） | `E'a\\b'` |
+| 2行とタブ | `E'two\nlines\tand a tab'` |
+| `bytea`（`\x6869`） | `E'\\x6869'` |
+
+行を探すキーは、型のスキーマを添えて列の型へキャストし、計画が行を照合する演算子で比べる。演算子にもスキーマを添える。そのため、検索パスにかかわらず、計画が照合したとおりに行が見つかる。
+
+```sql
+"code" OPERATOR("pg_catalog".=) 'pro'::"pg_catalog"."text"
+```
+
+リテラルの読み方を変える設定のうち3つは、どんなリテラルにも運べない。ASCII でないテキストの `client_encoding`、`money` の `lc_monetary`、文書全体でなく断片である `xml` の値の `xmloption` である。
+スクリプトは、計画が値を読んだときと同じに、それらを `SET LOCAL` で固定する。
+kortopi のテストを動かすサーバーには C と en_US のロケールしかなく、どちらも `money` を同じに書く。そのため、テストが示すのは、`lc_monetary` の固定がそこで害にならないことだけである。
+
+正しい UTF-8 でない値は、UTF-8 のスクリプトには書けないので、エラーである。そうした値は、符号化方式 `SQL_ASCII` のデータベースなら持てる。
+
+```text
+kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not valid UTF-8, which the encoding of the database allows: the SQL that kortopi writes is UTF-8, so correct the value in the database
+```
+
+### スクリプトがしないこと
+
+スクリプトは、適用と同じ変更を同じ順にする。ただし、適用が文の前後ですることはしない。
+
+- ロックを取らない。そのため、同時に動く適用を待たない。
+- 各文が、計画の示す数の行を変えたかを検査しない。行が計画と違うデータベースでは、行の見つからない更新や削除は、エラーなしに何も変えない。挿入がキーで失敗することもある。文のすることを変えるトリガーやルールにも気づかない。
+- `--max-delete` を当てはめず、削除の前に参照を数え直すこともしない。
+- 更新は値の違う列だけを設定する。そのため、要るのはそれらの列に対する `UPDATE` だけであり、`UPDATE OF` のトリガーもそれらの列でしか働かない。
+- 順序と遅らせるキーは、`--allow-delete` のある適用と同じく削除も数えて決める。そのため、削除のコメントを外しても、スクリプトの順序は正しいままである。
+- 適用が拒む外部キーの循環も、エラーにしない。そのテーブルは名前の順に置き、その上にコメントを置く。コメントは、どの外部キーで文が失敗しうるかを示し、そのどれかを `DEFERRABLE` にするように示す。削除があるときだけ適用がその循環を拒むなら、コメントは、`--allow-delete` のある適用はそれを拒み、ない適用は拒まないと示す。
+
+参照が環境ごとに違う ID、たとえば参照される行の UUID を持つ宣言では、スクリプトはそれらの ID が同じ場所でしか動かない（[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)）。
+
 ## エラー
 
 計画は標準出力に出す。エラーは、1つのエラーにつき1行ずつ、`kortopi: <message>` として標準エラー出力に出す。
@@ -285,6 +427,7 @@ kortopi は、次の順に検査する。
 2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言が挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
+5. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
 
 よくある誤りとそのメッセージは、[宣言のファイル](declaration.ja.md#よくある誤り)にある。
 
@@ -299,6 +442,7 @@ kortopi は、次の順に検査する。
 `--exit-code` がなければ、変更を示した計画も 0 で終わる。そのため、マスタデータを変えるプルリクエストが、自分の計画で失敗することはない。
 
 `--exit-code` があれば、計画でずれを検出できる。挿入・更新・削除する行が1つでもあるか、スキーマの変更を待つテーブルや列があれば、終了コードは 2 になる。
+`--format sql` でも同じである。
 データベースを main ブランチの宣言と比べる定期実行は、3つの結果を次のように見分けられる。
 
 ```sh
@@ -313,6 +457,6 @@ esac
 
 `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:d1d792c397329180f7d0375ec541a2ccc309d998317a7799953902ce4efa0d52 -->
+<!-- i18n-source: plan.md sha256:1a587a395a4d7581ca94720070cf74108583d43c5af23d904a86ac0e304f0f1d -->

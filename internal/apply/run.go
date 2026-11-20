@@ -60,15 +60,12 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 
 	names := make([]declaration.TableName, len(p.Tables))
 	tables := make(map[declaration.TableName]*plan.Table, len(p.Tables))
-	writes := make(map[declaration.TableName]bool)
 	for i := range p.Tables {
 		t := &p.Tables[i]
 		names[i] = t.Name
 		tables[t.Name] = t
-		if len(t.Diff.Inserts) > 0 || len(t.Diff.Updates) > 0 || opts.AllowDelete && len(t.Diff.Deletes) > 0 {
-			writes[t.Name] = true
-		}
 	}
+	writes := Writes(p, opts.AllowDelete)
 	if len(writes) == 0 {
 		return r, nil
 	}
@@ -121,6 +118,19 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		return nil, err
 	}
 	return r, nil
+}
+
+// Writes returns the tables of a plan that have rows to write: rows to
+// insert or update, and rows to delete when deletes is true.
+func Writes(p *plan.Plan, deletes bool) map[declaration.TableName]bool {
+	writes := make(map[declaration.TableName]bool)
+	for i := range p.Tables {
+		d := &p.Tables[i].Diff
+		if len(d.Inserts) > 0 || len(d.Updates) > 0 || deletes && len(d.Deletes) > 0 {
+			writes[p.Tables[i].Name] = true
+		}
+	}
+	return writes
 }
 
 // write runs one statement of a table when the plan has rows for it, and

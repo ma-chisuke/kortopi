@@ -2,8 +2,11 @@
 node_modules/
 .venv/
 
-# Build and test output
+# Build and test output. `go build ./cmd/kortopi` without -o writes the binary
+# into the root; `make build` writes it into bin/.
 /bin/
+/kortopi
+/kortopi.exe
 dist/
 coverage/
 *.out

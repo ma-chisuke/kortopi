@@ -1,0 +1,6 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 0 to insert, 0 to update, 0 to delete in 1 table.
+-- Run the statements in one transaction.
+-- billing.discounts: known after the schema is applied (2 declared rows); the script has no statement for it.
+
+-- There is no statement to run until the schema is applied.

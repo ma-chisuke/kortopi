@@ -1,0 +1,16 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 1 to insert, 1 to update, 0 to delete in 2 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- Tables geo.cities and geo.regions reference each other through foreign keys that are not deferrable, "cities_region" of geo.cities and "regions_capital" of geo.regions, and tables geo.cities and geo.regions have rows to write.
+-- An apply refuses this. Here their statements stand in the order of their names, and some of them may fail on
+-- these foreign keys whatever the order. Declare one of these foreign keys DEFERRABLE.
+
+-- geo.cities: 1 to insert
+INSERT INTO geo.cities (10, n10);
+
+-- geo.regions: 1 to update
+UPDATE geo.regions SET 1 columns WHERE (1);

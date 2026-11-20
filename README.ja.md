@@ -8,7 +8,7 @@ kortopi は、PostgreSQL のマスタテーブルの行を宣言的に管理す�
 
 > [!NOTE]
 > kortopi は開発中で、まだリリースがない。
-> `kortopi plan` と `kortopi apply` は動く。`export` と、計画の SQL の出力は、まだできていない。
+> 4つのコマンド `plan`・`apply`・`export`・`version` は、どれも動く。
 > このページは最初の版の設計を説明する。詳細と理由は[決定の記録](docs/adr/README.ja.md)にある。
 
 ## 何をするか
@@ -29,8 +29,9 @@ data/
 - **宣言**では、行を CSV のファイルか、SQL の `INSERT ... VALUES` 文で書く。`pg_dump --column-inserts` の出力は、そのまま宣言になる。
 - **plan** では、kortopi がデータベースを読み、テーブルごとに挿入・更新・削除する行を出す。適用のあとにもう一度実行すると、変更なしになる。
 - **apply** では、計画を1つのトランザクションで、外部キーの順に適用する。
-- **export** では、今あるデータベースの行を宣言として書き出す。
-- **ずれの検査**では、データベースと宣言が違うことを、終了コードで CI や定期実行に知らせる。
+- **計画の SQL での出力**は、データベースを版管理のマイグレーションだけで変えるチームのためにある。適用の文を出力するので、レビューしてマイグレーションに貼れる。
+- **export** では、今あるデータベースの指定したテーブルの行を、テーブルごとのファイルに宣言として書き出す。計画は、それをデータベースと等しいと判断する。
+- **ずれの検査**では、データベースと宣言が違えば `kortopi plan --exit-code` が終了コード 2 で終わり、それを CI や定期実行に知らせる。
 
 ## インストールする
 
@@ -84,7 +85,20 @@ CREATE TABLE facility.room_types (code text PRIMARY KEY, name text NOT NULL, cap
 INSERT INTO facility.room_types VALUES ('single', 'Single', 1), ('twin', 'Twin', 2);
 ```
 
-このテーブルが持つべき行を、`data/facility/room_types.csv` に宣言する。
+データベースから宣言を始める。接続先を libpq の環境変数で渡して、テーブルを書き出す。
+書き出しは、データベースを読むだけである。
+
+```sh
+PGHOST=db.example.test PGUSER=planner PGDATABASE=app bin/kortopi export --dir data --table facility.room_types
+```
+
+```text
+wrote data/facility/room_types.csv (2 rows)
+Exported 1 table with 2 rows.
+```
+
+これで `data/facility/room_types.csv` は、テーブルと同じ2つの行を持ち、計画は変更を示さない。
+このファイルを、テーブルが持つべき行に変える。
 
 ```csv
 code,name,capacity
@@ -93,7 +107,7 @@ twin,Twin,3
 suite,Suite,4
 ```
 
-接続先を libpq の環境変数で渡して、計画を立てる。
+続けて、計画を立てる。
 
 ```sh
 PGHOST=db.example.test PGUSER=planner PGDATABASE=app bin/kortopi plan --dir data
@@ -136,8 +150,9 @@ apply は、テーブルに対する `INSERT` と `UPDATE` を持つロールで
 
 - [宣言のファイル](docs/reference/declaration.ja.md)：データのディレクトリ、CSV と SQL のファイル、`kortopi.toml`。
 - [値の比べ方](docs/reference/comparison.ja.md)：宣言の値が保存されている値と等しくなる条件を、型ごとに示す。
-- [kortopi plan](docs/reference/plan.ja.md)：フラグ、接続、出力、終了コード。
+- [kortopi plan](docs/reference/plan.ja.md)：フラグ、接続、出力、SQL での計画の出力、終了コード。
 - [kortopi apply](docs/reference/apply.ja.md)：apply に要るものとすること、削除の安全策、エラー。
+- [kortopi export](docs/reference/export.ja.md)：書き出すもの、書き出したあとに直すこと、宣言したテーブルの書き出し直し、エラー。
 
 ## どう動くか
 
@@ -186,4 +201,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:53d5df2c746f741e1bcad37dde240aaac648b50e295832941f59d78f4b103c56 -->
+<!-- i18n-source: README.md sha256:b48c94122108fe49c88e625881fd275a63bd8e41115ff792dbe9b7226b423abe -->

@@ -197,6 +197,16 @@
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
 | outcome（コミットの） | 結果 |
+| script（SQL として出力した計画） | スクリプト |
+| statement, keyword（SQL の） | 文、キーワード |
+| string literal, standard string, escape string（`E'...'`） | 文字列リテラル、標準の文字列、エスケープ文字列 |
+| comment（SQL の）, header comment（スクリプトの）, comment mark | コメント、冒頭のコメント、コメントの印 |
+| refresh（宣言済みのテーブルをもう一度書き出す） | 書き出し直す |
+| replace（ファイルを） | 置き換える |
+| temporary file | 一時ファイル |
+| read-only（トランザクションが） | 読み取り専用 |
+| note（標準エラー出力の1行） | 注記 |
+| umask | umask |
 | release（kortopi の）, pre-release | リリース、プレリリース |
 | tag（Git の） | タグ |
 | archive（リリースの） | アーカイブ |
@@ -212,4 +222,4 @@
 | sign, signature | 署名する、署名 |
 | administrator（リポジトリの） | 管理者 |
 
-<!-- i18n-source: translation.md sha256:697ab7c035f44c7e05218f00141dd773db1de54a9853ad2436990ae9c9620614 -->
+<!-- i18n-source: translation.md sha256:af5bf61b7badf056a1d0ff037a008ce82952d0e764fc83d43fd863f8f252ed4a -->

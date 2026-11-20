@@ -1,0 +1,15 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 2 to insert, 0 to update, 0 to delete in 2 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- The tables of a cycle of foreign keys write rows that reference each other, so these foreign keys are checked at the commit, as an apply does.
+SET CONSTRAINTS geo.regions_capital DEFERRED;
+
+-- geo.regions: 1 to insert
+INSERT INTO geo.regions (1, n1);
+
+-- geo.cities: 1 to insert
+INSERT INTO geo.cities (10, n10);
