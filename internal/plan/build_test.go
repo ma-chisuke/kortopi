@@ -343,10 +343,31 @@ func TestBuildErrors(t *testing.T) {
 		want     string
 	}{
 		{
-			name:  "no primary key and no chosen key",
+			name:  "no primary key, no unique key, and no chosen key",
 			table: csvTable(tableT, "id"),
 			info:  existing(nil, "id"),
-			want:  `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of data/kortopi.toml`,
+			want: `table a.t has neither a primary key nor a unique key, and a match key must be one of them: ` +
+				`give the table a primary key in the schema, or a unique key that you name with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "no primary key, a unique key, and no chosen key",
+			table: csvTable(tableT, "id", "code"),
+			info:  with(existing(nil, "id", "code"), unique([]string{"code"})),
+			want:  `table a.t has no primary key: name its unique key ("code") with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "no primary key, two unique keys, and no chosen key",
+			table: csvTable(tableT, "id", "code"),
+			info:  with(existing(nil, "id", "code"), unique([]string{"code"}, []string{"id"})),
+			want:  `table a.t has no primary key: name one of its unique keys, ("code") or ("id"), with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:     "chosen key of a table without keys",
+			table:    csvTable(tableT, "label"),
+			info:     existing(nil, "label"),
+			settings: config.Table{Key: []string{"label"}},
+			want: `data/kortopi.toml: key ("label") of table a.t is neither the primary key nor a unique key of the table, and the table has neither: ` +
+				`a match key must be one of them, so give the table a primary key or a unique key in the schema`,
 		},
 		{
 			name:  "no primary key, and keys that cannot match rows",
@@ -378,7 +399,7 @@ func TestBuildErrors(t *testing.T) {
 			table:    csvTable(tableT, "id", "name"),
 			info:     with(existing(pk, "id", "name", "code"), unique([]string{"code"})),
 			settings: config.Table{Key: []string{"name"}},
-			want:     `data/kortopi.toml: key ("name") of table a.t is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint`,
+			want:     `data/kortopi.toml: key ("name") of table a.t is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of one of its keys, ("id") or ("code")`,
 		},
 		{
 			name:  "chosen key that is a unique key that cannot match rows",
@@ -524,8 +545,8 @@ func TestBuildErrorsOfSeveralTables(t *testing.T) {
 	}}
 	_, err := Build(t.Context(), decl, nil, db)
 
-	want := `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of kortopi.toml` + "\n" +
-		`table c.v has no primary key: name the columns of a unique key with key in [tables."c.v"] of kortopi.toml`
+	want := `table a.t has neither a primary key nor a unique key, and a match key must be one of them: give the table a primary key in the schema, or a unique key that you name with key in [tables."a.t"] of kortopi.toml` + "\n" +
+		`table c.v has neither a primary key nor a unique key, and a match key must be one of them: give the table a primary key in the schema, or a unique key that you name with key in [tables."c.v"] of kortopi.toml`
 	if err == nil || err.Error() != want {
 		t.Errorf("Build() error =\n%v\nwant\n%v", err, want)
 	}

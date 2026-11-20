@@ -131,13 +131,20 @@ A plan now finds no change, with the settings that a plan of this declaration wi
 
 ### A table without a primary key
 
-A table without a primary key and without a `key` in `kortopi.toml` is exported, sorted by all its columns, and the export prints a note on standard error:
+A table without a primary key and without a `key` in `kortopi.toml` is exported, sorted by all its columns, and the export prints a note on standard error.
+A match key must be the primary key or a unique key of the table ([Declaration files](declaration.md#kortopitoml)), so the note says what the table offers.
+When the table has a unique key, the note names it, and a plan of the table works once `kortopi.toml` names that key:
 
 ```text
-note: table misc.tags has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one with key in [tables."misc.tags"] of data/kortopi.toml
+note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key ("label") with key in [tables."misc.labels"] of data/kortopi.toml
 ```
 
-A plan of the table fails until `kortopi.toml` names a key: the columns of a unique key of the table.
+When the table has neither, no setting helps: a plan of the table fails until the schema gives the table a primary key or a unique key.
+
+```text
+note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: a match key must be a primary key or a unique key of the table, so give the table one in the schema
+```
+
 The settings may name the key before the first export too. An export does not check the settings against the declaration, so a `key` for a table that no file declares yet sorts its rows at that export.
 
 ## Refresh a declared table

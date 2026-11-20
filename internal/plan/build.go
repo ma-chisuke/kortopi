@@ -188,6 +188,16 @@ func (c *check) nearColumns(name string) []string {
 	return near
 }
 
+// KeyChoices returns keys as a message names them: the columns of each key
+// in parentheses, as in ("code") or ("country", "zip").
+func KeyChoices(keys [][]string) string {
+	choices := make([]string, len(keys))
+	for i, k := range keys {
+		choices[i] = "(" + quoteAll(k) + ")"
+	}
+	return strings.Join(choices, " or ")
+}
+
 // alternatives returns the names, each quoted after the word what and
 // separated by "or", as in `column "a" or column "A"`.
 func alternatives(what string, names []string) string {
@@ -344,7 +354,16 @@ func (c *check) primaryKey() ([]string, []error) {
 			return nil, []error{fmt.Errorf("table %s has no primary key that can match rows%s: name the columns of a unique key that can with key in [tables.%s] of %s",
 				c.table.Name, strings.Join(unusable, ""), strconv.Quote(c.table.Name.String()), c.settingsFile)}
 		}
-		return nil, []error{fmt.Errorf("table %s has no primary key: name the columns of a unique key with key in [tables.%s] of %s",
+		if len(c.info.UniqueKeys) > 0 {
+			which := "its unique key " + KeyChoices(c.info.UniqueKeys)
+			if len(c.info.UniqueKeys) > 1 {
+				which = "one of its unique keys, " + KeyChoices(c.info.UniqueKeys) + ","
+			}
+			return nil, []error{fmt.Errorf("table %s has no primary key: name %s with key in [tables.%s] of %s",
+				c.table.Name, which, strconv.Quote(c.table.Name.String()), c.settingsFile)}
+		}
+		return nil, []error{fmt.Errorf("table %s has neither a primary key nor a unique key, and a match key must be one of them: "+
+			"give the table a primary key in the schema, or a unique key that you name with key in [tables.%s] of %s",
 			c.table.Name, strconv.Quote(c.table.Name.String()), c.settingsFile)}
 	}
 	var errs []error
@@ -397,8 +416,17 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 					c.settingsFile, quoteAll(key), c.table.Name, k.Reason)}
 			}
 		}
-		return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint",
-			c.settingsFile, quoteAll(key), c.table.Name)}
+		keys := c.info.UniqueKeys
+		if len(c.info.PrimaryKey) > 0 {
+			keys = append([][]string{c.info.PrimaryKey}, keys...)
+		}
+		if len(keys) == 0 {
+			return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, and the table has neither: "+
+				"a match key must be one of them, so give the table a primary key or a unique key in the schema",
+				c.settingsFile, quoteAll(key), c.table.Name)}
+		}
+		return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of one of its keys, %s",
+			c.settingsFile, quoteAll(key), c.table.Name, KeyChoices(keys))}
 	}
 	for _, name := range key {
 		if !c.byName[name].NotNull {

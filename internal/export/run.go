@@ -326,8 +326,21 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 	var note string
 	if len(key) == 0 {
 		key = j.req.Columns
-		note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one with key in [tables.%s] of %s",
-			name, strconv.Quote(name.String()), filepath.Join(decl.Dir, config.FileName))
+		settingsFile := filepath.Join(decl.Dir, config.FileName)
+		switch {
+		case len(info.UniqueKeys) == 1:
+			note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key %s with key in [tables.%s] of %s",
+				name, plan.KeyChoices(info.UniqueKeys), strconv.Quote(name.String()), settingsFile)
+		case len(info.UniqueKeys) > 1:
+			note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one of its unique keys, %s, with key in [tables.%s] of %s",
+				name, plan.KeyChoices(info.UniqueKeys), strconv.Quote(name.String()), settingsFile)
+		default:
+			// A match key must be a primary key or a unique key (ADR-0012),
+			// so only a change of the schema lets a plan match the rows.
+			note = fmt.Sprintf("note: table %s has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: "+
+				"a match key must be a primary key or a unique key of the table, so give the table one in the schema",
+				name)
+		}
 	}
 	j.req.OrderBy = slices.Clone(key)
 	return j, note, errs

@@ -101,6 +101,8 @@ func table(cols ...string) plan.TableInfo {
 func database() *fakeDB {
 	noKey := table("code", "name")
 	noKey.PrimaryKey = nil
+	uniqueKey := table("label", "note")
+	uniqueKey.PrimaryKey, uniqueKey.UniqueKeys = nil, [][]string{{"label"}}
 	partition := table("id", "day")
 	partition.PartitionOf = []declaration.TableName{tn("part.events")}
 	subPartition := table("id", "day")
@@ -110,6 +112,7 @@ func database() *fakeDB {
 		tn("facility.rooms"):      table("id", "room_type", "note"),
 		tn("billing.plans"):       table("id", "code", "name"),
 		tn("misc.tags"):           noKey,
+		tn("misc.labels"):         uniqueKey,
 		tn("misc.only_generated"): {Exists: true, Columns: []plan.ColumnInfo{{Name: "gen", Generated: true}}},
 		tn("part.events"):         table("id", "day"),
 		tn("part.events_2026"):    partition,
@@ -211,8 +214,18 @@ func TestRun(t *testing.T) {
 				"misc/tags.csv": line("misc.tags", csv, "code,name", "code,name"),
 			},
 			wantOut: "wrote DIR/misc/tags.csv (2 rows)\nExported 1 table with 2 rows.\n",
-			wantNotes: `note: table misc.tags has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: ` +
-				`name one with key in [tables."misc.tags"] of DIR/kortopi.toml` + "\n",
+			wantNotes: `note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: ` +
+				`a match key must be a primary key or a unique key of the table, so give the table one in the schema` + "\n",
+		},
+		{
+			name: "a table with a unique key and without a primary key",
+			opts: Options{Tables: []declaration.TableName{tn("misc.labels")}, Format: csv},
+			wantFiles: map[string]string{
+				"misc/labels.csv": line("misc.labels", csv, "label,note", "label,note"),
+			},
+			wantOut: "wrote DIR/misc/labels.csv (2 rows)\nExported 1 table with 2 rows.\n",
+			wantNotes: `note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: ` +
+				`name its unique key ("label") with key in [tables."misc.labels"] of DIR/kortopi.toml` + "\n",
 		},
 		{
 			name:  "a declared table, replaced in the format and with the columns of its file",

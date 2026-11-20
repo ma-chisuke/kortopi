@@ -132,12 +132,19 @@ pro,Pro,20.00
 ### 主キーのないテーブル
 
 主キーがなく、`kortopi.toml` に `key` もないテーブルも書き出せる。そのときは、すべての列で行を並べ、標準エラー出力に注記を出す。
+照合キーはテーブルの主キーか一意キーでなければならない（[宣言のファイル](declaration.ja.md#kortopitoml)）。そのため注記は、テーブルが持つキーを示す。
+テーブルに一意キーがあれば、注記はそれを挙げる。`kortopi.toml` がそのキーを指定すれば、テーブルの計画は動く。
 
 ```text
-note: table misc.tags has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one with key in [tables."misc.tags"] of data/kortopi.toml
+note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key ("label") with key in [tables."misc.labels"] of data/kortopi.toml
 ```
 
-そのテーブルの計画は、`kortopi.toml` がキー、つまりテーブルの一意キーの列を指定するまで失敗する。
+テーブルにどちらのキーもなければ、どんな設定でも足りない。スキーマがテーブルに主キーか一意キーを与えるまで、テーブルの計画は失敗する。
+
+```text
+note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: a match key must be a primary key or a unique key of the table, so give the table one in the schema
+```
+
 最初の書き出しの前にキーを指定してもよい。書き出しは設定を宣言と照らし合わせない。そのため、まだどのファイルも宣言していないテーブルの `key` も、その書き出しで行を並べる。
 
 ## 宣言したテーブルを書き出し直す
@@ -394,4 +401,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:2130f21bc09368fdfcceeb1bd7aea4d8cf3e2a9e42eca1447e793da07ccf5e9a -->
+<!-- i18n-source: export.md sha256:21e0840b1e727bde6898f6e8a1e08c238ded8e10d4e96d49cd8813e45bc45f5e -->
