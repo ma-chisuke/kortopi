@@ -108,7 +108,7 @@ GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 
 ```text
 kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database; a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
-kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" lacks it: grant the role SELECT on the table
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "planner" sees only the rows that its policies allow, and a plan would take the others for missing rows: plan as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
@@ -137,6 +137,26 @@ kortopi はトランザクションをロールバックし、接続を閉じ、
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
+```
+
+### スキーマごとのロール
+
+文脈ごとに1つのスキーマを持つアプリケーションには、スキーマごとに所有者のロールと実行時のロールがあり、すべてのスキーマを使えるロールはないことが多い。
+そのときは、スキーマごとに1回、そのスキーマのロールで、`--schema` を付けて kortopi を実行する。
+
+```sh
+PGUSER=facility_owner kortopi plan --dir data --schema facility
+PGUSER=notification_owner kortopi plan --dir data --schema notification
+```
+
+- `--schema` は、実行をそのスキーマの宣言済みのテーブルに絞る。そのため、ロールに要るのはそのスキーマの権限だけである。`kortopi.toml` の設定は、引き続き宣言したすべてのテーブルに対して検査する。
+- 計画は、[この節](#セッションに要るもの)が挙げるものを持つ、そのスキーマのどのロールでも実行できる。たとえば、宣言したテーブルに `SELECT` を持つ実行時のロールである。apply は、宣言したテーブルに書くこともできるロールで実行する。ふつうは所有者である（[kortopi apply](apply.ja.md#スキーマごとの-apply)）。
+- 各ロールのパスワードは、その実行の `PGPASSWORD` か、ユーザーごとに1行を持つパスワードファイルで与える。
+
+`--schema` がなければ、ロールが使えないスキーマの最初のテーブルで実行が止まる。エラーは両方の対処を示す。
+
+```text
+kortopi: a plan needs USAGE on schema "notification" and SELECT on table notification.mail_templates, and the role "facility_owner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 ```
 
 ## 出力の読み方
@@ -475,4 +495,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:ed1f51811d0d68f0d22fbeda1f36eeeb1b39d155aefbcb1928789f25c3f7646f -->
+<!-- i18n-source: plan.md sha256:374d9cae915b946f28be92503e840927f7f77c2b6c0f98c341704cb471cb6e98 -->

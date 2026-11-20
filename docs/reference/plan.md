@@ -108,7 +108,7 @@ Each check that fails stops the plan with its own error, which names what is mis
 
 ```text
 kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database; a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
-kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" lacks it: grant the role SELECT on the table
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "planner" sees only the rows that its policies allow, and a plan would take the others for missing rows: plan as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
@@ -137,6 +137,26 @@ kortopi rolls the transaction back, closes the connection, and exits with status
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
+```
+
+### One role for each schema
+
+An application with one schema for each context often has an owner role and a runtime role for each schema, and no role that may use every schema.
+Run kortopi then once for each schema, as a role of that schema, with `--schema`:
+
+```sh
+PGUSER=facility_owner kortopi plan --dir data --schema facility
+PGUSER=notification_owner kortopi plan --dir data --schema notification
+```
+
+- `--schema` narrows the run to the declared tables of the schema, so the role needs privileges on that schema alone. The settings in `kortopi.toml` are still checked against every declared table.
+- A plan runs as any role of the schema that has what [this section](#what-the-session-needs) lists, such as the runtime role with `SELECT` on the declared tables. An apply runs as a role that may also write the declared tables, usually the owner ([kortopi apply](apply.md#one-apply-for-each-schema)).
+- Give the password of each role in `PGPASSWORD` for its run, or in the password file, which holds a line for each user.
+
+Without `--schema`, the run stops at the first table of a schema that the role may not use, and the error names both ways out:
+
+```text
+kortopi: a plan needs USAGE on schema "notification" and SELECT on table notification.mail_templates, and the role "facility_owner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 ```
 
 ## Read the output

@@ -295,7 +295,7 @@ GRANT SELECT ON facility.room_types, facility.rooms TO reader;
 権限の不足と行単位セキュリティは、計画と同じくエラーである。「a plan」のかわりに「an export」と示す。
 
 ```text
-kortopi: an export needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: an export needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or leave the tables of the schema out of the export
 kortopi: an export needs SELECT on table facility.room_types, and the role "reader" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "reader" sees only the rows that its policies allow, and an export would leave the others out: export as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
 ```
@@ -394,4 +394,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:7244e5e2e9f118f8a701069fd887281ac173eae9a30629a56d9625b27a3159d0 -->
+<!-- i18n-source: export.md sha256:2130f21bc09368fdfcceeb1bd7aea4d8cf3e2a9e42eca1447e793da07ccf5e9a -->

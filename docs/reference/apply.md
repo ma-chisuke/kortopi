@@ -233,6 +233,19 @@ Apply the schema first, with the tool that changes your schema, and the rows sec
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.
 - A failed apply changes nothing. Fix the declaration or the database, and run it again.
 
+### One apply for each schema
+
+With one owner role for each schema and no role that may write every schema, run one apply for each schema, as the owner of that schema, with `--schema` ([kortopi plan](plan.md#one-role-for-each-schema)):
+
+```sh
+PGUSER=facility_owner PGPASSWORD="$FACILITY_OWNER_PASSWORD" kortopi apply --dir data --schema facility
+PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi apply --dir data --schema notification
+```
+
+- Each apply is a transaction of its own: when the second fails, the first stays committed. Run them again after a fix; an apply of rows that are applied already changes nothing.
+- When a table of one schema references a table of another, apply the referenced schema first. A row that breaks a foreign key to a table outside the run fails with the error of PostgreSQL ([Foreign keys and cycles](#foreign-keys-and-cycles)).
+- Deletions run in the reverse order: delete the referencing rows in the run of their schema before the run that deletes the rows that they reference.
+
 ## Known limits
 
 - A changed value of the match key is a deletion and an insertion (ADR-0012), and inserts run before deletions. When the old row holds a value of another unique key that the new row also has, the insert fails on that key. Delete the old row in an earlier apply: remove it from the declaration and apply with `--allow-delete`, then declare the new row. Or match the rows by that other key.

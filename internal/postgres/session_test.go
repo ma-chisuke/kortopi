@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
 
 func TestOptionsConnString(t *testing.T) {
@@ -120,6 +122,32 @@ func TestTemporaryError(t *testing.T) {
 	}
 	if s := (&Session{apply: true}); s.work() != "apply" || (&Session{}).work() != "plan" {
 		t.Error("work")
+	}
+}
+
+// A role that may not use the schema of a table learns both ways out: the
+// privileges, or, for a plan and an apply, --schema, which narrows the run
+// to the schemas of the role, as with one role for each schema.
+func TestCheckPrivilegesWithoutUsage(t *testing.T) {
+	table := declaration.TableName{Schema: "notification", Name: "mail_templates"}
+	meta := &tableMeta{name: table, exists: true}
+	for _, tt := range []struct {
+		s    *Session
+		want string
+	}{
+		{&Session{role: "facility_owner"}, `a plan needs USAGE on schema "notification" and SELECT on table notification.mail_templates, ` +
+			`and the role "facility_owner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, ` +
+			`or narrow the plan with --schema to the schemas that the role may use`},
+		{&Session{role: "facility_owner", apply: true}, `an apply needs USAGE on schema "notification" and SELECT on table notification.mail_templates, ` +
+			`and the role "facility_owner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, ` +
+			`or narrow the apply with --schema to the schemas that the role may use`},
+		{&Session{role: "reader", export: true}, `an export needs USAGE on schema "notification" and SELECT on table notification.mail_templates, ` +
+			`and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, ` +
+			`or leave the tables of the schema out of the export`},
+	} {
+		if err := tt.s.checkPrivileges(meta, table, []string{"event_type"}); err == nil || err.Error() != tt.want {
+			t.Errorf("checkPrivileges() = %v, want\n%s", err, tt.want)
+		}
 	}
 }
 

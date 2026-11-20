@@ -233,6 +233,19 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
 - 失敗した apply は何も変えない。宣言かデータベースを直して、もう一度実行する。
 
+### スキーマごとの apply
+
+スキーマごとに所有者のロールがあり、すべてのスキーマに書けるロールがないときは、スキーマごとに1回 apply を実行する。そのスキーマの所有者として `--schema` を付ける（[kortopi plan](plan.ja.md#スキーマごとのロール)）。
+
+```sh
+PGUSER=facility_owner PGPASSWORD="$FACILITY_OWNER_PASSWORD" kortopi apply --dir data --schema facility
+PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi apply --dir data --schema notification
+```
+
+- apply はそれぞれ別のトランザクションである。2つ目が失敗しても、1つ目のコミットは残る。直したら、もう一度実行する。適用済みの行の apply は何も変えない。
+- あるスキーマのテーブルが別のスキーマのテーブルを参照するときは、参照されるスキーマを先に適用する。実行の外にあるテーブルへの外部キーを破る行は、PostgreSQL のエラーで失敗する（[外部キーと循環](#外部キーと循環)）。
+- 削除は逆の順番になる。参照する行をそのスキーマの実行で削除してから、参照される行を削除する実行に移る。
+
 ## 分かっている制限
 
 - 照合キーの値の変更は、削除と挿入になる（ADR-0012）。そして、挿入は削除より先に動く。古い行が持つ別の一意キーの値を新しい行も持つと、挿入はそのキーで失敗する。古い行を前の apply で削除する。古い行を宣言から外して `--allow-delete` 付きで適用し、それから新しい行を宣言すればよい。または、行をその別のキーで照合する。
@@ -364,4 +377,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:d9ef6c473009ceca8061dadb2f7662706348db837331b6ce5af3dec5ede3bc32 -->
+<!-- i18n-source: apply.md sha256:8f1c7f055ff24aa21ac63238ecf237fc8a555fe4f803c3e0a1015e856c61a30b -->
