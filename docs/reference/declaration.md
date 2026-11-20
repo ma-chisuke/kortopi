@@ -5,6 +5,7 @@ kortopi reads it from a data directory: `kortopi plan --dir data`, or the curren
 
 This page says what kortopi accepts in those files, and which error it reports for each common mistake.
 How kortopi compares the declared values with the database is in [How values are compared](comparison.md), and the command is in [kortopi plan](plan.md).
+To start from the rows that a database holds, let [kortopi export](export.md) write these files.
 The examples run `kortopi plan --dir data`, so the paths in the messages start with `data/`.
 
 ## The data directory
@@ -112,6 +113,8 @@ pg_dump --data-only --column-inserts --schema billing app > data/dumps/billing.s
 
 Every `INSERT` in the file declares its table, so dump only the master tables that kortopi should manage.
 Without `--column-inserts`, `pg_dump` writes `COPY ... FROM stdin`, which kortopi does not accept.
+
+[kortopi export](export.md) writes a declaration from the database too, in CSV, or with `--format sql` in such statements: one table to a file, with the rows sorted by the match key, so that a second export of the same rows gives the same file.
 
 ### What a statement may hold
 
@@ -225,7 +228,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
 
   Their order decides the order in which the plan prints the key and sorts the rows.
 - Any other setting is an error, and so is `key = []`.
-- Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults.
+- Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults. [kortopi export](export.md) does not check this, so that a `key` can sort the rows of a table at its first export.
 
 ## Common mistakes
 

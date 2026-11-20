@@ -8,7 +8,7 @@ It does for rows what a declarative schema tool does for a schema.
 
 > [!NOTE]
 > kortopi is under development and has no release yet.
-> `kortopi plan` and `kortopi apply` work. `export` and the SQL output of a plan are not built yet.
+> All four commands work: `plan`, `apply`, `export`, and `version`.
 > This page describes the design of the first version. The [decision records](docs/adr/README.md) hold the details and the reasons.
 
 ## What it does
@@ -29,8 +29,9 @@ data/
 - **Declare** rows in CSV files or in SQL `INSERT ... VALUES` statements. The output of `pg_dump --column-inserts` is a valid declaration.
 - **Plan**: kortopi reads the database and prints, for each table, the rows to insert, update, and delete. A second run after an apply prints no changes.
 - **Apply** the plan in one transaction, in the order of the foreign keys.
-- **Export** the rows of an existing database as a declaration.
-- **Detect drift**: an exit status tells CI or a scheduled job that the database and the declaration differ.
+- **Print the plan as SQL** for a team that changes its database only through versioned migrations: the statements of an apply, to review and to paste into a migration.
+- **Export** the rows of named tables of an existing database as a declaration, a file for each table, which a plan then finds equal to the database.
+- **Detect drift**: `kortopi plan --exit-code` exits with 2 when the database and the declaration differ, for CI or a scheduled job.
 
 ## Try it
 
@@ -48,7 +49,20 @@ CREATE TABLE facility.room_types (code text PRIMARY KEY, name text NOT NULL, cap
 INSERT INTO facility.room_types VALUES ('single', 'Single', 1), ('twin', 'Twin', 2);
 ```
 
-Declare the rows that the table should hold in `data/facility/room_types.csv`:
+Start the declaration from the database: export the table, with the connection in the environment variables of libpq.
+An export only reads the database:
+
+```sh
+PGHOST=db.example.test PGUSER=planner PGDATABASE=app bin/kortopi export --dir data --table facility.room_types
+```
+
+```text
+wrote data/facility/room_types.csv (2 rows)
+Exported 1 table with 2 rows.
+```
+
+`data/facility/room_types.csv` now holds the two rows as the table holds them, and a plan would show no change.
+Change the file to the rows that the table should hold:
 
 ```csv
 code,name,capacity
@@ -57,7 +71,7 @@ twin,Twin,3
 suite,Suite,4
 ```
 
-Then plan, with the connection in the environment variables of libpq:
+Then plan:
 
 ```sh
 PGHOST=db.example.test PGUSER=planner PGDATABASE=app bin/kortopi plan --dir data
@@ -100,8 +114,9 @@ The apply wrote both changes in one transaction, as a role with `INSERT` and `UP
 
 - [Declaration files](docs/reference/declaration.md): the data directory, CSV and SQL files, and `kortopi.toml`.
 - [How values are compared](docs/reference/comparison.md): when a declared value equals a stored one, type by type.
-- [kortopi plan](docs/reference/plan.md): the flags, the connection, the output, and the exit statuses.
+- [kortopi plan](docs/reference/plan.md): the flags, the connection, the output, the plan as SQL, and the exit statuses.
 - [kortopi apply](docs/reference/apply.md): what an apply needs and does, the guards on deletions, and its errors.
+- [kortopi export](docs/reference/export.md): what an export writes, what to edit after it, refreshing a declared table, and its errors.
 
 ## How it behaves
 

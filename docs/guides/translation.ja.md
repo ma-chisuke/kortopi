@@ -197,5 +197,15 @@
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
 | outcome（コミットの） | 結果 |
+| script（SQL として出力した計画） | スクリプト |
+| statement, keyword（SQL の） | 文、キーワード |
+| string literal, standard string, escape string（`E'...'`） | 文字列リテラル、標準の文字列、エスケープ文字列 |
+| comment（SQL の）, header comment（スクリプトの）, comment mark | コメント、冒頭のコメント、コメントの印 |
+| refresh（宣言済みのテーブルをもう一度書き出す） | 書き出し直す |
+| replace（ファイルを） | 置き換える |
+| temporary file | 一時ファイル |
+| read-only（トランザクションが） | 読み取り専用 |
+| note（標準エラー出力の1行） | 注記 |
+| umask | umask |
 
-<!-- i18n-source: translation.md sha256:5b658ede5163d2902cde7c27697ef8120c4ed02c47b471fd9c6e7913c3c59697 -->
+<!-- i18n-source: translation.md sha256:538cebfc6715238c1d0eb6f37c863feb3a1d5de2bcc3abfd599256339a0ed51e -->

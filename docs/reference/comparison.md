@@ -39,6 +39,9 @@ They decide how PostgreSQL reads the values of your files and how a plan prints 
 | `lc_monetary` | `C` | A `money` value reads and prints in the form of the C locale, the same in every environment. |
 | `row_security` | `off` | A query that a policy of row-level security would filter fails instead of returning fewer rows ([kortopi plan](plan.md#what-the-session-needs)). |
 
+[kortopi export](export.md) writes values in these settings too, so a plan reads its files back as the same values.
+A plan printed as SQL writes each value so that it reads the same in a session with other settings ([Values in the script](plan.md#values-in-the-script)).
+
 ## By type
 
 The first column of examples holds values that compare equal to the stored value, so the plan shows no change.
@@ -114,8 +117,7 @@ A plan therefore does not check:
 - triggers, and the privileges to write;
 - the values of a table or a column that the database does not have yet.
 
-These are found when the rows are applied.
+These are found when the rows are applied ([kortopi apply](apply.md)).
 ADR-0016 describes how a team finds them before a merge: it applies the new schema and then the rows to a throwaway PostgreSQL in CI.
-`kortopi apply` is not built yet.
 
 The reasons for these rules are in [ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.md) and [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md).

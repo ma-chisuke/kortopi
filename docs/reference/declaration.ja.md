@@ -5,6 +5,7 @@ kortopi は宣言をデータのディレクトリから読む。`kortopi plan -
 
 このページは、kortopi がそのファイルで何を受け付けるかと、よくある誤りのそれぞれにどのエラーを出すかを説明する。
 宣言した値をデータベースとどう比べるかは[値の比べ方](comparison.ja.md)に、コマンドは [kortopi plan](plan.ja.md) にある。
+データベースがすでに持つ行から始めるときは、[kortopi export](export.ja.md) にこれらのファイルを書かせる。
 例は `kortopi plan --dir data` で実行しているので、メッセージのパスは `data/` で始まる。
 
 ## データのディレクトリ
@@ -112,6 +113,8 @@ pg_dump --data-only --column-inserts --schema billing app > data/dumps/billing.s
 
 ファイルの中のどの `INSERT` も、そのテーブルを宣言する。そのため、ダンプするのは kortopi に管理させるマスタテーブルだけにする。
 `--column-inserts` がないと、`pg_dump` は `COPY ... FROM stdin` を書く。kortopi はこれを受け付けない。
+
+[kortopi export](export.ja.md) も、データベースから宣言を書く。CSV か、`--format sql` ならこうした文で書く。1つのファイルに1つのテーブルを書き、行は照合キーで並べる。そのため、同じ行をもう一度書き出せば、同じファイルになる。
 
 ### 文に書けるもの
 
@@ -226,7 +229,7 @@ mode = "insert"
 
   列の順番は、計画がキーを表示する順番と、行を並べる順番を決める。
 - ほかの設定はエラーであり、`key = []` もエラーである。
-- どのファイルも宣言していないテーブルの設定はエラーである。綴りを誤った名前のテーブルが、既定の設定のまま残らないようにするためである。
+- どのファイルも宣言していないテーブルの設定はエラーである。綴りを誤った名前のテーブルが、既定の設定のまま残らないようにするためである。[kortopi export](export.ja.md) はこれを検査しない。最初の書き出しで、`key` がテーブルの行を並べられるようにするためである。
 
 ## よくある誤り
 
@@ -383,4 +386,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:63151c0a7ff0a062d5a5027fd8a5789ab2d8ec6f29fba61658e7231e52a47318 -->
+<!-- i18n-source: declaration.md sha256:3f57b0f09c363f08773b9ed832036f1a954d3126ecdc2ba4831b82e3a75e1235 -->
