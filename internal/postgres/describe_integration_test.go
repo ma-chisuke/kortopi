@@ -121,6 +121,7 @@ func TestDescribe(t *testing.T) {
 					Exists:     true,
 					Columns:    []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
 					PrimaryKey: []string{"country", "zip"},
+					Partitions: []declaration.TableName{name("s", "parted_jp"), name("s", "parted_jp_east")},
 				},
 				// A partition names the partitioned tables above it, nearest
 				// first; a table that inherits from another is no partition.
@@ -129,6 +130,7 @@ func TestDescribe(t *testing.T) {
 					Columns:     []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
 					PrimaryKey:  []string{"country", "zip"},
 					PartitionOf: []declaration.TableName{name("s", "parted")},
+					Partitions:  []declaration.TableName{name("s", "parted_jp_east")},
 				},
 				name("s", "parted_jp_east"): {
 					Exists:      true,

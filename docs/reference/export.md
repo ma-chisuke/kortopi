@@ -402,7 +402,7 @@ A partition named together with its partitioned table, which would declare its r
 kortopi: table facility.events_2026 is a partition of table facility.events, and the export names both: the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables
 ```
 
-The same holds for a partition whose partitioned table the data directory declares already.
+The same holds for a partition whose partitioned table the data directory declares already, and for a partitioned table, named with `--table` or through `--schema`, whose partition the data directory declares already.
 
 A relation that is not a table:
 

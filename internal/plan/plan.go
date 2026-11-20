@@ -57,6 +57,10 @@ type TableInfo struct {
 	// declaration of a partition and of one of these tables declares the same
 	// rows twice.
 	PartitionOf []declaration.TableName
+	// Partitions holds, for a partitioned table, its partitions at every
+	// depth: the tables whose rows are rows of this table too. An export
+	// checks them against the declared tables.
+	Partitions []declaration.TableName
 	// NearNames holds, for a table that does not exist, the tables of the
 	// database whose schema and name equal the declared ones once white space
 	// is trimmed and case is folded. NearSchemas holds, when no such table

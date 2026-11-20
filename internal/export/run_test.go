@@ -107,6 +107,8 @@ func database() *fakeDB {
 	partition.PartitionOf = []declaration.TableName{tn("part.events")}
 	subPartition := table("id", "day")
 	subPartition.PartitionOf = []declaration.TableName{tn("part.events_2026"), tn("part.events")}
+	parted := table("id", "day")
+	parted.Partitions = []declaration.TableName{tn("part.events_2026"), tn("part.events_2026_06")}
 	return &fakeDB{infos: map[declaration.TableName]plan.TableInfo{
 		tn("facility.room_types"): table("code", "name", "gen", "capacity"),
 		tn("facility.rooms"):      table("id", "room_type", "note"),
@@ -114,7 +116,7 @@ func database() *fakeDB {
 		tn("misc.tags"):           noKey,
 		tn("misc.labels"):         uniqueKey,
 		tn("misc.only_generated"): {Exists: true, Columns: []plan.ColumnInfo{{Name: "gen", Generated: true}}},
-		tn("part.events"):         table("id", "day"),
+		tn("part.events"):         parted,
 		tn("part.events_2026"):    partition,
 		tn("part.events_2026_06"): subPartition,
 		// A name that does not exist, in another case than a table that does.
@@ -444,6 +446,14 @@ func TestRunErrors(t *testing.T) {
 			want: "table part.events_2026_06 is a partition of table part.events, through table part.events_2026, which DIR/part/events.csv declares already: " +
 				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: " +
 				"leave table part.events_2026_06 out, or remove the declaration of table part.events first",
+		},
+		{
+			name: "a partitioned table whose partition a file declares",
+			decl: []declaration.Table{{Name: tn("part.events_2026_06"), Columns: []string{"id", "day"}, Format: csv, File: "part/events_2026_06.csv"}},
+			opts: Options{Tables: []declaration.TableName{tn("part.events")}, Format: csv},
+			want: "table part.events has a partition, table part.events_2026_06, which DIR/part/events_2026_06.csv declares already: " +
+				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: " +
+				"leave table part.events out, or remove the declaration of table part.events_2026_06 first",
 		},
 	}
 	for _, tt := range tests {

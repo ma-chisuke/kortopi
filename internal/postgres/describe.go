@@ -20,6 +20,9 @@ type tableMeta struct {
 	// partitionOf holds, for a partition, its parent and the ancestors of the
 	// parent up to the root, nearest first.
 	partitionOf []declaration.TableName
+	// partitions holds, for a partitioned table, its partitions at every
+	// depth, nearest first.
+	partitions []declaration.TableName
 	// nearNames and nearSchemas hold, for a table that does not exist, the
 	// tables and the schemas whose names differ from the named ones only in
 	// white space or case.
@@ -85,7 +88,8 @@ type columnMeta struct {
 func (m *tableMeta) info() plan.TableInfo {
 	info := plan.TableInfo{
 		Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys, PartitionOf: m.partitionOf,
-		NearNames: m.nearNames, NearSchemas: m.nearSchemas,
+		Partitions: m.partitions,
+		NearNames:  m.nearNames, NearSchemas: m.nearSchemas,
 	}
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
@@ -205,7 +209,13 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 				JOIN pg_catalog.pg_class AS ac ON ac.oid = pa.relid
 				JOIN pg_catalog.pg_namespace AS an ON an.oid = ac.relnamespace
 				WHERE c.relispartition AND pa.relid <> c.oid
-				ORDER BY pa.n)
+				ORDER BY pa.n),
+			ARRAY(SELECT ARRAY[partns.nspname::pg_catalog.text, pc.relname::pg_catalog.text]
+				FROM pg_catalog.pg_partition_tree(c.oid::pg_catalog.regclass) AS pt
+				JOIN pg_catalog.pg_class AS pc ON pc.oid = pt.relid
+				JOIN pg_catalog.pg_namespace AS partns ON partns.oid = pc.relnamespace
+				WHERE c.relkind = 'p' AND pt.relid <> c.oid
+				ORDER BY pt.level, partns.nspname COLLATE pg_catalog."C", pc.relname COLLATE pg_catalog."C")
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 		JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 		JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
@@ -228,9 +238,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var typeName []string
 		var collatable *bool
 		var typ *uint32
-		var partitionOf [][]string
+		var partitionOf, partitions [][]string
 		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
-			&selectable, &insertable, &updatable, &deletable, &partitionOf); err != nil {
+			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
@@ -252,12 +262,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.schemaUsage = schemaUsage
 		m.deletable = deletable
 		m.oid = oid
-		m.partitionOf = nil
-		for _, name := range partitionOf {
-			if len(name) == 2 {
-				m.partitionOf = append(m.partitionOf, declaration.TableName{Schema: name[0], Name: name[1]})
-			}
-		}
+		m.partitionOf, m.partitions = tableNames(partitionOf), tableNames(partitions)
 		byOID[oid] = m
 		if column != nil {
 			col := columnMeta{
@@ -360,6 +365,18 @@ func nearNames(name declaration.TableName, found []nearRow) ([]declaration.Table
 		return tables, nil
 	}
 	return nil, schemas
+}
+
+// tableNames returns the names of tables that a query gives as pairs of a
+// schema and a name, or nil for none.
+func tableNames(pairs [][]string) []declaration.TableName {
+	var names []declaration.TableName
+	for _, pair := range pairs {
+		if len(pair) == 2 {
+			names = append(names, declaration.TableName{Schema: pair[0], Name: pair[1]})
+		}
+	}
+	return names
 }
 
 // readKeys fills in the primary key and the unique keys of the tables. A

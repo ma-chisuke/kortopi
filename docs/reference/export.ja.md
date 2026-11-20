@@ -402,7 +402,7 @@ kortopi: table facility.Rooms does not exist, but table facility.rooms does, who
 kortopi: table facility.events_2026 is a partition of table facility.events, and the export names both: the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables
 ```
 
-データのディレクトリがすでにパーティションテーブルを宣言しているパーティションも、同じである。
+データのディレクトリがすでにパーティションテーブルを宣言しているパーティションも、同じである。`--table` で、または `--schema` を通じて指定したパーティションテーブルのパーティションを、データのディレクトリがすでに宣言している場合も、同じである。
 
 テーブルでないリレーション。
 
@@ -443,4 +443,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:553e84a5e293b846f948b2ddf8152dca2418f05e2145464511ff69703eb06294 -->
+<!-- i18n-source: export.md sha256:1add567f4fb354262df0dcd55463828e162096654356db6e143ac5f50e1ff3d4 -->

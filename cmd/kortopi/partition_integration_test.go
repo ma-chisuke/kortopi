@@ -66,6 +66,14 @@ func TestPartitionsAndInheritance(t *testing.T) {
 			}
 
 			alone := writeFiles(t, map[string]string{"ev/events_2026.csv": rows})
+			// An export of the partitioned table, whose partition the
+			// directory declares, writes nothing either.
+			code, stdout, stderr = e.command(t, "export", "--dir", alone, "--schema", "ev")
+			checkRun(t, code, stdout, stderr, exitError, "", "kortopi: table ev.events has a partition, table ev.events_2026, which "+
+				filepath.Join(alone, "ev", "events_2026.csv")+" declares already")
+			if _, err := os.Stat(filepath.Join(alone, "ev", "base.csv")); !os.IsNotExist(err) {
+				t.Errorf("the export wrote ev/base.csv: %v", err)
+			}
 			code, stdout, stderr = e.command(t, "plan", "--dir", alone)
 			checkRun(t, code, stdout, stderr, exitOK, lines(
 				"ev.events_2026 (upsert, key: id, day)",

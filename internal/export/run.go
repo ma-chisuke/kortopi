@@ -402,8 +402,10 @@ func formatName(f declaration.Format) string {
 
 // partitions returns an error for each exported partition whose partitioned
 // table, at any level, is exported too, or declared in the data directory
-// already: the rows of a partition are rows of its partitioned table too, so
-// the declaration would hold them twice, and a plan of it would stop.
+// already, and for each exported partitioned table that has a partition, at
+// any level, that the data directory declares: the rows of a partition are
+// rows of its partitioned table too, so the declaration would hold them
+// twice, and a plan of it would stop.
 func partitions(dir string, names []declaration.TableName, infos map[declaration.TableName]plan.TableInfo,
 	declared map[declaration.TableName]*declaration.Table,
 ) []error {
@@ -420,6 +422,16 @@ func partitions(dir string, names []declaration.TableName, infos map[declaration
 				errs = append(errs, fmt.Errorf("table %s is %s, which %s declares already: "+
 					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: leave table %s out, or remove the declaration of table %s first",
 					name, plan.PartitionPhrase(partitionOf, i), declared[parent].Path(dir), name, parent))
+			}
+		}
+		// A partition that the directory declares, below an exported
+		// partitioned table. A partition that the export names too is
+		// reported above, from the side of the partition.
+		for _, partition := range infos[name].Partitions {
+			if d := declared[partition]; d != nil && !slices.Contains(names, partition) {
+				errs = append(errs, fmt.Errorf("table %s has a partition, table %s, which %s declares already: "+
+					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: leave table %s out, or remove the declaration of table %s first",
+					name, partition, d.Path(dir), name, partition))
 			}
 		}
 	}

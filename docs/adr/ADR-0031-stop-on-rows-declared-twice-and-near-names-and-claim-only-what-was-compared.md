@@ -40,7 +40,7 @@ Partitions:
 
 - The catalogs report, for a partition, the partitioned tables above it, at any depth.
 - When the declaration declares a partition and a partitioned table above it, a plan and an apply stop with an error for each such pair, which names both tables and both files and says to declare only one of them. The error is one of the mistakes that a plan reports together before it loads any row (ADR-0024).
-- An export that names a partition and a partitioned table above it, or a partition whose partitioned table the data directory declares already, writes nothing, and its error says so. `--schema` never names a partition on its own (ADR-0028).
+- An export that names a partition and a partitioned table above it, a partition whose partitioned table the data directory declares already, or a partitioned table, by `--table` or through `--schema`, whose partition the data directory declares already, writes nothing, and its error says so. For the last case, the catalogs report the partitions of a partitioned table too. `--schema` never names a partition on its own (ADR-0028).
 - A partition alone, and a partitioned table alone, are declared as before.
 - A table that inherits from another is not a partition. A plan and an apply read and write an ordinary table with `ONLY` (ADR-0024, ADR-0026), so a table and a table that inherits from it hold two sets of rows, and both may be declared.
 
