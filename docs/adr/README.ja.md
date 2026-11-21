@@ -36,5 +36,6 @@
 | [ADR-0028](ADR-0028-export-named-tables-into-a-file-each.ja.md) | 指定したテーブルだけをテーブルごとのファイルに書き出し、宣言済みのファイルは `--overwrite` のときだけ、その列のまま置き換える | accepted | 2026-11-20 |
 | [ADR-0029](ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md) | 計画を、適用の順に、どのセッションでも同じに読める値で SQL として出力し、削除はコメントにする | accepted | 2026-11-20 |
 | [ADR-0030](ADR-0030-release-reproducible-archives-with-attested-provenance.ja.md) | main 上のタグから再現できるアーカイブをリリースし、サードパーティの表示と構成証明した来歴を添える | accepted | 2026-11-20 |
+| [ADR-0033](ADR-0033-check-titles-of-the-dependency-bot-for-their-form-not-their-length.ja.md) | 依存を更新するボットのタイトルは、GitHub が伝える作成者で見分け、長さではなく形を検査する | accepted | 2026-11-21 |
 
-<!-- i18n-source: README.md sha256:f7c008ccc53626b83683f115a47ab21012d1faf871e2b34709c07fd67b3eb9ec -->
+<!-- i18n-source: README.md sha256:c7cfb94d2afd20a0a45bde6219230dc57b46c8cb1bb9794bda674e66400b1c9c -->
