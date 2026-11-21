@@ -8,8 +8,8 @@ import (
 
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 	"github.com/ma-chisuke/kortopi/internal/export"
-	"github.com/ma-chisuke/kortopi/internal/postgres"
 )
 
 // exportOnlyFlags is the help of the flags that only export has.
@@ -130,10 +130,14 @@ func exportFlagSet(o *exportOptions) *flag.FlagSet {
 	return fs
 }
 
-// makeExport reads the settings and the declaration that the data directory
-// holds already, if any, checks the flags against them, and only then
-// connects and exports.
+// makeExport chooses the dialect, reads the settings and the declaration
+// that the data directory holds already, if any, checks the flags against
+// them, and only then connects and exports.
 func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
+	d, err := e.dialects.Choose()
+	if err != nil {
+		return err
+	}
 	// The directory may be missing, and the export creates it, but a path to
 	// a file is named as such before anything is read under it.
 	if err := declaration.CheckDir(o.dir, true); err != nil {
@@ -143,7 +147,7 @@ func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
 	if err != nil {
 		return err
 	}
-	decl, err := declaration.LoadExisting(o.dir, postgres.Parser{})
+	decl, err := declaration.LoadExisting(o.dir, d.Parser())
 	if err != nil {
 		return err
 	}
@@ -151,7 +155,7 @@ func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
 	if err := export.Check(decl, opts); err != nil {
 		return err
 	}
-	db, err := e.connect(ctx, target{conn: o.conn, dir: decl.Dir, export: true})
+	db, err := o.conn.open(ctx, d, dialect.Options{Dir: decl.Dir, Export: true})
 	if err != nil {
 		return err
 	}

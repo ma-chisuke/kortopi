@@ -80,7 +80,7 @@ func (e *e2e) run(t *testing.T, args ...string) (code int, stdout, stderr string
 	t.Helper()
 	before := e.db.Objects(t)
 	args = append(args, e.conn...)
-	code, stdout, stderr = runTest(t, args, connectPostgres)
+	code, stdout, stderr = runTest(t, args, &dialects)
 	if got := e.db.Objects(t); !slices.Equal(got, before) {
 		t.Errorf("kortopi %s left the catalogs changed:\n%s", strings.Join(args, " "), pgtest.Difference(before, got))
 	}

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 	"github.com/ma-chisuke/kortopi/internal/script"
 )
@@ -67,7 +68,7 @@ func runPlan(ctx context.Context, args []string, e env) int {
 	if o.sql {
 		sql = &bytes.Buffer{}
 	}
-	p, err := makePlan(ctx, o, e.connect, sql)
+	p, err := makePlan(ctx, o, e.dialects, sql)
 	if err != nil {
 		printError(e.stderr, interrupted(ctx, err, errInterrupted))
 		return exitError
@@ -116,17 +117,21 @@ func planFlagSet(o *planOptions) *flag.FlagSet {
 	return fs
 }
 
-// makePlan reads the declaration and the settings, and only then connects to
-// the database, so that a mistake in a file is reported without a database.
-// When sql is not nil, it writes the plan into it as SQL (ADR-0020), which
-// needs the session. The session is closed before makePlan returns, also
-// when ctx is cancelled.
-func makePlan(ctx context.Context, o planOptions, connect connectFunc, sql *bytes.Buffer) (p *plan.Plan, err error) {
-	decl, settings, err := load(o.common)
+// makePlan chooses the dialect, reads the declaration and the settings, and
+// only then connects to the database, so that a mistake in a file is
+// reported without a database. When sql is not nil, it writes the plan into
+// it as SQL (ADR-0020), which needs the session. The session is closed
+// before makePlan returns, also when ctx is cancelled.
+func makePlan(ctx context.Context, o planOptions, dialects *dialect.Registry, sql *bytes.Buffer) (p *plan.Plan, err error) {
+	d, err := dialects.Choose()
 	if err != nil {
 		return nil, err
 	}
-	db, err := connect(ctx, target{conn: o.conn, dir: decl.Dir})
+	decl, settings, err := load(o.common, d.Parser())
+	if err != nil {
+		return nil, err
+	}
+	db, err := o.conn.open(ctx, d, dialect.Options{Dir: decl.Dir})
 	if err != nil {
 		return nil, err
 	}
@@ -139,19 +144,11 @@ func makePlan(ctx context.Context, o planOptions, connect connectFunc, sql *byte
 	if err != nil || sql == nil {
 		return p, err
 	}
-	h := script.Header{Dir: decl.Dir}
-	if n, ok := db.(databaseNamer); ok {
-		h.Database = n.DatabaseName()
-	}
+	// The name of the database is all that the header says of the
+	// connection.
+	h := script.Header{Dir: decl.Dir, Database: db.DatabaseName()}
 	if err := script.Write(ctx, sql, p, db, h); err != nil {
 		return nil, fmt.Errorf("write the plan as SQL: %w", err)
 	}
 	return p, nil
-}
-
-// databaseNamer is a session that can say the name of its database, for the
-// header of a plan as SQL. The name is all that the header says of the
-// connection.
-type databaseNamer interface {
-	DatabaseName() string
 }

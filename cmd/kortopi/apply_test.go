@@ -261,10 +261,10 @@ func TestRunApply(t *testing.T) {
 			t.Parallel()
 
 			dir := writeFiles(t, tt.files)
-			fc := &fakeConnect{session: tt.session, err: tt.connectErr}
+			fd := &fakeDialect{session: tt.session, err: tt.connectErr}
 			var stdout, stderr strings.Builder
 			args := append([]string{"apply", "--dir", dir}, tt.args...)
-			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, connect: fc.connect})
+			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
 
 			if code != tt.wantCode {
 				t.Errorf("kortopi apply exit status = %d, want %d (stderr %q)", code, tt.wantCode, stderr.String())
@@ -282,9 +282,9 @@ func TestRunApply(t *testing.T) {
 			if tt.wantCalls != nil && !reflect.DeepEqual(tt.session.calls, tt.wantCalls) {
 				t.Errorf("calls:\n%s\nwant:\n%s", strings.Join(tt.session.calls, "\n"), strings.Join(tt.wantCalls, "\n"))
 			}
-			if fc.calls > 0 {
-				if !fc.target.apply || fc.target.wait != &stderr || fc.target.dir != dir {
-					t.Errorf("kortopi apply connected to %+v, want a session for an apply in %s that tells on stderr that it waits", fc.target, dir)
+			if fd.calls > 0 {
+				if !fd.opts.Apply || fd.opts.Wait != &stderr || fd.opts.Dir != dir {
+					t.Errorf("kortopi apply connected to %+v, want a session for an apply in %s that tells on stderr that it waits", fd.opts, dir)
 				}
 				if tt.session != nil && !tt.session.closed && tt.session.closeErr == nil {
 					t.Error("kortopi apply left the session open")
@@ -306,9 +306,9 @@ func TestRunApplyInterrupted(t *testing.T) {
 			cancel()
 		}
 	}}
-	fc := &fakeConnect{session: s}
+	fd := &fakeDialect{session: s}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, connect: fc.connect})
+	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
 
 	if code != exitError {
 		t.Errorf("kortopi apply exit status = %d, want %d", code, exitError)
@@ -341,9 +341,9 @@ func TestRunApplyInterruptedUnknownOutcome(t *testing.T) {
 			cancel()
 		}
 	}}
-	fc := &fakeConnect{session: s}
+	fd := &fakeDialect{session: s}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, connect: fc.connect})
+	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
 
 	if want := "kortopi: " + unknown.Error() + "\n"; code != exitError || stderr.String() != want || stdout.String() != planOfGold {
 		t.Errorf("kortopi apply = %d, stdout %q, stderr %q, want %d, the plan, stderr %q", code, stdout.String(), stderr.String(), exitError, want)
@@ -413,10 +413,10 @@ func TestRunApplyWriteError(t *testing.T) {
 			t.Parallel()
 
 			dir := writeFiles(t, tt.files)
-			fc := &fakeConnect{session: tt.session}
+			fd := &fakeDialect{session: tt.session}
 			var stderr strings.Builder
 			stdout := &failAfter{n: tt.writes}
-			code := run(t.Context(), []string{"apply", "--dir", dir}, env{stdout: stdout, stderr: &stderr, connect: fc.connect})
+			code := run(t.Context(), []string{"apply", "--dir", dir}, env{stdout: stdout, stderr: &stderr, dialects: fd.registry()})
 			if code != tt.wantCode || stderr.String() != tt.wantStderr {
 				t.Errorf("kortopi apply = %d, stderr %q, want %d, %q", code, stderr.String(), tt.wantCode, tt.wantStderr)
 			}

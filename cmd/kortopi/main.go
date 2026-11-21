@@ -16,7 +16,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
+
+// dialects holds the databases that this build supports. Each registers
+// itself, when the program starts, in a file of its own that a build tag can
+// leave out, such as dialect_postgres.go (ADR-0036). Nothing else changes
+// it.
+var dialects dialect.Registry
 
 // version is the release version. The release build sets it with -ldflags;
 // a build with `go install` takes it from the module information instead.
@@ -68,17 +76,17 @@ func main() {
 		<-ctx.Done()
 		stop()
 	}()
-	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, connect: connectPostgres})
+	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, dialects: &dialects})
 	stop()
 	os.Exit(code)
 }
 
-// env is what a command takes from outside: where it writes, and how it
-// reaches the database. Tests replace connect.
+// env is what a command takes from outside: where it writes, and the
+// dialects through which it reaches a database. Tests replace dialects.
 type env struct {
-	stdout  io.Writer
-	stderr  io.Writer
-	connect connectFunc
+	stdout   io.Writer
+	stderr   io.Writer
+	dialects *dialect.Registry
 }
 
 // run executes one command and returns the exit status.

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
@@ -127,18 +128,22 @@ func applyFlagSet(o *applyOptions) *flag.FlagSet {
 	return fs
 }
 
-// makeApply reads the declaration and the settings, and only then connects
-// to the database and applies. It prints the plan on standard output as soon
-// as the apply has it, before the guards and the first write, so that the
-// output shows what the apply was about to do also when it fails. It returns
-// the error of closing the session apart when the apply committed: the
-// changes are lasting all the same.
+// makeApply chooses the dialect, reads the declaration and the settings, and
+// only then connects to the database and applies. It prints the plan on
+// standard output as soon as the apply has it, before the guards and the
+// first write, so that the output shows what the apply was about to do also
+// when it fails. It returns the error of closing the session apart when the
+// apply committed: the changes are lasting all the same.
 func makeApply(ctx context.Context, o applyOptions, e env) (r *apply.Result, closeErr, err error) {
-	decl, settings, err := load(o.common)
+	d, err := e.dialects.Choose()
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := e.connect(ctx, target{conn: o.conn, dir: decl.Dir, apply: true, wait: e.stderr})
+	decl, settings, err := load(o.common, d.Parser())
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := o.conn.open(ctx, d, dialect.Options{Dir: decl.Dir, Apply: true, Wait: e.stderr})
 	if err != nil {
 		return nil, nil, err
 	}

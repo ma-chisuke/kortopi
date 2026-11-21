@@ -9,22 +9,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
 
-// noConnect is a connectFunc for commands that must not reach a database.
-func noConnect(t *testing.T) connectFunc {
+// noConnect returns the dialects of commands that must not reach a database:
+// a dialect that fails the test when it opens a session.
+func noConnect(t *testing.T) *dialect.Registry {
 	t.Helper()
-	return func(context.Context, target) (session, error) {
+	d := &fakeDialect{err: errors.New("no database in this test")}
+	d.opened = func(context.Context) {
 		t.Error("the command connected to the database, want no connection")
-		return nil, errors.New("no database in this test")
 	}
+	return d.registry()
 }
 
-// runTest runs kortopi with args and returns the exit status and the output.
-func runTest(t *testing.T, args []string, connect connectFunc) (code int, stdout, stderr string) {
+// runTest runs kortopi with args and the dialects, and returns the exit
+// status and the output.
+func runTest(t *testing.T, args []string, dialects *dialect.Registry) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code = run(t.Context(), args, env{stdout: &out, stderr: &errOut, connect: connect})
+	code = run(t.Context(), args, env{stdout: &out, stderr: &errOut, dialects: dialects})
 	return code, out.String(), errOut.String()
 }
 
