@@ -42,4 +42,5 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0034](ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md) | Let a plan stop on every name that the database lacks, with `--no-pending` | accepted | 2026-11-21 |
 | [ADR-0035](ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md) | Let the settings name values that only an insert sets | accepted | 2026-11-21 |
 | [ADR-0036](ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md) | Register each database behind one seam, and decide between one binary and a binary for each database when the second database arrives | accepted | 2026-11-21 |
+| [ADR-0039](ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md) | Plan the whole effect of deletions through foreign keys, show it apart from the rows, and count all of it in the guards | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.md) | Write issues through forms with required fields | accepted | 2026-11-21 |

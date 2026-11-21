@@ -193,6 +193,9 @@
 | connection pooler, transaction mode（プーラーの） | コネクションプーラー、トランザクションモード |
 | defer（制約を） | 遅らせる |
 | cascade（外部キーの） | カスケード |
+| level（カスケードの） | 段 |
+| effect（外部キーを通じた削除の） | 削除の波及 |
+| declared row in the way（削除の） | 削除とぶつかる宣言した行 |
 | trigger, rule（PostgreSQL の） | トリガー、ルール |
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
@@ -250,4 +253,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:9c58d8eef2ca6d1dc9c8baaaaed0fe839049347baf92799def0eee7de47bf234 -->
+<!-- i18n-source: translation.md sha256:5f4e23560ddeae1d30165b4509f9939291d3187c1e06370ec4fe8a738d819da5 -->
