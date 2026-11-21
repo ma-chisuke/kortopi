@@ -226,3 +226,6 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | author (of a pull request), login (of an account on GitHub) | 作成者、ログイン名 |
 | bot, app (a GitHub App) | ボット、アプリ |
 | expression (in a workflow) | 式 |
+| value on insert (a value of `on_insert` in `kortopi.toml`), set on insert | 挿入時の値、挿入時に設定する |
+| expression (in SQL) | 式 |
+| parameter (of a SQL statement) | パラメータ |
