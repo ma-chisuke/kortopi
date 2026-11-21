@@ -287,7 +287,7 @@ func TestApplyNeedsMessages(t *testing.T) {
 			if !errors.Is(err, ErrTemporaryTables) {
 				t.Errorf("Diff: %v, want ErrTemporaryTables", err)
 			}
-			wantError(t, err, "because the transaction is read-only; an apply needs a session that can write, on the primary, "+
+			wantError(t, err, "because the transaction is read-only: an apply needs a session that can write, on the primary, "+
 				"with the TEMPORARY privilege on the database")
 		})
 	}

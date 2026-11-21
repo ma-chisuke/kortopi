@@ -40,7 +40,7 @@ func TestParseApply(t *testing.T) {
 		{name: "deletions without a limit of their own", args: []string{"--allow-delete"}, want: applyOptions{common: common{dir: "."}, allowDelete: true, maxDelete: apply.DefaultMaxDelete}},
 		{name: "a limit of 0", args: []string{"--max-delete=0", "--allow-delete"}, want: applyOptions{common: common{dir: "."}, allowDelete: true, maxDelete: 0, maxDeleteSet: true}},
 		{name: "a limit without deletions", args: []string{"--max-delete", "5"},
-			wantErr: "flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete"},
+			wantErr: "flag --max-delete needs --allow-delete, without which an apply deletes no row: add --allow-delete, or remove --max-delete"},
 		{name: "a limit below 0", args: []string{"--allow-delete", "--max-delete", "-1"},
 			wantErr: "invalid value for flag --max-delete: give the largest number of rows to delete, a whole number from 0"},
 		{name: "a limit that is not a number", args: []string{"--allow-delete", "--max-delete", "all"},

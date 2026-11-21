@@ -42,6 +42,10 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 	settingsFile := filepath.Join(decl.Dir, config.FileName)
 	tables := make([]Table, len(decl.Tables))
 	requests := make([]DiffRequest, len(decl.Tables))
+	declared := make(map[declaration.TableName]*declaration.Table, len(decl.Tables))
+	for i := range decl.Tables {
+		declared[decl.Tables[i].Name] = &decl.Tables[i]
+	}
 	var errs []error
 	for i := range decl.Tables {
 		dt := &decl.Tables[i]
@@ -56,9 +60,13 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		}
 		tables[i] = Table{Name: dt.Name, Mode: s.Mode}
 		if !info.Exists {
+			if err := nearTable(dt.Path(decl.Dir), dt.Name, info); err != nil {
+				errs = append(errs, err)
+			}
 			tables[i].PendingTable = true
 			continue
 		}
+		errs = append(errs, declaredTwice(decl.Dir, dt, info.PartitionOf, declared)...)
 		c := &check{table: dt, file: dt.Path(decl.Dir), settingsFile: settingsFile, info: info}
 		cols, tableErrs := c.settle(s.Key)
 		if len(tableErrs) > 0 {
@@ -108,6 +116,110 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		return nil, errors.Join(errs...)
 	}
 	return &Plan{Tables: tables}, nil
+}
+
+// declaredTwice returns an error for each table of partitionOf, the
+// partitioned tables whose rows include the rows of the partition t, that
+// the declaration declares too: the files of the two tables would declare the
+// same rows twice, and an apply would insert them twice.
+func declaredTwice(dir string, t *declaration.Table, partitionOf []declaration.TableName, declared map[declaration.TableName]*declaration.Table) []error {
+	var errs []error
+	for i, name := range partitionOf {
+		parent, ok := declared[name]
+		if !ok {
+			continue
+		}
+		files := "in " + t.Path(dir) + " and " + parent.Path(dir)
+		if t.File == parent.File {
+			files = "both in " + t.Path(dir)
+		}
+		errs = append(errs, fmt.Errorf("table %s is %s, and both tables are declared, %s: "+
+			"the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables",
+			t.Name, PartitionPhrase(partitionOf, i), files))
+	}
+	return errs
+}
+
+// PartitionPhrase says how a partition belongs to the partitioned table
+// partitionOf[i], where partitionOf is TableInfo.PartitionOf of the
+// partition: "a partition of table s.p", or "a partition of table s.root,
+// through table s.p" for a partition of a partition.
+func PartitionPhrase(partitionOf []declaration.TableName, i int) string {
+	phrase := "a partition of table " + partitionOf[i].String()
+	if i > 0 {
+		through := make([]string, i)
+		for j, name := range partitionOf[:i] {
+			through[j] = name.String()
+		}
+		phrase += ", through table " + strings.Join(through, " and table ")
+	}
+	return phrase
+}
+
+// nearTable returns an error for a declared table that does not exist when
+// the database has a table, or else a schema, whose name differs from the
+// declared one only in white space or case: such a name is a mistake, not a
+// table that waits for a schema change. file is the declaring file.
+func nearTable(file string, name declaration.TableName, info TableInfo) error {
+	switch {
+	case len(info.NearNames) > 0:
+		near := make([]string, len(info.NearNames))
+		for i, n := range info.NearNames {
+			near[i] = "table " + FormatTable(n)
+		}
+		return fmt.Errorf("%s: table %s does not exist, but %s does, whose name differs only in white space or case: write the name as the database has it",
+			file, FormatTable(name), strings.Join(near, " or "))
+	case len(info.NearSchemas) > 0:
+		return fmt.Errorf("%s: schema %s of table %s does not exist, but %s does, whose name differs only in white space or case: write the name as the database has it",
+			file, strconv.Quote(name.Schema), FormatTable(name), alternatives("schema", info.NearSchemas))
+	}
+	return nil
+}
+
+// nearColumns returns the columns of the table whose names equal name once
+// the white space around name is trimmed and case is folded.
+func (c *check) nearColumns(name string) []string {
+	var near []string
+	for _, col := range c.info.Columns {
+		if strings.EqualFold(col.Name, strings.TrimSpace(name)) {
+			near = append(near, col.Name)
+		}
+	}
+	return near
+}
+
+// keyThatCanMatch says what a table needs whose keys cannot match rows.
+const keyThatCanMatch = "give the table a primary key or a unique key whose index uses the collation of each column and its default operator class"
+
+// SetAsidePhrase names the keys that cannot match rows, each with the
+// reason, as in `the unique key ("code") cannot, because its index uses
+// another collation than column "code"`.
+func SetAsidePhrase(keys []SetAsideKey) string {
+	phrases := make([]string, len(keys))
+	for i, k := range keys {
+		phrases[i] = "the unique key (" + quoteAll(k.Columns) + ") cannot, because " + k.Reason
+	}
+	return strings.Join(phrases, ", and ")
+}
+
+// KeyChoices returns keys as a message names them: the columns of each key
+// in parentheses, as in ("code") or ("country", "zip").
+func KeyChoices(keys [][]string) string {
+	choices := make([]string, len(keys))
+	for i, k := range keys {
+		choices[i] = "(" + quoteAll(k) + ")"
+	}
+	return strings.Join(choices, " or ")
+}
+
+// alternatives returns the names, each quoted after the word what and
+// separated by "or", as in `column "a" or column "A"`.
+func alternatives(what string, names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = what + " " + strconv.Quote(n)
+	}
+	return strings.Join(quoted, " or ")
 }
 
 // joinAfter returns err after the mistakes in errs, or err alone.
@@ -169,6 +281,12 @@ type check struct {
 	// columns.
 	byName   map[string]ColumnInfo
 	declared map[string]bool
+	// misnamed holds the declared columns whose names differ from a column
+	// of the table only in white space or case, and misnamedAs those columns
+	// of the table. Their error is reported once, not again as a key column
+	// that is missing or that waits for the schema change.
+	misnamed   map[string]bool
+	misnamedAs map[string]bool
 }
 
 // settle decides the match key of the table and sorts its declared columns
@@ -181,6 +299,7 @@ func (c *check) settle(chosen []string) (columns, []error) {
 		c.byName[col.Name] = col
 	}
 	c.declared = make(map[string]bool, len(c.table.Columns))
+	c.misnamed, c.misnamedAs = make(map[string]bool), make(map[string]bool)
 	var errs []error
 	var cols columns
 	for _, name := range c.table.Columns {
@@ -188,6 +307,18 @@ func (c *check) settle(chosen []string) (columns, []error) {
 		col, ok := c.byName[name]
 		switch {
 		case !ok:
+			// A name that differs from a column of the table only in white
+			// space or case is a mistake, not a column that waits for the
+			// schema change.
+			if near := c.nearColumns(name); len(near) > 0 {
+				c.misnamed[name] = true
+				for _, n := range near {
+					c.misnamedAs[n] = true
+				}
+				errs = append(errs, fmt.Errorf("%s: column %s is not a column of table %s, but %s is, whose name differs only in white space or case: write the name as the table has it",
+					c.file, strconv.Quote(name), c.table.Name, alternatives("column", near)))
+				continue
+			}
 			cols.pending = append(cols.pending, name)
 		case col.Generated:
 			errs = append(errs, fmt.Errorf("%s: column %q of table %s is generated, so the database computes its value: remove the column from the file",
@@ -238,22 +369,27 @@ func (c *check) notNull(compare []string) []string {
 // primaryKey returns the primary key of the table as its match key.
 func (c *check) primaryKey() ([]string, []error) {
 	if len(c.info.PrimaryKey) == 0 {
-		if len(c.info.SetAsideKeys) > 0 {
-			// The table has a key, maybe its primary key, that the plan
+		if len(c.info.UniqueKeys) == 0 && len(c.info.SetAsideKeys) > 0 {
+			// The table has keys, maybe its primary key, that the plan
 			// cannot use: say which, and why.
-			var unusable []string
-			for _, k := range c.info.SetAsideKeys {
-				unusable = append(unusable, fmt.Sprintf("; the unique key (%s) cannot, because %s", quoteAll(k.Columns), k.Reason))
-			}
-			return nil, []error{fmt.Errorf("table %s has no primary key that can match rows%s: name the columns of a unique key that can with key in [tables.%s] of %s",
-				c.table.Name, strings.Join(unusable, ""), strconv.Quote(c.table.Name.String()), c.settingsFile)}
+			return nil, []error{fmt.Errorf("table %s has no key that can match rows: %s: %s, and name it with key in [tables.%s] of %s if it is a unique key",
+				c.table.Name, SetAsidePhrase(c.info.SetAsideKeys), keyThatCanMatch, strconv.Quote(c.table.Name.String()), c.settingsFile)}
 		}
-		return nil, []error{fmt.Errorf("table %s has no primary key: name the columns of a unique key with key in [tables.%s] of %s",
+		if len(c.info.UniqueKeys) > 0 {
+			which := "its unique key " + KeyChoices(c.info.UniqueKeys)
+			if len(c.info.UniqueKeys) > 1 {
+				which = "one of its unique keys, " + KeyChoices(c.info.UniqueKeys) + ","
+			}
+			return nil, []error{fmt.Errorf("table %s has no primary key: name %s with key in [tables.%s] of %s",
+				c.table.Name, which, strconv.Quote(c.table.Name.String()), c.settingsFile)}
+		}
+		return nil, []error{fmt.Errorf("table %s has neither a primary key nor a unique key, and a match key must be one of them: "+
+			"give the table a primary key in the schema, or a unique key that you name with key in [tables.%s] of %s",
 			c.table.Name, strconv.Quote(c.table.Name.String()), c.settingsFile)}
 	}
 	var errs []error
 	for _, name := range c.info.PrimaryKey {
-		if !c.declared[name] {
+		if !c.declared[name] && !c.misnamedAs[name] {
 			errs = append(errs, fmt.Errorf("%s: column %q of the primary key of table %s is not declared, so no row can be matched: add the column to the file, or name another key with key in %s",
 				c.file, name, c.table.Name, c.settingsFile))
 		}
@@ -282,6 +418,11 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		if _, ok := c.byName[name]; ok {
 			continue
 		}
+		if c.misnamed[name] {
+			// The error of the column says it all: the key names the column
+			// as the file does.
+			return nil, nil
+		}
 		if c.declared[name] {
 			errs = append(errs, fmt.Errorf("table %s has no column %q yet, and no row can be matched by a key column that waits for the schema change: apply the schema first, or name another key with key in %s",
 				c.table.Name, name, c.settingsFile))
@@ -301,8 +442,21 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 					c.settingsFile, quoteAll(key), c.table.Name, k.Reason)}
 			}
 		}
-		return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint",
-			c.settingsFile, quoteAll(key), c.table.Name)}
+		keys := c.info.UniqueKeys
+		if len(c.info.PrimaryKey) > 0 {
+			keys = append([][]string{c.info.PrimaryKey}, keys...)
+		}
+		if len(keys) == 0 && len(c.info.SetAsideKeys) > 0 {
+			return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, and the table has no key that can match rows: %s: %s",
+				c.settingsFile, quoteAll(key), c.table.Name, SetAsidePhrase(c.info.SetAsideKeys), keyThatCanMatch)}
+		}
+		if len(keys) == 0 {
+			return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, and the table has neither: "+
+				"a match key must be one of them, so give the table a primary key or a unique key in the schema",
+				c.settingsFile, quoteAll(key), c.table.Name)}
+		}
+		return nil, []error{fmt.Errorf("%s: key (%s) of table %s is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of one of its keys, %s",
+			c.settingsFile, quoteAll(key), c.table.Name, KeyChoices(keys))}
 	}
 	for _, name := range key {
 		if !c.byName[name].NotNull {
@@ -311,7 +465,7 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		}
 	}
 	for _, name := range key {
-		if !c.declared[name] {
+		if !c.declared[name] && !c.misnamedAs[name] {
 			errs = append(errs, fmt.Errorf("%s: key column %q of table %s is not declared, so no row can be matched: add the column to the file, or name another key with key in %s",
 				c.file, name, c.table.Name, c.settingsFile))
 		}

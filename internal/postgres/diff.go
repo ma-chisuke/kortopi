@@ -42,7 +42,8 @@ const maxFlaggedRows = 5
 //
 // When the table has rows to delete, Diff also counts the rows of other
 // tables that reference them (ADR-0018).
-func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
+func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableDiff, err error) {
+	defer s.explainWait(ctx, &err)
 	if s.export {
 		return plan.TableDiff{}, errExport
 	}
@@ -189,8 +190,15 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 // statements that compare the rows.
 func (s *Session) checkPrivileges(meta *tableMeta, table declaration.TableName, columns []string) error {
 	if !meta.schemaUsage {
+		// With a role for each schema, the role of one schema meets the
+		// tables of another: --schema narrows a plan or an apply to the
+		// schemas of the role. An export names its tables itself.
+		other := "or leave the tables of the schema out of the export"
+		if !s.export {
+			other = fmt.Sprintf("or narrow the %s with --schema to the schemas that the role may use", s.work())
+		}
 		return fmt.Errorf("%s needs USAGE on schema %q and SELECT on table %s, and the role %q lacks USAGE on the schema: "+
-			"grant the role USAGE on the schema and SELECT on the table", s.needs(), table.Schema, table, s.role)
+			"grant the role USAGE on the schema and SELECT on the table, %s", s.needs(), table.Schema, table, s.role, other)
 	}
 	var denied []string
 	declared := 0
@@ -278,7 +286,8 @@ func repeated(names []string) (string, bool) {
 // counts the rows of its INSERT statements. A CSV file is loaded into a
 // temporary table of text columns, so PostgreSQL reads it as it would read
 // the file of an existing table.
-func (s *Session) CountRows(ctx context.Context, table declaration.Table) (int, error) {
+func (s *Session) CountRows(ctx context.Context, table declaration.Table) (_ int, err error) {
+	defer s.explainWait(ctx, &err)
 	if s.export {
 		return 0, errExport
 	}
@@ -300,7 +309,7 @@ func (s *Session) CountRows(ctx context.Context, table declaration.Table) (int, 
 		return 0, err
 	}
 	var n int64
-	err := s.savepoint(ctx, false, func(tx pgx.Tx) error {
+	err = s.savepoint(ctx, false, func(tx pgx.Tx) error {
 		temp := s.nextTemp()
 		if err := s.create(ctx, tx, table, createTextSQL(temp, table.Columns)); err != nil {
 			return err
@@ -542,7 +551,7 @@ func (s *Session) checkNotNull(ctx context.Context, tx pgx.Tx, table declaration
 	}
 	cause := ""
 	if table.Format == declaration.CSV {
-		cause = `; in a CSV file, an unquoted empty field is NULL: write "" for the empty string`
+		cause = `, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL`
 	}
 	errs := make([]error, 0, len(found))
 	for _, f := range found {

@@ -48,7 +48,8 @@ var errNotApply = errors.New("the session is for a plan, which writes nothing: o
 // table, also from a table to itself, sorted by the referencing table and
 // then by the name of the constraint. A foreign key of a partitioned table
 // is read once, from the partitioned table.
-func (s *Session) ForeignKeys(ctx context.Context, names []declaration.TableName) ([]apply.ForeignKey, error) {
+func (s *Session) ForeignKeys(ctx context.Context, names []declaration.TableName) (_ []apply.ForeignKey, err error) {
+	defer s.explainWait(ctx, &err)
 	schemas := make([]string, len(names))
 	tables := make([]string, len(names))
 	for i, n := range names {
@@ -87,7 +88,8 @@ func (s *Session) ForeignKeys(ctx context.Context, names []declaration.TableName
 
 // Defer postpones the check of the given foreign keys to the commit, with
 // SET CONSTRAINTS. Each must be deferrable.
-func (s *Session) Defer(ctx context.Context, keys []apply.ForeignKey) error {
+func (s *Session) Defer(ctx context.Context, keys []apply.ForeignKey) (err error) {
+	defer s.explainWait(ctx, &err)
 	if !s.apply {
 		return errNotApply
 	}
@@ -145,7 +147,8 @@ func (s *Session) checkConstraintNames(ctx context.Context, keys []apply.Foreign
 // Insert adds the declared rows that the table lacks, from the rows that
 // Diff loaded, and returns their number, which must be the number that the
 // plan showed.
-func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (int, error) {
+func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
+	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil || lt.inserts == 0 {
 		return 0, err
@@ -155,7 +158,8 @@ func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (int, error)
 
 // Update sets the compared columns that differ to the declared values, and
 // returns the number of rows, which must be the number that the plan showed.
-func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (int, error) {
+func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
+	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil || lt.updates == 0 || !req.Updates {
 		return 0, err
@@ -167,7 +171,8 @@ func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (int, error)
 // number, which must be the number that the plan showed. The first call
 // checks that the role may delete from every loaded table that has rows to
 // delete, before the first row is deleted.
-func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (int, error) {
+func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
+	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil || lt.deletes == 0 || !req.Deletes {
 		return 0, err

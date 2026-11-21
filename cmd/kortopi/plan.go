@@ -38,8 +38,7 @@ var planHelp = "usage: kortopi plan [flags]\n" +
 	connectionHelp +
 	"\n" +
 	"exit status:\n" +
-	"  0   the plan was made (with --exit-code: the database matches the\n" +
-	"      declaration)\n" +
+	"  0   the plan was made (with --exit-code: there is nothing to apply)\n" +
 	"  1   the plan failed\n" +
 	"  2   with --exit-code only: the plan is not empty\n"
 

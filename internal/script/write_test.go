@@ -154,6 +154,11 @@ func TestWrite(t *testing.T) {
 			db:   &fakeDB{},
 		},
 		{
+			name: "empty_with_mode_insert",
+			plan: &plan.Plan{Tables: []plan.Table{table(plans, config.ModeUpsert, plan.TableDiff{}), table(cities, config.ModeInsert, plan.TableDiff{})}},
+			db:   &fakeDB{},
+		},
+		{
 			name: "order",
 			plan: &plan.Plan{Tables: []plan.Table{
 				table(plans, config.ModeUpsert, plan.TableDiff{Updates: updates("7")}),

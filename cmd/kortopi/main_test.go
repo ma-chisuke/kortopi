@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -50,6 +51,15 @@ func TestRun(t *testing.T) {
 		{name: "help of version", args: []string{"help", "version"}, wantCode: exitOK, wantStdout: "usage: kortopi version"},
 		{name: "help of an unknown command", args: []string{"help", "nope"}, wantCode: exitError, wantStderr: `kortopi: no help for "nope"`},
 		{name: "unknown command", args: []string{"nope"}, wantCode: exitError, wantStderr: `unknown command "nope"`},
+		{
+			name: "plan takes no --table", args: []string{"plan", "--table", "a.b"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --table: a plan narrows the declaration by schema, with --schema <name>, and only an export takes --table\n",
+		},
+		{
+			name: "apply takes no --table", args: []string{"apply", "--table=a.b"}, wantCode: exitError,
+			wantStderr: "kortopi: flag provided but not defined: --table: an apply narrows the declaration by schema, with --schema <name>, and only an export takes --table\n",
+		},
+		{name: "another unknown flag of plan", args: []string{"plan", "--tables"}, wantCode: exitError, wantStderr: "kortopi: flag provided but not defined: --tables\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,6 +75,36 @@ func TestRun(t *testing.T) {
 			}
 			if !strings.Contains(stderr, tt.wantStderr) || tt.wantStderr == "" && stderr != "" {
 				t.Errorf("run(%q) stderr = %q, want it to contain %q", tt.args, stderr, tt.wantStderr)
+			}
+		})
+	}
+}
+
+// A --dir that names a file gets the error of the data directory first, for
+// every command, before kortopi reads a file under it or connects.
+func TestDirThatIsAFile(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(writeFiles(t, with(twoTables, map[string]string{"kortopi.toml": ""})), "kortopi.toml")
+	notADir := "kortopi: the data directory " + file + " is not a directory: give the directory that holds the declaration\n"
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"plan", "--dir", file}, want: notADir},
+		{args: []string{"apply", "--dir", file}, want: notADir + "kortopi: nothing was changed\n"},
+		{
+			args: []string{"export", "--dir", file, "--table", "app.plans"},
+			want: "kortopi: the data directory " + file + " is not a directory: give the directory to write the declaration into\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.args[0], func(t *testing.T) {
+			t.Parallel()
+
+			code, stdout, stderr := runTest(t, tt.args, noConnect(t))
+			if code != exitError || stdout != "" || stderr != tt.want {
+				t.Errorf("kortopi %s = %d, %q, %q, want %d and the error\n%s", strings.Join(tt.args, " "), code, stdout, stderr, exitError, tt.want)
 			}
 		})
 	}
@@ -121,7 +161,7 @@ func TestFlagOutput(t *testing.T) {
 		},
 		{
 			name: "limit without deletions", args: []string{"apply", "--max-delete", "5"}, wantCode: exitError,
-			wantStderr: "kortopi: flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete\n\n" + applyUsage,
+			wantStderr: "kortopi: flag --max-delete needs --allow-delete, without which an apply deletes no row: add --allow-delete, or remove --max-delete\n\n" + applyUsage,
 		},
 		{name: "help of version", args: []string{"version", "--help"}, wantCode: exitOK, wantStdout: versionHelp},
 		{name: "help command of version", args: []string{"help", "version"}, wantCode: exitOK, wantStdout: versionHelp},
@@ -146,6 +186,17 @@ func TestFlagOutput(t *testing.T) {
 
 // TestHelpListsTheFlags checks that the help texts name every flag that plan
 // and apply define, and no flag that they lack.
+// The exit status of plan --exit-code claims no more than a plan compares: a
+// table of mode insert is compared by its keys only.
+func TestPlanHelpOfTheExitStatus(t *testing.T) {
+	t.Parallel()
+
+	_, help, _ := runTest(t, []string{"plan", "--help"}, noConnect(t))
+	if !strings.Contains(help, "  0   the plan was made (with --exit-code: there is nothing to apply)\n") || strings.Contains(help, "matches") {
+		t.Errorf("kortopi plan --help says of status 0:\n%s", help)
+	}
+}
+
 func TestHelpListsTheFlags(t *testing.T) {
 	t.Parallel()
 

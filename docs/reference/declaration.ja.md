@@ -31,6 +31,11 @@ data/
 
 CSV のパスの名前は、大文字と小文字も含めてそのまま使う。
 PostgreSQL は引用符のない名前を小文字にするので、`CREATE TABLE Facility.Rooms` で作ったテーブルは `facility.rooms` であり、そのファイルは `facility/rooms.csv` である。
+テーブル・スキーマ・列の名前が、データベースの名前と空白か大小だけで違っていれば、エラーである（[大小の違う名前](#大小の違う名前)）。
+
+パーティションと、その上にあるパーティションテーブルは、同じ行を持つ。計画は、パーティションテーブルをそのパーティションの行とともに読むからである。
+宣言するのはどちらか一方であり、両方ではない（[パーティションとそのパーティションテーブル](#パーティションとそのパーティションテーブル)）。
+別のテーブルを継承するテーブルは、パーティションではない。kortopi はそれぞれを `ONLY` で読み書きするので、両方を、それぞれの行で宣言できる。
 
 kortopi の管理する列は、ファイルが挙げる列である。kortopi はその列を比べて更新し、テーブルのほかの列には手を出さない。
 新しい行では、ファイルが挙げない列のそれぞれに既定値が入る。
@@ -148,7 +153,7 @@ kortopi は、検索パスを `pg_catalog` にしてファイルを読むから�
 - `'a' || 'b'` や `1 + 2` などの演算子
 - 副問い合わせ・列の参照・パラメータ・`COLLATE`・`CASE`・`DEFAULT`
 
-振られる ID やタイムスタンプのように、データベースに値を入れさせたい列は、ファイルから外す。
+振られる ID や既定値のあるタイムスタンプのように、データベースに値を入れさせたい列は、ファイルから外す。それが列に合うかどうかは [kortopi export](export.ja.md#最初の書き出しのあとに直すこと) が示す。`NOT NULL` で既定値のない列や、ほかの行が外部キーなしで持つ ID には合わない。
 
 日付や時刻の値の中の `now`・`today`・`tomorrow`・`yesterday` は、大文字と小文字を問わずエラーである。PostgreSQL はこれらの語を読んだ時点として読むので、値が計画ごとに変わってしまうからである。
 日付や時刻そのものを書く。
@@ -219,6 +224,8 @@ mode = "insert"
   | `upsert`（既定） | 求める | 求める | 求めない |
   | `sync` | 求める | 求める | 求める |
 
+  モード `insert` では、計画は宣言した行と保存されている行をキーだけで比べる。すでにある行の値が変わっていても示さない。空の計画は、データベースが宣言と一致しているとは言わず、代わりにモード `insert` のテーブルを挙げる（[kortopi plan](plan.ja.md#出力の読み方)）。
+
 - `key` は、宣言の行と保存されている行を照合する列を挙げる。`key` がなければ、照合キーは主キーである。`key` の列は、次の条件を満たす。
   - テーブルの主キーの列か、1つの一意キーの列そのものである。一意キーとは、`UNIQUE` 制約か、部分インデックスでも遅らせられるものでもなく、式を含まない一意インデックスである。
   - どの列も `NOT NULL` である。
@@ -228,6 +235,7 @@ mode = "insert"
   一意インデックスは、主キーのものも含め、キーのどの列についても列の照合順序と型の既定の演算子クラスを使うときだけ、キーとみなす。ほかの照合順序を持つ列に対する `code COLLATE "C"` のインデックスや、`slug text_pattern_ops` のインデックスはキーではない。計画が1つとみなす2つの値をインデックスが区別したり、その逆が起きたりしうるからである。
 
   列の順番は、計画がキーを表示する順番と、行を並べる順番を決める。
+  キーの値を変えると、更新ではなく削除と挿入になる。データベースが生成する ID にとって何が起きるかは、[kortopi export](export.ja.md#生成される-id-の代わりの自然キー) が示す。
 - ほかの設定はエラーであり、`key = []` もエラーである。
 - どのファイルも宣言していないテーブルの設定はエラーである。綴りを誤った名前のテーブルが、既定の設定のまま残らないようにするためである。[kortopi export](export.ja.md) はこれを検査しない。最初の書き出しで、`key` がテーブルの行を並べられるようにするためである。
 
@@ -256,6 +264,17 @@ kortopi: data/facility/room_types.csv:1: column 2 of the header has no name: nam
 
 見出しの行の末尾のコンマは、名前のない列を1つ足してしまう。
 
+### 見出しの行より多いか少ないフィールドを持つ行
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 6 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+kortopi: data/facility/room_types.csv:3: missing data for column "sort_order" (hint: the row has fewer fields than the header, which names 3 columns: give the row a field for every column, an empty one for NULL)
+```
+
+行を読んで行番号を示すのは PostgreSQL であり、ヒントは kortopi が足す。
+見出しの行から除いた列を行から除かなければ、1つ目のエラーになる。その列のフィールドをすべての行からも除くか、[kortopi export](export.ja.md#書き出しのあとで列を除く) に `--overwrite` で行を書き直させる。
+メッセージが英語以外のサーバーでは、ヒントのないエラーになる。
+
 ### 2つのファイルにあるテーブル
 
 ```text
@@ -265,19 +284,19 @@ kortopi: table facility.room_types is declared in two files, data/facility/room_
 ### スキーマのないテーブル名
 
 ```text
-kortopi: data/seed.sql:1: the table name room_types has no schema; write it with its schema, as <schema>.room_types
+kortopi: data/seed.sql:1: the table name room_types has no schema: write it with its schema, as <schema>.room_types
 ```
 
 ### 列の一覧のない INSERT
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them
+kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list: name the columns, as pg_dump --column-inserts writes them
 ```
 
 ### 値としての関数の呼び出し
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time
 ```
 
 値そのものを書くか、その列をファイルから外して、新しい行に既定値が入るようにする。
@@ -285,31 +304,31 @@ kortopi: data/seed.sql:2: facility.room_types, column created_at: the function c
 ### 1つのテーブルで列の違う INSERT 文
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name); every INSERT of one table must name the same columns
+kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name): every INSERT of one table must name the same columns
 ```
 
 ### --column-inserts なしのダンプ
 
 ```text
-kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
+kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
 ```
 
 ### SQL の値の中の現在の時刻を表す語
 
 ```text
-kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value: write the date or time itself, because a plan must not change the database and must give the same result each time
 ```
 
 ### タイムゾーンの SET
 
 ```text
-kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo'; write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
+kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo': write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
 ```
 
 ### INSERT で2回挙げた列
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice; name each column once
+kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice: name each column once
 ```
 
 ### どのファイルも宣言していないテーブルの設定
@@ -339,10 +358,32 @@ kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans i
 
 キーの列をファイルに足すか、ファイルにある列からなる一意キーを `key` で指定する。
 
+### 大小の違う名前
+
+```text
+kortopi: data/facility/room_types.csv: column " name" is not a column of table facility.room_types, but column "name" is, whose name differs only in white space or case: write the name as the table has it
+kortopi: data/facility/Rooms.csv: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+kortopi: data/Facility/rooms.csv: schema "Facility" of table Facility.rooms does not exist, but schema "facility" does, whose name differs only in white space or case: write the name as the database has it
+```
+
+見出しの行でコンマのあとに置いた空白は、列の名前の一部になる。名前は大文字と小文字も含めてそのまま使う。
+データベースにない列・テーブル・スキーマの名前が、前後の空白を取り除き、大小を同一視するとデータベースの名前と等しいなら、それはこうした誤りである。スキーマの変更を待つ名前ではない。
+空白を取り除くのは、宣言した名前だけである。
+テーブルとスキーマの名前は ASCII の文字の大小だけを同一視し、列の名前はすべての文字の大小を同一視する。
+そのとおりの名前で存在するスキーマのテーブルは、そのスキーマのテーブルとだけ比べる。そのため、そこへの新しいテーブルは、大小だけが違う名前の別のスキーマに同じ名前のテーブルがあっても、引き続きスキーマの変更を待つ。
+
+### パーティションとそのパーティションテーブル
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and both tables are declared, in data/facility/events_2026.csv and data/facility/events.csv: the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables
+```
+
+この検査は、パーティションのどの深さにも及ぶ。パーティションのパーティションと、根にあるパーティションテーブルも、同じ誤りである。
+
 ### 行を照合できないキー
 
 ```text
-kortopi: table facility.room_types has no primary key that can match rows; the unique key ("code") cannot, because its index uses another collation than column "code": name the columns of a unique key that can with key in [tables."facility.room_types"] of data/kortopi.toml
+kortopi: table facility.room_types has no key that can match rows: the unique key ("code") cannot, because its index uses another collation than column "code": give the table a primary key or a unique key whose index uses the collation of each column and its default operator class, and name it with key in [tables."facility.room_types"] of data/kortopi.toml if it is a unique key
 kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a unique key that cannot match rows, because its index uses an operator class that is not the default for column "code": name the columns of the primary key or of another unique key
 ```
 
@@ -357,7 +398,7 @@ kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would
 ### NOT NULL の列の NULL
 
 ```text
-kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
+kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL
 ```
 
 ### 挿入する行が値を得られない列
@@ -380,10 +421,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の7つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
+最後の9つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
-- キーの列のないファイルと、行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
+- キーの列のないファイル・大小だけが違う名前・パーティションとそのパーティションテーブル・行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:3f57b0f09c363f08773b9ed832036f1a954d3126ecdc2ba4831b82e3a75e1235 -->
+<!-- i18n-source: declaration.md sha256:930c0c0878751266e33345aa1cd9bb88c8ab519b78d5a294f81a30f783a2309b -->

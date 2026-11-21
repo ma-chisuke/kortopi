@@ -31,6 +31,11 @@ data/
 
 A name in a CSV path is exact, with its case.
 PostgreSQL folds an unquoted name to lower case, so a table created as `CREATE TABLE Facility.Rooms` is `facility.rooms`, and its file is `facility/rooms.csv`.
+A table, a schema, or a column whose name differs from a name of the database only in white space or case is an error ([A name in another case](#a-name-in-another-case)).
+
+A partition and a partitioned table above it hold the same rows: a plan reads a partitioned table with the rows of its partitions.
+Declare one of the two, never both ([A partition and its partitioned table](#a-partition-and-its-partitioned-table)).
+A table that inherits from another is no partition: kortopi reads and writes each of the two with `ONLY`, so both may be declared, each with its own rows.
 
 The columns that a file names are the columns that kortopi manages: it compares and updates them, and leaves the other columns of the table alone.
 A new row gets the default of every column that the file does not name.
@@ -148,7 +153,7 @@ Everything else is an error, because a plan must not change the database and mus
 - operators, such as `'a' || 'b'` and `1 + 2`;
 - subqueries, column references, parameters, `COLLATE`, `CASE`, and `DEFAULT`.
 
-To let the database fill a column, such as a generated ID or a timestamp, leave the column out of the file.
+To let the database fill a column, such as a generated ID or a timestamp with a default, leave the column out of the file. [kortopi export](export.md#what-to-edit-after-a-first-export) says when that suits a column: not for a column that is `NOT NULL` without a default, and not for an ID that other rows hold without a foreign key.
 
 The words `now`, `today`, `tomorrow`, and `yesterday`, in any case, are errors in a date or time value, because PostgreSQL reads them as the moment of reading, and the value would change from one plan to the next.
 Write the date or time itself.
@@ -218,6 +223,8 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   | `upsert` (the default) | yes | yes | no |
   | `sync` | yes | yes | yes |
 
+  In mode `insert`, a plan compares the declared rows with the stored rows by their keys only: a changed value of a row that exists is not shown, and an empty plan names the tables of mode `insert` instead of saying that the database matches the declaration ([kortopi plan](plan.md#read-the-output)).
+
 - `key` names the columns that match a declared row with a stored row. Without it, the match key is the primary key. The columns of `key`
   - are exactly the columns of the primary key or of one unique key of the table: a `UNIQUE` constraint, or a unique index that is neither partial nor deferrable and holds no expression;
   - are all `NOT NULL`;
@@ -227,6 +234,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   A unique index, the one of the primary key included, counts as a key only when it uses, for every key column, the collation of the column and the default operator class of its type. An index on `code COLLATE "C"` for a column with another collation, or on `slug text_pattern_ops`, is not a key, because it could tell apart two values that the plan takes for one, or the other way round.
 
   Their order decides the order in which the plan prints the key and sorts the rows.
+  A changed value of the key is a deletion and an insertion, not an update: [kortopi export](export.md#a-natural-key-in-place-of-a-generated-id) says what follows for an ID that the database generates.
 - Any other setting is an error, and so is `key = []`.
 - Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults. [kortopi export](export.md) does not check this, so that a `key` can sort the rows of a table at its first export.
 
@@ -255,6 +263,17 @@ kortopi: data/facility/room_types.csv:1: column 2 of the header has no name: nam
 
 A comma at the end of the header adds a column without a name.
 
+### A row with more or fewer fields than the header
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 6 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+kortopi: data/facility/room_types.csv:3: missing data for column "sort_order" (hint: the row has fewer fields than the header, which names 3 columns: give the row a field for every column, an empty one for NULL)
+```
+
+PostgreSQL reads the rows and names the line; kortopi adds the hint.
+A column removed from the header but not from the rows gives the first error: remove its field from every row too, or let [kortopi export](export.md#drop-columns-after-an-export) write the rows again with `--overwrite`.
+A server whose messages are in another language than English gets the error without the hint.
+
 ### A table in two files
 
 ```text
@@ -264,19 +283,19 @@ kortopi: table facility.room_types is declared in two files, data/facility/room_
 ### A table name without its schema
 
 ```text
-kortopi: data/seed.sql:1: the table name room_types has no schema; write it with its schema, as <schema>.room_types
+kortopi: data/seed.sql:1: the table name room_types has no schema: write it with its schema, as <schema>.room_types
 ```
 
 ### An INSERT without a column list
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them
+kortopi: data/seed.sql:1: facility.room_types: the INSERT has no column list: name the columns, as pg_dump --column-inserts writes them
 ```
 
 ### A function call as a value
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:2: facility.room_types, column created_at: the function call now() is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time
 ```
 
 Write the value itself, or leave the column out of the file so that a new row gets its default.
@@ -284,31 +303,31 @@ Write the value itself, or leave the column out of the file so that a new row ge
 ### INSERT statements of one table with other columns
 
 ```text
-kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name); every INSERT of one table must name the same columns
+kortopi: data/seed.sql:2: facility.room_types: the INSERT names the columns (code, capacity), but the INSERT on line 1 names (code, name): every INSERT of one table must name the same columns
 ```
 
 ### A dump without --column-inserts
 
 ```text
-kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
+kortopi: data/seed.sql:3: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file
 ```
 
 ### A word for the current time in a SQL value
 
 ```text
-kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time
+kortopi: data/seed.sql:1: facility.events, column starts_at: the word now, which PostgreSQL reads as the current date or time, is not accepted in a value: write the date or time itself, because a plan must not change the database and must give the same result each time
 ```
 
 ### A SET of the time zone
 
 ```text
-kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo'; write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
+kortopi: data/seed.sql:1: TimeZone must stay UTC, but this statement sets it to 'Asia/Tokyo': write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement
 ```
 
 ### A column named twice in an INSERT
 
 ```text
-kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice; name each column once
+kortopi: data/seed.sql:1: facility.room_types: the column list names column "code" twice: name each column once
 ```
 
 ### Settings of a table that no file declares
@@ -338,10 +357,32 @@ kortopi: data/app/plans.csv: column "id" of the primary key of table app.plans i
 
 Add the key columns to the file, or name a unique key whose columns the file has with `key`.
 
+### A name in another case
+
+```text
+kortopi: data/facility/room_types.csv: column " name" is not a column of table facility.room_types, but column "name" is, whose name differs only in white space or case: write the name as the table has it
+kortopi: data/facility/Rooms.csv: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+kortopi: data/Facility/rooms.csv: schema "Facility" of table Facility.rooms does not exist, but schema "facility" does, whose name differs only in white space or case: write the name as the database has it
+```
+
+A space after a comma in the header is part of the name of the column, and a name is exact, with its case.
+A column, a table, or a schema that the database lacks is such a mistake, not a name that waits for a schema change, when its name, with the white space around it trimmed, equals a name of the database once case is folded.
+Only the declared name is trimmed.
+The names of tables and schemas fold ASCII letters only, and the names of columns fold every letter.
+A table of a schema that exists as it is written is compared with the tables of that schema alone: a new table there still waits for the schema change, also when another schema whose name differs only in case has a table of that name.
+
+### A partition and its partitioned table
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and both tables are declared, in data/facility/events_2026.csv and data/facility/events.csv: the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables
+```
+
+The check covers every depth of partitioning: a partition of a partition and the partitioned table at the root are the same mistake.
+
 ### A key that cannot match rows
 
 ```text
-kortopi: table facility.room_types has no primary key that can match rows; the unique key ("code") cannot, because its index uses another collation than column "code": name the columns of a unique key that can with key in [tables."facility.room_types"] of data/kortopi.toml
+kortopi: table facility.room_types has no key that can match rows: the unique key ("code") cannot, because its index uses another collation than column "code": give the table a primary key or a unique key whose index uses the collation of each column and its default operator class, and name it with key in [tables."facility.room_types"] of data/kortopi.toml if it is a unique key
 kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a unique key that cannot match rows, because its index uses an operator class that is not the default for column "code": name the columns of the primary key or of another unique key
 ```
 
@@ -356,7 +397,7 @@ kortopi: data/facility/room_types.csv: declared rows repeat a key, so they would
 ### NULL in a NOT NULL column
 
 ```text
-kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value; in a CSV file, an unquoted empty field is NULL: write "" for the empty string
+kortopi: data/facility/room_types.csv: column "name" of table facility.room_types is NOT NULL, but 1 declared row holds NULL in it: (code)=(single): give each row a value, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL
 ```
 
 ### A column that the rows to insert would lack
@@ -379,8 +420,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last seven mistakes need the database, so kortopi reports them after it connects:
+The last nine mistakes need the database, so kortopi reports them after it connects:
 
-- A file without the columns of the key, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
+- A file without the columns of the key, a name in another case, a partition and its partitioned table, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
 - A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
 - A column that the rows to insert would lack is reported for every table at once, after the tables are compared.

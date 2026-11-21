@@ -14,13 +14,18 @@ The files that it writes are described in [Declaration files](declaration.md), a
 usage: kortopi export [flags]
 
 Write the rows of tables of the database as a declaration: a file for each
-table, <schema>/<table>.csv or .sql in the data directory, which a plan of
-the same rows finds equal. Name the tables with --table or --schema: an
-export never writes every table of a database. A table that a file
-declares already is written again only with --overwrite, into that file,
-in its format, and with its columns. A new file holds every column of its
-table but the generated ones: remove the columns that the declaration
-should not manage. An export only reads the database.
+table, which a plan of the same rows finds equal. An export only reads
+the database.
+
+Name the tables with --table or --schema: an export never writes every
+table of a database.
+
+A table that no file declares gets a new file, <schema>/<table>.csv, or
+.sql with --format sql. It holds every column of the table but the
+generated ones: remove the columns that the declaration should not manage.
+
+A table that a file declares already is written again only with
+--overwrite, into that file, in its format, and with its columns.
 
 flags:
   --dir <path>      the data directory to write into, created if it is
@@ -92,13 +97,16 @@ A new file holds every column, so it holds columns that a declaration usually le
 A column that a file names is a column that kortopi manages: a plan compares it, and an apply writes it in every environment.
 Before the first apply, go through each file:
 
-- Remove the IDs that the database assigns, when the rows should match by a natural key. In the example, `catalog/plans.csv` starts with `id,code,name,price`, and `id` is a UUID that each environment generates: remove the column, and match the rows by `code`.
-- Remove the columns that the database or other programs set, such as the time a row was created or changed.
+- Remove the IDs that the database assigns, when the rows should match by a natural key, and when matching by it suits the table ([A natural key in place of a generated ID](#a-natural-key-in-place-of-a-generated-id)). In the example, `catalog/plans.csv` starts with `id,code,name,price`, and `id` is a UUID that each environment generates: remove the column, and match the rows by `code`.
+- Remove a column that the database or other programs set, such as the time a row was changed, when the column has a default: a new row then gets the default.
+- Keep a column that is `NOT NULL` and has no default, such as the time a row was created when the application writes it. A new row would get no value for it, and a plan stops on such a column ([Declaration files](declaration.md#a-column-that-the-rows-to-insert-would-lack)). Kept in the file, the column is managed as any other: a value that differs from the database is an update. kortopi has no column that is set on insert only.
 - Remove an identity column that is `GENERATED ALWAYS` unless it is part of the match key. A plan stops on it, because an update cannot change it:
 
   ```text
   kortopi: data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key
   ```
+
+To remove columns from a file, follow [Drop columns after an export](#drop-columns-after-an-export).
 
 Then write the settings of the tables in `kortopi.toml` ([Declaration files](declaration.md#kortopitoml)): the `key` of a table that matches by a natural key, and the `mode` of a table that should lose the rows that the declaration lacks:
 
@@ -129,15 +137,53 @@ pro,Pro,20.00
 
 A plan now finds no change, with the settings that a plan of this declaration will use from here on.
 
-### A table without a primary key
+### Drop columns after an export
 
-A table without a primary key and without a `key` in `kortopi.toml` is exported, sorted by all its columns, and the export prints a note on standard error:
+To stop managing columns of a CSV file, remove their names from the header alone, and export the table again with `--overwrite`.
+The export keeps the columns that the header names, and writes every row again with those fields:
 
-```text
-note: table misc.tags has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one with key in [tables."misc.tags"] of data/kortopi.toml
+```sh
+# facility/rooms.csv: the header was id,room_type,note, and is now id,room_type
+kortopi export --dir data --table facility.rooms --overwrite
 ```
 
-A plan of the table fails until `kortopi.toml` names a key: the columns of a unique key of the table.
+Until that refresh, a plan stops on the rows, which still have a field for each removed column:
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+```
+
+In a SQL file, the column list of each `INSERT` and the values of its rows must agree, so editing the column list alone does not work.
+Keep one `INSERT` of the table, remove the columns from its column list and their values from its rows, delete the other `INSERT` statements of the table, and export the table with `--overwrite`: the export writes every row again in the columns of that `INSERT`.
+
+### A natural key in place of a generated ID
+
+Matching by a natural key, such as `code`, lets one declaration serve environments whose generated IDs differ.
+A change of the value of that key is then a deletion of the old row and an insertion of a new one, not an update ([ADR-0012](../adr/ADR-0012-match-rows-by-primary-key-or-a-chosen-unique-key.md)):
+
+- The new row gets a new ID, from the default of the column.
+- A row of another table that holds the old ID through a foreign key stops the deletion, or follows the action `ON DELETE` of the key, and a plan shows it under the row to delete. A row that holds the old ID without a foreign key, such as a column without a constraint or a copy in another service, is not seen by kortopi, and is left pointing at nothing.
+- In mode `upsert`, which never deletes, the old row stays, and the table holds the row twice: under the old key and under the new one.
+
+Match by a natural key when no row holds the ID without a foreign key, or when the natural key never changes.
+Otherwise keep the ID in the declaration and match by it, so that a change of the natural key is an update of the row, which keeps its ID.
+
+### A table without a primary key
+
+A table without a primary key and without a `key` in `kortopi.toml` is exported, sorted by all its columns, and the export prints a note on standard error.
+A match key must be the primary key or a unique key of the table ([Declaration files](declaration.md#kortopitoml)), so the note says what the table offers.
+When the table has a unique key, the note names it, and a plan of the table works once `kortopi.toml` names that key:
+
+```text
+note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key ("label") with key in [tables."misc.labels"] of data/kortopi.toml
+```
+
+When the table has neither, no setting helps: a plan of the table fails until the schema gives the table a primary key or a unique key.
+
+```text
+note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: a match key must be a primary key or a unique key of the table, so give the table one in the schema
+```
+
 The settings may name the key before the first export too. An export does not check the settings against the declaration, so a `key` for a table that no file declares yet sorts its rows at that export.
 
 ## Refresh a declared table
@@ -150,7 +196,7 @@ kortopi export --dir data --table facility.room_types --overwrite
 
 A refresh replaces the file that declares the table:
 
-- in the format of that file, whatever `--format` says;
+- in the format of that file, whatever `--format` says; when `--format` names another format, a note on standard error says that the file keeps its own;
 - with the columns of that file, so a refresh never starts to manage a column that you removed;
 - with every row of the table, also the rows that the file did not declare.
 
@@ -177,8 +223,11 @@ kortopi: data/facility/room_types.csv: table facility.room_types is declared in 
 Without `--table` and `--schema`, in a directory that declares tables, the error says how to refresh them:
 
 ```text
-kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database; to refresh the tables that data declares, name them with --table or their schemas with --schema, and add --overwrite
+kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: to refresh the tables that the data directory data declares, add --overwrite, and name them, as in --table facility.room_types --table facility.rooms, or name their schemas, as in --schema facility
 ```
+
+The error names the declared tables and their schemas as flags, up to four of each, and counts the others.
+In the current directory, it says "the current directory".
 
 A refresh does not replace:
 
@@ -295,7 +344,7 @@ GRANT SELECT ON facility.room_types, facility.rooms TO reader;
 A missing privilege and row-level security are errors, as for a plan, with "an export" in place of "a plan":
 
 ```text
-kortopi: an export needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: an export needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or leave the tables of the schema out of the export
 kortopi: an export needs SELECT on table facility.room_types, and the role "reader" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "reader" sees only the rows that its policies allow, and an export would leave the others out: export as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
 ```
@@ -341,6 +390,20 @@ kortopi: schema "nowhere" does not exist in database "app"
 kortopi: schema "nothing" has no table whose rows can be declared: name another schema, or tables with --table
 ```
 
+A table whose name differs from a table of the database only in white space or case:
+
+```text
+kortopi: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+```
+
+A partition named together with its partitioned table, which would declare its rows twice:
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and the export names both: the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables
+```
+
+The same holds for a partition whose partitioned table the data directory declares already, and for a partitioned table, named with `--table` or through `--schema`, whose partition the data directory declares already.
+
 A relation that is not a table:
 
 ```text
@@ -368,7 +431,7 @@ kortopi: tables App.t and app.t would be written to data/App/t.csv and data/app/
 A name that cannot be a file:
 
 ```text
-kortopi: table a/b.t cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: export it into a SQL file that you name, or rename the schema
+kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
 ```
 
 A flag in a wrong form:

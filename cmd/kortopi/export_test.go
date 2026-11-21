@@ -36,10 +36,10 @@ func TestParseExport(t *testing.T) {
 					dir: "data", schemas: []string{"geo"},
 					conn: connection{host: "db.example.test", port: "5433", user: "reader", dbname: "shop"},
 				},
-				tables: []declaration.TableName{rooms, plansTable}, format: declaration.SQL, overwrite: true,
+				tables: []declaration.TableName{rooms, plansTable}, format: declaration.SQL, formatGiven: true, overwrite: true,
 			},
 		},
-		{name: "format csv", args: []string{"--format=sql", "--format=csv"}, want: exportOptions{common: common{dir: "."}, format: declaration.CSV}},
+		{name: "format csv", args: []string{"--format=sql", "--format=csv"}, want: exportOptions{common: common{dir: "."}, format: declaration.CSV, formatGiven: true}},
 		{name: "table without a schema", args: []string{"--table", "rooms"}, wantErr: "invalid value for flag --table: write the table as <schema>.<table>, with one dot"},
 		{name: "table with an empty schema", args: []string{"--table", ".rooms"}, wantErr: "invalid value for flag --table: write the table as <schema>.<table>, with one dot"},
 		{name: "table with an empty name", args: []string{"--table", "facility."}, wantErr: "invalid value for flag --table: write the table as <schema>.<table>, with one dot"},
@@ -102,7 +102,8 @@ func TestRunExport(t *testing.T) {
 			wantFiles: map[string]string{"facility/rooms.csv": "id,name\n"},
 			wantCode:  exitError,
 			wantStderr: "kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: " +
-				"an export never writes every table of a database; to refresh the tables that DIR declares, name them with --table or their schemas with --schema, and add --overwrite\n",
+				"an export never writes every table of a database: to refresh the tables that the data directory DIR declares, add --overwrite, " +
+				"and name them, as in --table facility.rooms, or name their schemas, as in --schema facility\n",
 		},
 		{
 			name:        "a schema, in CSV",
@@ -140,6 +141,7 @@ func TestRunExport(t *testing.T) {
 			wantCode:    exitOK,
 			wantStdout:  "wrote DIR/facility/rooms.csv (2 rows)\nExported 1 table with 2 rows.\n",
 			wantFiles:   map[string]string{"facility/rooms.csv": "rows of facility.rooms: name,id\n"},
+			wantStderr:  "note: table facility.rooms is declared in DIR/facility/rooms.csv, so the export keeps the format of that file, CSV: --format applies to new files only\n",
 			wantConnect: true,
 		},
 		{

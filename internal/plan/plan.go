@@ -51,6 +51,25 @@ type TableInfo struct {
 	// in its errors, so that a user learns why a key that exists is not
 	// used.
 	SetAsideKeys []SetAsideKey
+	// PartitionOf holds, for a partition, the partitioned tables whose rows
+	// include its rows: its parent first, then the parent of that table, up
+	// to the root. It is empty for a table that is not a partition. A
+	// declaration of a partition and of one of these tables declares the same
+	// rows twice.
+	PartitionOf []declaration.TableName
+	// Partitions holds, for a partitioned table, its partitions at every
+	// depth: the tables whose rows are rows of this table too. An export
+	// checks them against the declared tables.
+	Partitions []declaration.TableName
+	// NearNames holds, for a table that does not exist, the tables of the
+	// database whose schema and name equal the declared ones once white space
+	// is trimmed and case is folded. NearSchemas holds, when no such table
+	// exists and the declared schema does not exist either, the schemas that
+	// equal it in the same way. A name that differs from a name of the
+	// database only so is more likely a mistake than a table that waits for
+	// a schema change.
+	NearNames   []declaration.TableName
+	NearSchemas []string
 }
 
 // SetAsideKey is a unique index or constraint that cannot match rows as a

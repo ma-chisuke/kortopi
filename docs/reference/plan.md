@@ -35,8 +35,7 @@ and from the password file. The flags --host, --port, --user, and --dbname
 override them. There is no flag for the password.
 
 exit status:
-  0   the plan was made (with --exit-code: the database matches the
-      declaration)
+  0   the plan was made (with --exit-code: there is nothing to apply)
   1   the plan failed
   2   with --exit-code only: the plan is not empty
 ```
@@ -44,6 +43,7 @@ exit status:
 `--schema` narrows the plan to the declared tables of the named schemas.
 A named schema that declares no table is an error, so a misspelled name cannot narrow the plan to nothing.
 The settings in `kortopi.toml` are still checked against every declared table, also those of the schemas that `--schema` leaves out.
+A plan cannot be narrowed to one table: `--table` is a flag of `kortopi export`, and a plan rejects it with a hint to use `--schema`.
 
 `--format sql` prints the plan as SQL statements instead of text ([Print the plan as SQL](#print-the-plan-as-sql)).
 
@@ -64,6 +64,12 @@ kortopi plan --dir data
 There is no flag for the password, so that it never appears in the arguments of a process.
 Give it in `PGPASSWORD`, in the password file, or in the service file.
 
+kortopi needs the name of the database. Unlike `psql`, it does not take the name of the user for it ([ADR-0032](../adr/ADR-0032-require-the-name-of-the-database.md)): without `--dbname`, `PGDATABASE`, or `dbname` in the service, it stops before it connects.
+
+```text
+kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names
+```
+
 `--host`, `--user`, and `--dbname`, and the variables `PGHOST`, `PGUSER`, and `PGDATABASE`, take a name, not a connection string: a value that holds `://` or `=` is an error.
 Such a value could hold a password, and libpq would read it as a name and repeat it in the error of a failed connection.
 The error does not repeat the value:
@@ -75,11 +81,55 @@ kortopi: the database of the connection looks like a connection string, which ma
 
 No error of a flag repeats the value that was typed.
 
-A connection that fails stops the plan, with the error of the driver:
+A variable that the driver cannot read is named, and its value is not repeated:
 
 ```text
-kortopi: connect to the database: failed to connect to ...
+kortopi: read the connection settings: the port is not a number from 1 to 65535: correct PGPORT, or the port of the service that PGSERVICE names
+kortopi: read the connection settings: the SSL mode is not one that libpq knows: set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full
 ```
+
+A connection that fails stops the plan, with one error: a line that names the database and the user, and an indented line for each attempt to connect, with the cause that the driver gives.
+
+```text
+kortopi: cannot connect to database "app" as user "app":
+kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
+```
+
+- The driver makes an attempt for each address of each host, and with `sslmode` `prefer`, the default, tries TLS first and then a host without it. When the settings allow an attempt without TLS, a refusal of TLS is left out if a later attempt to the same host failed for another reason, because that attempt gives the cause. With `sslmode` `require`, every refusal of TLS stays. An attempt that repeats an earlier one is left out.
+- When the server refuses the password and no password was given, in `PGPASSWORD`, in the password file, or in the service, the line of that attempt ends with `: no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names`. The server answers a missing password and a wrong one alike, so without that ending, the password was given and is wrong, or the user cannot log in with it.
+
+### Connection settings
+
+Besides the host, the port, the user, the database, and the password, kortopi takes these variables of libpq, which its driver reads:
+
+| Variable | Use |
+|---|---|
+| `PGPASSFILE` | The password file, `~/.pgpass` by default, with a line for each host, port, database, and user. |
+| `PGSERVICE`, `PGSERVICEFILE` | A service of the service file, `~/.pg_service.conf` by default, which may hold every setting of the connection. |
+| `PGSSLMODE` | `disable`, `allow`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. |
+| `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. |
+| `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it. |
+| `PGAPPNAME` | The `application_name` of the session, which `pg_stat_activity` shows: `kortopi` by default. |
+| `PGOPTIONS` | Settings of the session, written as `-c name=value`, such as `-c lock_timeout=10s` and `-c statement_timeout=5min`. |
+
+A setting in `PGOPTIONS` does not change a setting that kortopi pins ([How values are compared](comparison.md#the-settings-of-the-session)).
+kortopi pins them inside its transaction, after the session has started, so `-c TimeZone=Asia/Tokyo` or `-c search_path=app` changes nothing in a plan.
+
+A plan and an apply wait without limit, and without a word, while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`.
+kortopi has no setting of its own for this: set `lock_timeout` in `PGOPTIONS`.
+
+```sh
+PGOPTIONS='-c lock_timeout=10s' kortopi apply --dir data
+```
+
+When the wait reaches the limit, the run stops, nothing is changed, and the error says what happened:
+
+```text
+kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: nothing was changed: run the plan again once that session has released the lock
+```
+
+`statement_timeout` ends a statement that runs too long, for whatever reason, with an error of the same kind.
+Set a lock timeout for every run at deploy time, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
 
 ## What the session needs
 
@@ -107,8 +157,8 @@ GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 Each check that fails stops the plan with its own error, which names what is missing and what to grant:
 
 ```text
-kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database; a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
-kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database: a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
+kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" lacks it: grant the role SELECT on the table
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "planner" sees only the rows that its policies allow, and a plan would take the others for missing rows: plan as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
@@ -137,6 +187,26 @@ kortopi rolls the transaction back, closes the connection, and exits with status
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
+```
+
+### One role for each schema
+
+An application with one schema for each context often has an owner role and a runtime role for each schema, and no role that may use every schema.
+Run kortopi then once for each schema, as a role of that schema, with `--schema`:
+
+```sh
+PGUSER=facility_owner kortopi plan --dir data --schema facility
+PGUSER=notification_owner kortopi plan --dir data --schema notification
+```
+
+- `--schema` narrows the run to the declared tables of the schema, so the role needs privileges on that schema alone. The settings in `kortopi.toml` are still checked against every declared table.
+- A plan runs as any role of the schema that has what [this section](#what-the-session-needs) lists, such as the runtime role with `SELECT` on the declared tables. An apply runs as a role that may also write the declared tables, usually the owner ([kortopi apply](apply.md#one-apply-for-each-schema)).
+- Give the password of each role in `PGPASSWORD` for its run, or in the password file, which holds a line for each user.
+
+Without `--schema`, the run stops at the first table of a schema that the role may not use, and the error names both ways out:
+
+```text
+kortopi: a plan needs USAGE on schema "notification" and SELECT on table notification.mail_templates, and the role "facility_owner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 ```
 
 ## Read the output
@@ -189,6 +259,14 @@ When nothing differs and nothing waits for a schema change, the plan is one line
 No changes. The database matches the declaration.
 ```
 
+A table of mode `insert` gets only its missing rows, so a plan compares its declared rows with the stored rows by their keys alone, not by their values.
+When the plan has such a table, the empty plan does not say that the database matches, and names those tables instead, up to five of them and then a count of the others:
+
+```text
+No changes. There is nothing to apply.
+A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+```
+
 ### Tables and columns that wait for a schema change
 
 In a pull request that adds a table or a column, the database does not have them yet.
@@ -214,7 +292,8 @@ Known after the schema is applied: 1 table, 1 column.
   kortopi: data/seed.sql:2: type "facility.level" does not exist (hint: if the schema change adds the type, apply the schema first, or remove the cast)
   ```
 
-A misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review.
+A name that differs from a name of the database only in white space or case does not wait: it is a mistake, and the plan stops ([Declaration files](declaration.md#a-name-in-another-case)).
+Any other misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review, and apply the declaration in the check of the pull request ([Run kortopi from scripts](automation.md#in-a-pull-request)).
 
 ### Rows that reference rows to delete
 
@@ -335,6 +414,13 @@ A plan with nothing to do gives one line:
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
+When the plan has a table of mode `insert`, it gives the lines of the empty plan as comments instead:
+
+```sql
+-- No changes: there is nothing to do.
+-- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+```
+
 A plan in which only tables and columns wait for a schema change gives the header and this line:
 
 ```sql
@@ -418,13 +504,13 @@ A declaration whose references hold IDs that differ between environments, such a
 
 ## Errors
 
-The plan goes to standard output, and errors go to standard error as `kortopi: <message>`, one line for each error.
+The plan goes to standard output, and errors go to standard error as `kortopi: <message>`, one line for each error, except a failed connection, which gives a line for each attempt too ([Connect to the database](#connect-to-the-database)).
 A failed plan prints nothing on standard output.
 
 kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
-2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
+2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that the declaration does not name is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 5. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
@@ -435,7 +521,7 @@ kortopi checks in this order:
 
 | Status | Meaning |
 |---|---|
-| 0 | The plan was made. With `--exit-code`, the database also matches the declaration. |
+| 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare. |
 | 1 | The plan failed: a wrong flag, a mistake in the declaration, a database error, or an interrupt. |
 | 2 | Only with `--exit-code`: the plan is not empty. |
 
@@ -457,4 +543,4 @@ esac
 
 The `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), and [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), and [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md).

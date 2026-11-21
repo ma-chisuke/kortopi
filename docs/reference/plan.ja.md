@@ -35,8 +35,7 @@ and from the password file. The flags --host, --port, --user, and --dbname
 override them. There is no flag for the password.
 
 exit status:
-  0   the plan was made (with --exit-code: the database matches the
-      declaration)
+  0   the plan was made (with --exit-code: there is nothing to apply)
   1   the plan failed
   2   with --exit-code only: the plan is not empty
 ```
@@ -44,6 +43,7 @@ exit status:
 `--schema` は、計画を、指定したスキーマの宣言したテーブルに絞る。
 テーブルを1つも宣言していないスキーマを指定するとエラーになる。そのため、綴りを誤った名前で計画が空に絞られることはない。
 `kortopi.toml` の設定は、`--schema` が外したスキーマのものも含め、宣言したすべてのテーブルと照らし合わせる。
+計画をテーブルごとに絞ることはできない。`--table` は `kortopi export` のフラグであり、計画はそれを拒んで `--schema` を使うよう告げる。
 
 `--format sql` は、計画をテキストのかわりに SQL の文として出力する（[計画を SQL として出力する](#計画を-sql-として出力する)）。
 
@@ -64,6 +64,12 @@ kortopi plan --dir data
 パスワードのフラグはない。プロセスの引数にパスワードを出さないためである。
 パスワードは、`PGPASSWORD`・パスワードファイル・サービスファイルのどれかで渡す。
 
+kortopi には、データベースの名前が要る。`psql` と違い、ユーザーの名前をデータベースの名前として使わない（[ADR-0032](../adr/ADR-0032-require-the-name-of-the-database.ja.md)）。`--dbname`・`PGDATABASE`・サービスの `dbname` のどれもなければ、接続する前に止まる。
+
+```text
+kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names
+```
+
 `--host`・`--user`・`--dbname` と、環境変数 `PGHOST`・`PGUSER`・`PGDATABASE` は、接続文字列ではなく名前を受け取る。`://` か `=` を含む値はエラーである。
 そうした値はパスワードを含みうる。しかも libpq はそれを名前として読み、接続に失敗したときのエラーで繰り返してしまう。
 エラーは、その値を繰り返さない。
@@ -75,11 +81,55 @@ kortopi: the database of the connection looks like a connection string, which ma
 
 フラグのエラーは、どれも入力された値を繰り返さない。
 
-接続に失敗すると、ドライバーのエラーを示して計画が止まる。
+ドライバーが読めない環境変数は、その名前を示し、値は繰り返さない。
 
 ```text
-kortopi: connect to the database: failed to connect to ...
+kortopi: read the connection settings: the port is not a number from 1 to 65535: correct PGPORT, or the port of the service that PGSERVICE names
+kortopi: read the connection settings: the SSL mode is not one that libpq knows: set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full
 ```
+
+接続に失敗すると、計画は1つのエラーを出して止まる。エラーは、データベースとユーザーを挙げる行と、接続の試みごとにドライバーが示す原因を字下げして書いた行からなる。
+
+```text
+kortopi: cannot connect to database "app" as user "app":
+kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authentication failed for user "app" (SQLSTATE 28P01)
+```
+
+- ドライバーは、各ホストのアドレスごとに接続を試みる。既定の `sslmode` である `prefer` では、まず TLS で試み、次に TLS なしで試みる。設定が TLS なしの試みを許すときは、同じホストへのあとの試みが別の理由で失敗していれば、TLS の拒否は示さない。原因はその試みが示すからである。`sslmode` が `require` なら、TLS の拒否はすべて示す。前の試みと同じことを述べる試みも示さない。
+- サーバーがパスワードを拒んだとき、`PGPASSWORD`・パスワードファイル・サービスのどれでもパスワードを渡していなければ、その試みの行の終わりに `: no password was given: ...` を足す。続きは、パスワードを `PGPASSWORD` かパスワードファイル（`~/.pgpass` か `PGPASSFILE` が指すファイル）で渡すよう告げる。サーバーはパスワードがないときも誤っているときも同じに答える。そのため、この追記がなければ、パスワードは渡されたが誤っているか、そのユーザーがそれでログインできない。
+
+### 接続の設定
+
+ホスト・ポート・ユーザー・データベース・パスワードのほかに、kortopi は次の libpq の環境変数を受け付ける。読むのは kortopi のドライバーである。
+
+| 変数 | 用途 |
+|---|---|
+| `PGPASSFILE` | パスワードファイル。既定は `~/.pgpass` で、ホスト・ポート・データベース・ユーザーごとに1行を持つ。 |
+| `PGSERVICE`、`PGSERVICEFILE` | サービスファイルのサービス。サービスファイルの既定は `~/.pg_service.conf` で、接続のすべての設定を持てる。 |
+| `PGSSLMODE` | `disable`・`allow`・`prefer`（既定）・`require`・`verify-ca`・`verify-full` のどれか。 |
+| `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。 |
+| `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。 |
+| `PGAPPNAME` | セッションの `application_name`。`pg_stat_activity` に表示される。既定は `kortopi` である。 |
+| `PGOPTIONS` | セッションの設定。`-c lock_timeout=10s` や `-c statement_timeout=5min` のように `-c name=value` の形で書く。 |
+
+`PGOPTIONS` の設定は、kortopi が固定する設定を変えない（[値の比べ方](comparison.ja.md#セッションの設定)）。
+kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
+
+`ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが、計画や apply の読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
+kortopi にはこのための独自の設定がない。`PGOPTIONS` で `lock_timeout` を設定する。
+
+```sh
+PGOPTIONS='-c lock_timeout=10s' kortopi apply --dir data
+```
+
+待ちが上限に達すると、実行は止まり、何も変わらない。起きたことはエラーが示す。
+
+```text
+kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: nothing was changed: run the plan again once that session has released the lock
+```
+
+`statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、同じ種類のエラーを出す。
+デプロイのときの実行には、毎回ロックのタイムアウトを設定する。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
 
 ## セッションに要るもの
 
@@ -107,8 +157,8 @@ GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 どの検査も、失敗すればそれぞれのエラーで計画を止める。エラーは、何が足りないかと、何を与えればよいかを示す。
 
 ```text
-kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database; a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
-kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: cannot create temporary tables in database "app", because the role lacks the TEMPORARY privilege on the database: a plan needs a session that can write, on the primary, with the TEMPORARY privilege on the database
+kortopi: a plan needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "planner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" lacks it: grant the role SELECT on the table
 kortopi: a plan needs SELECT on table facility.room_types, and the role "planner" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "planner" sees only the rows that its policies allow, and a plan would take the others for missing rows: plan as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
@@ -137,6 +187,26 @@ kortopi はトランザクションをロールバックし、接続を閉じ、
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
+```
+
+### スキーマごとのロール
+
+文脈ごとに1つのスキーマを持つアプリケーションには、スキーマごとに所有者のロールと実行時のロールがあり、すべてのスキーマを使えるロールはないことが多い。
+そのときは、スキーマごとに1回、そのスキーマのロールで、`--schema` を付けて kortopi を実行する。
+
+```sh
+PGUSER=facility_owner kortopi plan --dir data --schema facility
+PGUSER=notification_owner kortopi plan --dir data --schema notification
+```
+
+- `--schema` は、実行をそのスキーマの宣言済みのテーブルに絞る。そのため、ロールに要るのはそのスキーマの権限だけである。`kortopi.toml` の設定は、引き続き宣言したすべてのテーブルに対して検査する。
+- 計画は、[この節](#セッションに要るもの)が挙げるものを持つ、そのスキーマのどのロールでも実行できる。たとえば、宣言したテーブルに `SELECT` を持つ実行時のロールである。apply は、宣言したテーブルに書くこともできるロールで実行する。ふつうは所有者である（[kortopi apply](apply.ja.md#スキーマごとの-apply)）。
+- 各ロールのパスワードは、その実行の `PGPASSWORD` か、ユーザーごとに1行を持つパスワードファイルで与える。
+
+`--schema` がなければ、ロールが使えないスキーマの最初のテーブルで実行が止まる。エラーは両方の対処を示す。
+
+```text
+kortopi: a plan needs USAGE on schema "notification" and SELECT on table notification.mail_templates, and the role "facility_owner" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use
 ```
 
 ## 出力の読み方
@@ -189,6 +259,14 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 No changes. The database matches the declaration.
 ```
 
+モード `insert` のテーブルは、欠けている行を得るだけである。そのため計画は、宣言した行と保存されている行をキーだけで比べ、値では比べない。
+計画にそうしたテーブルがあれば、空の計画はデータベースが一致しているとは言わず、代わりにそれらのテーブルを挙げる。挙げるのは5つまでとし、残りは数で示す。
+
+```text
+No changes. There is nothing to apply.
+A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+```
+
 ### スキーマの変更を待つテーブルと列
 
 テーブルや列を足すプルリクエストの時点では、データベースにそれらはまだない。
@@ -214,7 +292,8 @@ Known after the schema is applied: 1 table, 1 column.
   kortopi: data/seed.sql:2: type "facility.level" does not exist (hint: if the schema change adds the type, apply the schema first, or remove the cast)
   ```
 
-綴りを誤ったテーブルや列の名前は、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読む。
+データベースの名前と空白か大小だけが違う名前は、スキーマの変更を待たない。それは誤りであり、計画は止まる（[宣言のファイル](declaration.ja.md#大小の違う名前)）。
+そのほかの綴りを誤ったテーブルや列の名前は、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読み、プルリクエストのチェックで宣言を適用する（[スクリプトから kortopi を実行する](automation.ja.md#プルリクエストで)）。
 
 ### 削除する行を参照する行
 
@@ -335,6 +414,13 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
+計画にモード `insert` のテーブルがあれば、代わりに空の計画の行をコメントとして書く。
+
+```sql
+-- No changes: there is nothing to do.
+-- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+```
+
 スキーマの変更を待つテーブルと列しかない計画は、冒頭のコメントと次の行になる。
 
 ```sql
@@ -418,13 +504,13 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 
 ## エラー
 
-計画は標準出力に出す。エラーは、1つのエラーにつき1行ずつ、`kortopi: <message>` として標準エラー出力に出す。
+計画は標準出力に出す。エラーは、1つのエラーにつき1行ずつ、`kortopi: <message>` として標準エラー出力に出す。例外は接続の失敗で、接続の試みごとにも1行を出す（[データベースへの接続](#データベースへの接続)）。
 失敗した計画は、標準出力に何も出さない。
 
 kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
-2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
+2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言が挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 5. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
@@ -435,7 +521,7 @@ kortopi は、次の順に検査する。
 
 | 終了コード | 意味 |
 |---|---|
-| 0 | 計画を立てた。`--exit-code` があるときは、データベースが宣言と一致してもいる。 |
+| 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。 |
 | 1 | 計画が失敗した。フラグの誤り、宣言の誤り、データベースのエラー、割り込みを含む。 |
 | 2 | `--exit-code` のときだけ使う。計画が空でない。 |
 
@@ -457,6 +543,6 @@ esac
 
 `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:1a587a395a4d7581ca94720070cf74108583d43c5af23d904a86ac0e304f0f1d -->
+<!-- i18n-source: plan.md sha256:e7cbe8ccb7430538b8f48aa29b99c6aed9e0b81c060e32e12a19db77b976ccb3 -->

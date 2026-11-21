@@ -343,10 +343,31 @@ func TestBuildErrors(t *testing.T) {
 		want     string
 	}{
 		{
-			name:  "no primary key and no chosen key",
+			name:  "no primary key, no unique key, and no chosen key",
 			table: csvTable(tableT, "id"),
 			info:  existing(nil, "id"),
-			want:  `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of data/kortopi.toml`,
+			want: `table a.t has neither a primary key nor a unique key, and a match key must be one of them: ` +
+				`give the table a primary key in the schema, or a unique key that you name with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "no primary key, a unique key, and no chosen key",
+			table: csvTable(tableT, "id", "code"),
+			info:  with(existing(nil, "id", "code"), unique([]string{"code"})),
+			want:  `table a.t has no primary key: name its unique key ("code") with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "no primary key, two unique keys, and no chosen key",
+			table: csvTable(tableT, "id", "code"),
+			info:  with(existing(nil, "id", "code"), unique([]string{"code"}, []string{"id"})),
+			want:  `table a.t has no primary key: name one of its unique keys, ("code") or ("id"), with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:     "chosen key of a table without keys",
+			table:    csvTable(tableT, "label"),
+			info:     existing(nil, "label"),
+			settings: config.Table{Key: []string{"label"}},
+			want: `data/kortopi.toml: key ("label") of table a.t is neither the primary key nor a unique key of the table, and the table has neither: ` +
+				`a match key must be one of them, so give the table a primary key or a unique key in the schema`,
 		},
 		{
 			name:  "no primary key, and keys that cannot match rows",
@@ -357,8 +378,49 @@ func TestBuildErrors(t *testing.T) {
 					{Columns: []string{"code", "id"}, Reason: "its index is partial"},
 				}
 			}),
-			want: `table a.t has no primary key that can match rows; the unique key ("id") cannot, because its index uses another collation than the column; ` +
-				`the unique key ("code", "id") cannot, because its index is partial: name the columns of a unique key that can with key in [tables."a.t"] of data/kortopi.toml`,
+			want: `table a.t has no key that can match rows: the unique key ("id") cannot, because its index uses another collation than the column, ` +
+				`and the unique key ("code", "id") cannot, because its index is partial: ` +
+				`give the table a primary key or a unique key whose index uses the collation of each column and its default operator class, ` +
+				`and name it with key in [tables."a.t"] of data/kortopi.toml if it is a unique key`,
+		},
+		{
+			name:  "no primary key, a unique key, and a key that cannot match rows",
+			table: csvTable(tableT, "id", "code"),
+			info: with(with(existing(nil, "id", "code"), unique([]string{"id"})), func(i *TableInfo) {
+				i.SetAsideKeys = []SetAsideKey{{Columns: []string{"code"}, Reason: "its index is partial"}}
+			}),
+			want: `table a.t has no primary key: name its unique key ("id") with key in [tables."a.t"] of data/kortopi.toml`,
+		},
+		{
+			name:  "chosen key of a table whose keys cannot match rows",
+			table: csvTable(tableT, "label", "code"),
+			info: with(existing(nil, "label", "code"), func(i *TableInfo) {
+				i.SetAsideKeys = []SetAsideKey{{Columns: []string{"code"}, Reason: "its index uses an operator class that is not the default for column \"code\""}}
+			}),
+			settings: config.Table{Key: []string{"label"}},
+			want: `data/kortopi.toml: key ("label") of table a.t is neither the primary key nor a unique key of the table, and the table has no key that can match rows: ` +
+				`the unique key ("code") cannot, because its index uses an operator class that is not the default for column "code": ` +
+				`give the table a primary key or a unique key whose index uses the collation of each column and its default operator class`,
+		},
+		{
+			name:     "chosen key column in another case than the table",
+			table:    csvTable(tableT, "id", "Code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"Code"}},
+			want:     `data/a/t.csv: column "Code" is not a column of table a.t, but column "code" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
+			name:     "chosen key as the table names it, declared in another case",
+			table:    csvTable(tableT, "id", "Code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"code"}},
+			want:     `data/a/t.csv: column "Code" is not a column of table a.t, but column "code" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
+			name:  "primary key column declared in another case",
+			table: csvTable(tableT, "ID", "name"),
+			info:  existing(pk, "id", "name"),
+			want:  `data/a/t.csv: column "ID" is not a column of table a.t, but column "id" is, whose name differs only in white space or case: write the name as the table has it`,
 		},
 		{
 			name:  "primary key column not declared",
@@ -378,7 +440,7 @@ func TestBuildErrors(t *testing.T) {
 			table:    csvTable(tableT, "id", "name"),
 			info:     with(existing(pk, "id", "name", "code"), unique([]string{"code"})),
 			settings: config.Table{Key: []string{"name"}},
-			want:     `data/kortopi.toml: key ("name") of table a.t is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of the primary key or of a UNIQUE constraint`,
+			want:     `data/kortopi.toml: key ("name") of table a.t is neither the primary key nor a unique key of the table, so a match could be ambiguous: name the columns of one of its keys, ("id") or ("code")`,
 		},
 		{
 			name:  "chosen key that is a unique key that cannot match rows",
@@ -458,6 +520,18 @@ func TestBuildErrors(t *testing.T) {
 			want: `data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key`,
 		},
 		{
+			name:  "a column with a space before its name",
+			table: csvTable(tableT, "id", " name", "floor"),
+			info:  existing(pk, "id", "name"),
+			want:  `data/a/t.csv: column " name" is not a column of table a.t, but column "name" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
+			name:  "a column in another case",
+			table: csvTable(tableT, "id", "NAME"),
+			info:  existing(pk, "id", "name", "Name"),
+			want:  `data/a/t.csv: column "NAME" is not a column of table a.t, but column "name" or column "Name" is, whose name differs only in white space or case: write the name as the table has it`,
+		},
+		{
 			name:     "unknown mode",
 			table:    csvTable(tableT, "id"),
 			info:     existing(pk, "id"),
@@ -512,8 +586,8 @@ func TestBuildErrorsOfSeveralTables(t *testing.T) {
 	}}
 	_, err := Build(t.Context(), decl, nil, db)
 
-	want := `table a.t has no primary key: name the columns of a unique key with key in [tables."a.t"] of kortopi.toml` + "\n" +
-		`table c.v has no primary key: name the columns of a unique key with key in [tables."c.v"] of kortopi.toml`
+	want := `table a.t has neither a primary key nor a unique key, and a match key must be one of them: give the table a primary key in the schema, or a unique key that you name with key in [tables."a.t"] of kortopi.toml` + "\n" +
+		`table c.v has neither a primary key nor a unique key, and a match key must be one of them: give the table a primary key in the schema, or a unique key that you name with key in [tables."c.v"] of kortopi.toml`
 	if err == nil || err.Error() != want {
 		t.Errorf("Build() error =\n%v\nwant\n%v", err, want)
 	}
@@ -656,6 +730,139 @@ func TestBuildMissingValues(t *testing.T) {
 			}
 			if tt.diffErrs != nil && !errors.Is(err, errDB) {
 				t.Errorf("Build() error = %v, want it to hold %v", err, errDB)
+			}
+		})
+	}
+}
+
+// A declared table that the database does not have, while it has a table or
+// a schema whose name differs only in white space or case, is a mistake that
+// Build reports with the other mistakes, before any row is loaded. Without
+// such a name, the table waits for the schema change.
+func TestBuildNearNames(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		info TableInfo
+		want string
+	}{
+		{
+			name: "a table in another case",
+			info: TableInfo{NearNames: []declaration.TableName{{Schema: "a", Name: "T"}, {Schema: "A", Name: "t"}}},
+			want: `data/a/t.csv: table a.t does not exist, but table a.T or table A.t does, whose name differs only in white space or case: write the name as the database has it`,
+		},
+		{
+			name: "a schema in another case",
+			info: TableInfo{NearSchemas: []string{"A"}},
+			want: `data/a/t.csv: schema "a" of table a.t does not exist, but schema "A" does, whose name differs only in white space or case: write the name as the database has it`,
+		},
+		{name: "a table that waits for the schema change", info: TableInfo{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: tt.info, tableU: existing([]string{"id"}, "id", "NAME")}}
+			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id"), csvTable(tableU, "id", "name")}}
+			if tt.want == "" {
+				decl.Tables = decl.Tables[:1]
+			}
+			p, err := Build(t.Context(), decl, nil, db)
+			if tt.want == "" {
+				if err != nil || !p.Tables[0].PendingTable {
+					t.Errorf("Build() = %+v, %v, want table a.t pending", p, err)
+				}
+				return
+			}
+			// The column of b.u in another case is reported in the same run.
+			want := filepath.FromSlash(tt.want) + "\n" + filepath.FromSlash(`data/b/u.csv: column "name" is not a column of table b.u, but column "NAME" is`)
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, want)
+			}
+			if len(db.requests) != 0 || len(db.counted) != 0 {
+				t.Errorf("Build() called Diff %d times and CountRows %d times, want no call", len(db.requests), len(db.counted))
+			}
+		})
+	}
+}
+
+// A partition declared together with a partitioned table above it declares
+// its rows twice, at any depth of partitioning: Build stops before any row is
+// loaded, and names both tables and both files. A partition alone, or a
+// partitioned table alone, is planned.
+func TestBuildPartitionDeclaredWithItsParent(t *testing.T) {
+	t.Parallel()
+
+	root := declaration.TableName{Schema: "s", Name: "events"}
+	child := declaration.TableName{Schema: "s", Name: "events_2026"}
+	grandchild := declaration.TableName{Schema: "s", Name: "events_2026_06"}
+	infos := map[declaration.TableName]TableInfo{
+		root:       existing([]string{"id"}, "id"),
+		child:      with(existing([]string{"id"}, "id"), func(i *TableInfo) { i.PartitionOf = []declaration.TableName{root} }),
+		grandchild: with(existing([]string{"id"}, "id"), func(i *TableInfo) { i.PartitionOf = []declaration.TableName{child, root} }),
+	}
+	twice := func(table, phrase, files string) string {
+		return "table " + table + " is " + phrase + ", and both tables are declared, " + filepath.FromSlash(files) + ": " +
+			"the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables"
+	}
+	inSQL := func(name declaration.TableName) declaration.Table {
+		table := csvTable(name, "id")
+		table.Format, table.File = declaration.SQL, "seed.sql"
+		return table
+	}
+	tests := []struct {
+		name   string
+		tables []declaration.Table
+		want   string
+	}{
+		{name: "a partition alone", tables: []declaration.Table{csvTable(child, "id")}},
+		{name: "a partitioned table alone", tables: []declaration.Table{csvTable(root, "id")}},
+		{
+			name:   "a partition and its parent",
+			tables: []declaration.Table{csvTable(root, "id"), csvTable(child, "id")},
+			want:   twice("s.events_2026", "a partition of table s.events", "in data/s/events_2026.csv and data/s/events.csv"),
+		},
+		{
+			name:   "a partition of a partition and the root",
+			tables: []declaration.Table{csvTable(root, "id"), csvTable(grandchild, "id")},
+			want: twice("s.events_2026_06", "a partition of table s.events, through table s.events_2026",
+				"in data/s/events_2026_06.csv and data/s/events.csv"),
+		},
+		{
+			name:   "three levels",
+			tables: []declaration.Table{csvTable(root, "id"), csvTable(child, "id"), csvTable(grandchild, "id")},
+			want: twice("s.events_2026", "a partition of table s.events", "in data/s/events_2026.csv and data/s/events.csv") + "\n" +
+				twice("s.events_2026_06", "a partition of table s.events_2026", "in data/s/events_2026_06.csv and data/s/events_2026.csv") + "\n" +
+				twice("s.events_2026_06", "a partition of table s.events, through table s.events_2026", "in data/s/events_2026_06.csv and data/s/events.csv"),
+		},
+		{
+			name:   "both in one SQL file",
+			tables: []declaration.Table{inSQL(root), inSQL(child)},
+			want:   twice("s.events_2026", "a partition of table s.events", "both in data/seed.sql"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: infos}
+			decl := &declaration.Declaration{Dir: "data", Tables: tt.tables}
+			p, err := Build(t.Context(), decl, nil, db)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("Build() error = %v", err)
+				}
+				if len(db.requests) != len(tt.tables) {
+					t.Errorf("Build() called Diff %d times, want %d", len(db.requests), len(tt.tables))
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, tt.want)
+			}
+			if len(db.requests) != 0 {
+				t.Errorf("Build() called Diff %d times, want no call", len(db.requests))
 			}
 		})
 	}

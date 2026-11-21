@@ -22,7 +22,8 @@ var _ export.Database = (*Session)(nil)
 // sorted by schema and then by name. A partition is part of its partitioned
 // table, so it is not listed on its own. A schema that does not exist is an
 // error.
-func (s *Session) Tables(ctx context.Context, schemas []string) ([]declaration.TableName, error) {
+func (s *Session) Tables(ctx context.Context, schemas []string) (_ []declaration.TableName, err error) {
+	defer s.explainWait(ctx, &err)
 	names := slices.Clone(schemas)
 	slices.Sort(names)
 	names = slices.Compact(names)
@@ -73,7 +74,8 @@ func (s *Session) Tables(ctx context.Context, schemas []string) ([]declaration.T
 //
 // Like a plan, an export needs USAGE on the schema and SELECT on the
 // columns that it reads, and row-level security that hides rows is an error.
-func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (int, error) {
+func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_ int, err error) {
+	defer s.explainWait(ctx, &err)
 	meta, err := s.table(ctx, req.Table)
 	if err != nil {
 		return 0, err

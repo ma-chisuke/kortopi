@@ -34,7 +34,7 @@ var usage = "kortopi manages the rows of PostgreSQL master tables declaratively.
 	"  help      print this help, or the help of a command\n" +
 	"\n" +
 	"flags of plan, apply, and export:\n" +
-	dirFlag +
+	usageDirFlag +
 	connectionFlags +
 	"\n" +
 	"flags of plan and apply:\n" +
@@ -150,7 +150,13 @@ func newFlagSet(command string) *flag.FlagSet {
 // follows the error for an argument, to say what to write instead.
 func parse(fs *flag.FlagSet, args []string, hint string) error {
 	if err := fs.Parse(args); err != nil {
-		return flagMessage(err)
+		err = flagMessage(err)
+		if m := undefinedFlagMessage.FindStringSubmatch(err.Error()); m != nil {
+			if hint, ok := otherCommandsFlags[fs.Name()+" --"+m[1]]; ok {
+				err = fmt.Errorf("%w: %s", err, hint)
+			}
+		}
+		return err
 	}
 	if fs.NArg() > 0 {
 		got := strconv.Quote(fs.Arg(0))
@@ -171,6 +177,17 @@ func parse(fs *flag.FlagSet, args []string, hint string) error {
 // prints it.
 func connectionString(s string) bool {
 	return strings.Contains(s, "://") || strings.Contains(s, "=")
+}
+
+// undefinedFlagMessage matches the error of flagMessage for a flag that the
+// command does not define.
+var undefinedFlagMessage = regexp.MustCompile(`^flag provided but not defined: --([A-Za-z0-9_-]+)$`)
+
+// otherCommandsFlags says what to use instead of a flag that only another
+// command has, by the command and the flag.
+var otherCommandsFlags = map[string]string{
+	"plan --table":  "a plan narrows the declaration by schema, with --schema <name>, and only an export takes --table",
+	"apply --table": "an apply narrows the declaration by schema, with --schema <name>, and only an export takes --table",
 }
 
 // The errors of the flag package, which name a flag with one dash.
