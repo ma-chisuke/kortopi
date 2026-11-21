@@ -43,4 +43,5 @@ The reason for a rule is in the decision record that the rule cites ([docs/adr/]
 - **The database stays clean.** kortopi creates temporary tables of the session and nothing else: no table, schema, function, or extension of its own. (ADR-0010)
 - **Commits.** Conventional Commits, one purpose per commit. Do not skip hooks.
 - **GitHub Actions.** After checkout and the setup of mise, a workflow step calls `make` and nothing else. Actions are pinned to a commit SHA. (ADR-0004, ADR-0005)
+- **Issues.** An issue follows the form of its kind and the [guide](docs/guides/issues.md) (skill `write-issue`). Creating one publishes it, so create one only when the user or the task asks for it. (ADR-0041)
 - **Never** read `.env` files, force push, or push to `main`.

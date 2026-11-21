@@ -43,6 +43,7 @@
 - **データベースを汚さない。** kortopi が作るのはセッションの一時テーブルだけである。自分用のテーブル・スキーマ・関数・拡張は作らない。（ADR-0010）
 - **コミット。** Conventional Commits に従い、1つのコミットの目的は1つにする。フックを飛ばさない。
 - **GitHub Actions。** ワークフローのステップは、チェックアウトと mise の準備のあとは `make` だけを呼ぶ。Action はコミット SHA で固定する。（ADR-0004、ADR-0005）
+- **Issue。** issue は、その種類のフォームと[ガイド](docs/guides/issues.ja.md)に従う（スキル `write-issue`）。issue を作ると公開されるので、作るのは、依頼した人か作業の指示が求めたときだけにする。（ADR-0041）
 - **禁止。** `.env` を読まない。force push をしない。`main` に push しない。
 
-<!-- i18n-source: AGENTS.md sha256:dc6615cfa9816fdb2750b50fcd69ff751e0c335ea77ddb6b2fe0f1fcab8b77aa -->
+<!-- i18n-source: AGENTS.md sha256:f63723aaadaf8a481c97be978822d97509a9fccbc5e4e214987aad0412435723 -->
