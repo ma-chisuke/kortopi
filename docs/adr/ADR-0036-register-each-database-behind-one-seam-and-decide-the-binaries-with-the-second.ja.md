@@ -57,7 +57,7 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 - `Registry` は、ビルドが含む DB ごとの部品を持つ。`Choose` は、コマンドが使う部品を返す。部品が1つなら、フラグも設定もなしにその部品を返す。1つもなければ、`kortopi plan`・`kortopi apply`・`kortopi export` は1つのエラーで失敗する。エラーは、そのビルドがどのデータベースにも対応していないことと、ビルドし直す方法を告げる。このときも `kortopi version` とヘルプは動く。2つ以上あれば、利用者の選び方をあとの記録が決めるまで、`Choose` は失敗する。
 - DB ごとの部品は、それぞれ1つのパッケージであり、`Dialect` の値を1つ提供する。PostgreSQL では `postgres.Dialect` である。このパッケージは、ほかの DB ごとの部品を import しない。
 - DB ごとの部品には、それぞれコマンドの中に2つのファイルがあり、その部品のビルドタグがどちらか一方を選ぶ。ビルド制約 `//go:build !kortopi_no_<name>` を付けた `cmd/kortopi/dialect_<name>.go` は、その部品を返す関数を持つ。`//go:build kortopi_no_<name>` を付けた `cmd/kortopi/dialect_<name>_off.go` は、同じ名前の関数を持ち、その関数は何も返さない。PostgreSQL では、ファイルは `dialect_postgres.go` と `dialect_postgres_off.go`、関数は `postgresDialects`、ビルドタグは `kortopi_no_postgres` である。コマンドのコードのうち、その部品を名指しするのは1つ目のファイルだけであり、2つ目のファイルはその部品の何も import しない。ヘルプは、これまでどおり PostgreSQL と libpq を挙げる。
-- `main` は、プログラムの開始時に1度だけ、1つの関数 `newRegistry` の中でレジストリを作り、それをコマンドに渡す。`newRegistry` は、各部品の関数を呼ぶ。2つ目の部品は、そこに自分の呼び出しを足す。レジストリを持つパッケージ変数はなく、作ったあとのレジストリを変えるものもない。同じ名前の部品が2つあれば、開始時のエラーになる。これはビルドの誤りである。コマンドのテストは、偽物の DB ごとの部品を入れた自分用のレジストリを作る。
+- `main` は、プログラムの開始時に1度だけ、1つの関数 `newRegistry` の中でレジストリを作り、それをコマンドに渡す。`newRegistry` は、各部品の関数を呼ぶ。2つ目の部品は、そこに自分の呼び出しを足す。レジストリを持つパッケージ変数はなく、作ったあとのレジストリを変えるものもない。同じ名前の部品が2つあれば、開始時のエラーになる。これはビルドの誤りである。コマンドのテストは、偽物の DB ごとの部品を入れた自分用のレジストリを作る。ただし、その偽物もビルドのパーサで宣言を読むので、テストは DB ごとの部品を含むビルドでしか動かない。
 - 接続のフラグ（`--host`・`--port`・`--user`・`--dbname`）と libpq の環境変数は、最初の DB ごとの部品に属する。コマンドは、フラグをそのまま部品に渡す。これらをどう一般化するかは、2つ目の DB ごとの部品とともに決める。
 
 境界は次の決まりに従う。
@@ -115,4 +115,4 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 - 接点は `internal/dialect/dialect.go` で、ルールは `.golangci.yml` の `postgres` である。
 - コマンドの中の PostgreSQL のファイルは、`cmd/kortopi/dialect_postgres.go` と `dialect_postgres_off.go` である。レジストリは、`cmd/kortopi/main.go` の `newRegistry` が作る。
 
-<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:82ef5cd4c30c1b36aa102c8c3cd4ceedb4d7f755be69df90759c551b1a766956 -->
+<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:a4f9c4319c3140a36ac78921e0b00adf03b87beec2b5068fc4e75406fdfbf69c -->

@@ -170,8 +170,11 @@ func (s *fakeSession) Close(ctx context.Context) error {
 
 // fakeDialect is a dialect whose session is a fakeSession, for the tests of
 // the commands. It records its call of Open, and returns session, or err when
-// it is not nil. It reads SQL declarations with the parser of the dialect of
-// the build: the parser needs no database.
+// it is not nil. It reads SQL declarations with the real parser of the
+// dialect of the build, which needs no database, because some tests declare
+// rows in SQL. So the tests of the command run only in a build that holds a
+// dialect, and not with the tag kortopi_no_postgres; TestBuildWithoutPostgres
+// covers that build.
 type fakeDialect struct {
 	session *fakeSession
 	err     error
