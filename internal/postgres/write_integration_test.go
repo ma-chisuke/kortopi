@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -362,6 +363,64 @@ func TestUpdateDecidesInThePinnedSettings(t *testing.T) {
 			rows := db.Query(t, `SELECT at[0] = 0.1::float8 AND at[1] = 0.30000000000000004::float8, note FROM app.shapes`)
 			if len(rows) != 1 || rows[0][0] != "t" || rows[0][1] != "new" {
 				t.Errorf("the row after the apply = %v, want the declared point and note", rows)
+			}
+		})
+	}
+}
+
+// The commit of an apply runs with the settings of the session, so a
+// deferred constraint trigger, which fires at the commit, sees what it sees
+// at the commit of the application: here the TimeZone and the search_path
+// of the options of the connection. A commit of a transaction that has
+// failed says that nothing was changed.
+func TestCommitWithTheSettingsOfTheSession(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.items (id integer PRIMARY KEY, name text NOT NULL);
+				CREATE TABLE public.at_commit (seen text NOT NULL);
+				CREATE FUNCTION public.record_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					INSERT INTO public.at_commit VALUES (current_setting('TimeZone') || ' | ' || current_setting('search_path'));
+					RETURN NULL;
+				END $$;
+				CREATE CONSTRAINT TRIGGER items_at_commit AFTER INSERT ON app.items
+					DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.record_at_commit();
+			`)
+			cfg := db.Config.Copy()
+			cfg.RuntimeParams["options"] = "-c TimeZone=Asia/Tokyo -c search_path=app,public"
+			dir := writeFiles(t, map[string]string{"app/items.csv": "id,name\n1,one\n2,two\n"})
+			s := db.applySession(t, cfg, dir)
+			req := request(t, s, csvTable("app", "items", "id", "name"), nil, config.ModeUpsert)
+			if _, err := applyAll(t.Context(), s, []plan.DiffRequest{req}, false); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			seen := db.Query(t, "SELECT DISTINCT seen FROM public.at_commit")
+			if want := [][]string{{"Asia/Tokyo | app,public"}}; !slices.EqualFunc(seen, want, slices.Equal) {
+				t.Errorf("at the commit, the trigger saw %v, want %v", seen, want)
+			}
+
+			// A transaction that has failed before the commit.
+			db.Exec(t, "TRUNCATE app.items, public.at_commit")
+			s = db.applySession(t, cfg, dir)
+			if _, err := s.Diff(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Insert(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.tx.Exec(t.Context(), "SELECT 1 / 0"); err == nil {
+				t.Fatal("SELECT 1 / 0 succeeded")
+			}
+			err := s.Commit(t.Context())
+			if err == nil || !strings.HasPrefix(err.Error(), "commit the apply: PostgreSQL rolled the transaction back, so nothing was changed") ||
+				errors.Is(err, apply.ErrUnknownOutcome) {
+				t.Errorf("Commit of a failed transaction = %v, want that nothing was changed", err)
+			}
+			if got := dump(t, db, "app.items", "public.at_commit"); len(got) != 0 {
+				t.Errorf("after the failed commit, the tables hold %v", got)
 			}
 		})
 	}

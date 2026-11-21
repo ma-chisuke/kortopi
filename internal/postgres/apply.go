@@ -252,6 +252,10 @@ func (s *Session) Commit(ctx context.Context) error {
 	return nil
 }
 
+// inFailedTransaction is the SQLSTATE of PostgreSQL for a statement in a
+// transaction that has failed, which ignores every statement until its end.
+const inFailedTransaction = "25P02"
+
 // commitError turns the error of COMMIT into the error of Commit. An error
 // of PostgreSQL that rejects the commit, such as a deferred foreign key or a
 // serialization failure, leaves the database as it was. Any other error
@@ -259,14 +263,19 @@ func (s *Session) Commit(ctx context.Context) error {
 // context ended while kortopi waited, and the commit may have been made or
 // not. A FATAL error is such a case too: the server ended the session, and
 // its message does not say whether the commit came first.
+//
+// A transaction that had failed before the commit is rolled back. COMMIT
+// alone gets the answer ROLLBACK then; the statement that sets the settings
+// of the session before COMMIT (commitSQL) gets the error of a failed
+// transaction instead, and COMMIT does not run.
 func commitError(err error) error {
 	var pgErr *pgconn.PgError
 	switch {
-	case errors.As(err, &pgErr) && pgErr.SeverityUnlocalized != "FATAL" && pgErr.SeverityUnlocalized != "PANIC":
-		return &writeError{statement: "commit", err: pgErr, advice: adviceFor(pgErr, "commit", declaration.TableName{})}
-	case errors.Is(err, pgx.ErrTxCommitRollback):
+	case errors.Is(err, pgx.ErrTxCommitRollback) || errors.As(err, &pgErr) && pgErr.Code == inFailedTransaction:
 		// PostgreSQL answered with ROLLBACK: the transaction had failed.
 		return fmt.Errorf("commit the apply: PostgreSQL rolled the transaction back, so nothing was changed: %w", err)
+	case errors.As(err, &pgErr) && pgErr.SeverityUnlocalized != "FATAL" && pgErr.SeverityUnlocalized != "PANIC":
+		return &writeError{statement: "commit", err: pgErr, advice: adviceFor(pgErr, "commit", declaration.TableName{})}
 	}
 	return fmt.Errorf("commit the apply: %w (cause: %w)", apply.ErrUnknownOutcome, err)
 }

@@ -383,6 +383,11 @@ func TestCommitOutcome(t *testing.T) {
 			want: "commit the apply: PostgreSQL rolled the transaction back, so nothing was changed",
 		},
 		{
+			name: "a transaction that had failed",
+			err:  &pgconn.PgError{Severity: "ERROR", SeverityUnlocalized: "ERROR", Code: "25P02", Message: "current transaction is aborted"},
+			want: "commit the apply: PostgreSQL rolled the transaction back, so nothing was changed",
+		},
+		{
 			name:    "connection broken",
 			err:     cause,
 			unknown: true,
