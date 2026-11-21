@@ -400,6 +400,16 @@ func TestRunPlanNoPending(t *testing.T) {
 		},
 		{name: "narrowed to the schema of the table", files: withFloor, missing: noCountries, args: []string{"--schema", "geo"}, wantStderr: missingCountries},
 		{name: "narrowed to the schema of the column", files: withFloor, missing: noCountries, args: []string{"--schema", "app"}, wantStderr: missingFloor},
+		{
+			// The errors name the SQL file, and the names as PostgreSQL
+			// reads them: unquoted, in lower case.
+			name: "a SQL file",
+			files: map[string]string{"seed.sql": "INSERT INTO App.Plans (id, Name, Floor) VALUES (1, 'Basic', 2);\n" +
+				"INSERT INTO geo.countries (id, name) VALUES (1, 'Japan');\n"},
+			missing: noCountries,
+			wantStderr: strings.ReplaceAll(missingFloor, "app/plans.csv", "seed.sql") +
+				strings.ReplaceAll(missingCountries, "geo/countries.csv", "seed.sql"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -81,6 +81,12 @@ func csvTable(name declaration.TableName, cols ...string) declaration.Table {
 	}
 }
 
+// inSeedSQL returns the declaration of t moved into the SQL file seed.sql.
+func inSeedSQL(t declaration.Table) declaration.Table {
+	t.Format, t.File = declaration.SQL, "seed.sql"
+	return t
+}
+
 // existing returns a table that exists with the columns, all of them NOT
 // NULL, and the primary key.
 func existing(pk []string, cols ...string) TableInfo {
@@ -870,6 +876,24 @@ func TestBuildNoPending(t *testing.T) {
 				missingColumn("a.t", "floor") + "\n" +
 				filepath.FromSlash(`data/b/u.csv: table b.u does not exist, but table b.U does, whose name differs only in white space or case: write the name as the database has it`) + "\n" +
 				missingTable("c.v"),
+		},
+		{
+			// A schema in another case gets its own error, and no error
+			// of --no-pending.
+			name:   "with a schema in another case",
+			tables: []declaration.Table{csvTable(tableU, "id"), csvTable(tableV, "id")},
+			infos:  map[declaration.TableName]TableInfo{tableU: {NearSchemas: []string{"B"}}},
+			want: filepath.FromSlash(`data/b/u.csv: schema "b" of table b.u does not exist, but schema "B" does, whose name differs only in white space or case: write the name as the database has it`) + "\n" +
+				missingTable("c.v"),
+		},
+		{
+			// Both errors name the SQL file, which declares both tables.
+			name:   "a SQL file that declares a table that the database lacks and a missing column",
+			tables: []declaration.Table{inSeedSQL(csvTable(tableT, "id", "floor")), inSeedSQL(csvTable(tableU, "id"))},
+			want: filepath.FromSlash("data/seed.sql") + `: column "floor" of table a.t does not exist in the database, and without --no-pending it would wait for the schema change: ` +
+				"correct the name, or apply the schema change that adds the column\n" +
+				filepath.FromSlash("data/seed.sql") + ": table b.u does not exist in the database, and without --no-pending it would wait for the schema change: " +
+				"correct the name, or apply the schema change that adds the table",
 		},
 		{
 			name:   "with the other mistakes of a table",

@@ -226,10 +226,11 @@ func TestPlanCommand(t *testing.T) {
 }
 
 // TestPlanCommandNoPending runs `kortopi plan --no-pending` against each
-// version: a misspelled column and a table that the database lacks are
-// errors in both formats, and a declaration without such names gives the
-// output and the exit status of a plan without the flag. It sets the
-// environment, so it does not run in parallel with other tests.
+// version: a misspelled column and a table that the database lacks, in CSV
+// files and in a SQL file, are errors in both formats, and a declaration
+// without such names gives the output and the exit status of a plan without
+// the flag. It sets the environment, so it does not run in parallel with
+// other tests.
 func TestPlanCommandNoPending(t *testing.T) {
 	for _, srv := range pgtest.Servers() {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -242,30 +243,38 @@ func TestPlanCommandNoPending(t *testing.T) {
 				roomTypes  = "facility/room_types.csv"
 				misspelled = "code,name,capacty\nsingle,Single,1\n"
 			)
-			missingTable := func(dir string) string {
-				return "kortopi: " + filepath.Join(dir, filepath.FromSlash(discounts)) +
+			// missingTable and missingColumn are the errors, with the file
+			// that declares the table, as a path with forward slashes.
+			missingTable := func(dir, file string) string {
+				return "kortopi: " + filepath.Join(dir, filepath.FromSlash(file)) +
 					": table billing.discounts does not exist in the database, and without --no-pending it would wait for the schema change: " +
 					"correct the name, or apply the schema change that adds the table\n"
 			}
-			missingColumn := func(dir string) string {
-				return "kortopi: " + filepath.Join(dir, filepath.FromSlash(roomTypes)) +
+			missingColumn := func(dir, file string) string {
+				return "kortopi: " + filepath.Join(dir, filepath.FromSlash(file)) +
 					`: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: ` +
 					"correct the name, or apply the schema change that adds the column\n"
 			}
 			column := writeFiles(t, map[string]string{roomTypes: misspelled})
 			table := writeFiles(t, map[string]string{discounts: "code,percent\nspring,10\nsummer,15\n"})
 			both := writeFiles(t, map[string]string{roomTypes: misspelled, discounts: "code,percent\nspring,10\nsummer,15\n"})
+			// A SQL file names both, unquoted and in another case, which
+			// PostgreSQL reads in lower case.
+			inSQL := writeFiles(t, map[string]string{"seed.sql": "INSERT INTO Billing.Discounts (code, percent) VALUES ('spring', 10);\n" +
+				"INSERT INTO facility.room_types (code, name, Capacty) VALUES ('single', 'Single', 1);\n"})
 			for _, tt := range []struct {
 				dir  string
 				args []string
 				want string
 			}{
-				{dir: column, want: missingColumn(column)},
-				{dir: column, args: []string{"--format", "sql"}, want: missingColumn(column)},
-				{dir: table, want: missingTable(table)},
-				{dir: table, args: []string{"--format", "sql"}, want: missingTable(table)},
-				{dir: both, args: []string{"--exit-code"}, want: missingTable(both) + missingColumn(both)},
-				{dir: both, args: []string{"--format", "sql", "--exit-code"}, want: missingTable(both) + missingColumn(both)},
+				{dir: column, want: missingColumn(column, roomTypes)},
+				{dir: column, args: []string{"--format", "sql"}, want: missingColumn(column, roomTypes)},
+				{dir: table, want: missingTable(table, discounts)},
+				{dir: table, args: []string{"--format", "sql"}, want: missingTable(table, discounts)},
+				{dir: both, args: []string{"--exit-code"}, want: missingTable(both, discounts) + missingColumn(both, roomTypes)},
+				{dir: both, args: []string{"--format", "sql", "--exit-code"}, want: missingTable(both, discounts) + missingColumn(both, roomTypes)},
+				{dir: inSQL, want: missingTable(inSQL, "seed.sql") + missingColumn(inSQL, "seed.sql")},
+				{dir: inSQL, args: []string{"--format", "sql"}, want: missingTable(inSQL, "seed.sql") + missingColumn(inSQL, "seed.sql")},
 			} {
 				args := append([]string{"--dir", tt.dir, "--no-pending"}, tt.args...)
 				code, stdout, stderr := e.plan(t, args...)
