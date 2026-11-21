@@ -51,7 +51,7 @@ Which settings, and which values:
 
 - This record adds two settings to those that ADR-0023 pins for reading, because each changes how a declared value reads. `array_nulls` is `on`, so `{NULL}` in an array is a NULL element, not the text `NULL`. `timezone_abbreviations` is `Default`, so an abbreviation of a zone in a value means the same zone everywhere: `EST` is the Eastern Standard Time of America, five hours behind UTC, in the set `Default`, and the Australian one, ten hours ahead, in the set `Australia`.
 - A write restores every setting that ADR-0023 and this record pin but `client_encoding`: `search_path`, `TimeZone`, `DateStyle`, `IntervalStyle`, `standard_conforming_strings`, `extra_float_digits`, `bytea_output`, `xmloption`, `lc_monetary`, `row_security`, `array_nulls`, and `timezone_abbreviations`. `client_encoding` stays pinned: it is about the bytes between kortopi and the server, and a write takes its rows from temporary tables, in the types of the database already.
-- The value of each is the one that the session has before the transaction of the apply begins: what the configuration of the server, `ALTER DATABASE ... SET`, `ALTER ROLE ... SET`, and the options of the connection, such as `PGOPTIONS`, set. kortopi reads them in one query just after it connects. A plan and an export read none.
+- The value of each is the answer of the server to one query that kortopi sends right after it connects, outside any transaction: what the configuration of the server, `ALTER DATABASE ... SET`, `ALTER ROLE ... SET`, and the options of the connection, such as `PGOPTIONS`, set for the session. Behind a connection pooler in transaction mode, that query and the transaction of the apply can run on two different server connections. The values then differ only when a client left settings of a session on one of them with `SET`, which a pooler in that mode does not keep apart. A plan and an export read none.
 - The settings that kortopi does not pin, such as `lock_timeout`, keep the values of the session throughout, as before.
 
 Which statements:
@@ -71,7 +71,7 @@ How a write runs:
 - The pick runs when the write comes, so it sees the rows as the earlier writes of the apply left them, as the statements of ADR-0026 did when they evaluated their conditions. Its conditions are those of the plan, so it picks the rows that the plan shows, and the count of rows that each write changed is still checked against the plan (ADR-0026).
 - An error of PostgreSQL in any statement of the batch is reported as ADR-0026 reports an error of a write. It names what the statement did, such as `pick the rows to update in table app.t`, `read the values of on_insert of table app.t`, `set the settings of the session to update table app.t`, or `update table app.t`. It keeps the message, the detail, the hint, and the constraint of PostgreSQL, and adds the advice of its kind: a serialization failure or a deadlock is a conflict to run again, wherever it comes from. Only a violation of the index of the match key in the write itself is taken for a row that another transaction inserted. This refines ADR-0026, whose errors named the write alone.
 - The commit sends two statements in one message: `set_config` of each setting to its value in the session, and `COMMIT`. One message keeps a commit that gets no answer one request whose outcome is not known (ADR-0026). When the transaction has failed before the commit, the first statement fails, `COMMIT` does not run, and the apply says that PostgreSQL rolled the transaction back and that nothing was changed, as it says for the answer `ROLLBACK` to `COMMIT` alone.
-- Every setting is local to the transaction, as `SET LOCAL` is. It ends with the commit or the rollback, so the next transaction on the same server connection, as a pooler in transaction mode hands it on, starts with the settings of the session, and the settings of the session itself never change.
+- Every setting is local to the transaction, as `SET LOCAL` is. It ends with the commit or the rollback, so the next transaction on the same server connection, as a pooler in transaction mode hands it on, starts with the settings of the session, and the settings of the session itself never change. This holds through a connection pooler by design, because the settings are local to the transaction; no test of this repository runs through a real pooler (ADR-0026).
 
 The values of `on_insert`:
 
@@ -96,7 +96,13 @@ What stays as it is:
 - A plan and an export write no row of a table, and keep every setting pinned: their output does not change.
 - The plan as SQL (ADR-0029) runs in the session of whoever runs it, with the settings of that session but the three that the script pins, so the defaults and triggers that its statements fire see those settings. The writes of an apply now do the same in their own session, and the two agree.
 
-This refines ADR-0023: it pins `array_nulls` and `timezone_abbreviations` too, the pinned settings are for reading and comparing, and the writes of an apply run with the settings of the session but `client_encoding`. It refines ADR-0026: its transaction runs with the pinned settings but for the writes and the commit, and each statement writes the rows that a statement before it picked with the conditions of the plan, where ADR-0026 put the conditions in the statement itself.
+This refines ADR-0023: it pins `array_nulls` and `timezone_abbreviations` too, the pinned settings are for reading and comparing, and the writes of an apply run with the settings of the session but `client_encoding`. It refines these rules of ADR-0026:
+
+- "An apply opens one connection and one transaction ..., with the settings that a plan pins (ADR-0023)." The transaction runs with the pinned settings but for the writes and the commit, and an apply makes one query before it, to read the settings of the session.
+- "Each statement is set-based and writes from the temporary table of the table, with the conditions that the plan used to compare." A statement before each write picks its rows with those conditions, and the write takes those rows, a stored row by its match key.
+- "The declared rows stay loaded in their temporary tables until the transaction ends." They are no longer the only temporary tables of an apply: each write adds one of the rows that it picked, and an insert with values of `on_insert` one more, until the commit. Each temporary table holds a lock until the commit, and so does each table that the apply reads, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default; it then fails with `out of shared memory` and the hint to raise that setting, and nothing is written.
+- "An error of PostgreSQL in a statement names the statement and the table." An error of any statement of the batch of a write names what that statement did, as above.
+- The commit sends the settings of the session and `COMMIT` in one message, and a transaction that failed before the commit gets the message of a rolled-back commit.
 
 ### Consequences
 
@@ -110,6 +116,7 @@ This refines ADR-0023: it pins `array_nulls` and `timezone_abbreviations` too, t
 - Bad, because the values that defaults and triggers write now depend on the settings of each environment, as the application's do: a default `now()` into a `timestamp` column holds UTC in a CI database and the time of Tokyo in production. That is the point, but a team that relied on the UTC of ADR-0023 in such a column sees another value.
 - Bad, because a trigger that fails in the settings of the session, such as one whose table the role's search path does not find, now fails the apply as it fails the application, with the error of PostgreSQL.
 - Bad, because an apply makes one more query when it connects, to read the settings of the session.
+- Bad, because the temporary tables of the picks add to the locks that an apply holds until its commit, so an apply of hundreds of tables may need a higher `max_locks_per_transaction`.
 
 ### Confirmation
 
