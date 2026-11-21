@@ -553,6 +553,65 @@ EOF
   passes
 }
 
+# The boundary of the dialects (ADR-0019, ADR-0036): a shared package and the
+# package of another dialect import neither the dialect of PostgreSQL nor its
+# driver. The dialect itself, and the file of the command that registers it,
+# do.
+case_lint_go__dialects() {
+  good_go
+  put_go internal/postgres/postgres.go << 'EOF'
+// Package postgres is a fixture of the self-test: the dialect of PostgreSQL.
+package postgres
+
+import "github.com/jackc/pgx/v5"
+
+// Quote quotes a name for SQL.
+func Quote(name string) string {
+    return pgx.Identifier{name}.Sanitize()
+}
+EOF
+  put_go cmd/kortopi/dialect_postgres.go << 'EOF'
+// Command kortopi is a fixture of the self-test.
+package main
+
+import "github.com/ma-chisuke/kortopi/internal/postgres"
+
+func main() {
+    _ = postgres.Quote("plans")
+}
+EOF
+  put_go internal/plan/plan.go << 'EOF'
+// Package plan is a fixture of the self-test: a shared package.
+package plan
+
+import "github.com/ma-chisuke/kortopi/internal/postgres"
+
+// Quote quotes a name for SQL.
+func Quote(name string) string {
+    return postgres.Quote(name)
+}
+EOF
+  put_go internal/other/other.go << 'EOF'
+// Package other is a fixture of the self-test: the dialect of another database.
+package other
+
+import "github.com/jackc/pgx/v5"
+
+// Quote quotes a name for SQL.
+func Quote(name string) string {
+    return pgx.Identifier{name}.Sanitize()
+}
+EOF
+  fails "internal/plan/plan.go:4:8: import 'github.com/ma-chisuke/kortopi/internal/postgres' is not allowed from list 'postgres': code specific to a database goes in the package of its dialect"
+  prints 'ADR-0019'
+  prints "internal/other/other.go:4:8: import 'github.com/jackc/pgx/v5' is not allowed from list 'postgres'"
+  omits 'internal/postgres/postgres.go'
+  omits 'cmd/kortopi/dialect_postgres.go'
+  drop internal/plan
+  drop internal/other
+  passes
+}
+
 case_test_go() {
   good_go
   put_go internal/sample/fail_test.go << 'EOF'
