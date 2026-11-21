@@ -84,7 +84,8 @@ func (d *TableDiff) changes() bool {
 // Render writes the plan as text for people to read.
 //
 // Each table with something to show gets a block: a header with its mode and
-// match key, a line for each pending column, a line for each row to insert
+// match key, a line for each pending column, a line of the values of
+// on_insert when the table has rows to insert, a line for each row to insert
 // (+), update (~), and delete (-), a line under the rows to delete for each
 // foreign key that points at them, and the counts of the table. A table that
 // the database does not have yet gets one line. Tables without changes get no
@@ -172,6 +173,9 @@ func writeTable(b *strings.Builder, t *Table) error {
 	for _, c := range t.PendingColumns {
 		fmt.Fprintf(b, "  column %s: %s\n", FormatName(c), pendingMark)
 	}
+	if len(t.Diff.Inserts) > 0 && len(t.OnInsert) > 0 {
+		fmt.Fprintf(b, "  on insert: %s\n", FormatInsertValues(t.OnInsert))
+	}
 	for _, r := range t.Diff.Inserts {
 		if len(r.Key) != len(t.Key) || len(r.Values) != len(t.Compare) {
 			return fmt.Errorf("plan of table %s: a row to insert has %d values for %d columns",
@@ -255,6 +259,20 @@ func FormatReference(r Reference, deleting int) string {
 		return "maybe referenced by rows of " + source + ": the role may not read the table to count them; " + action
 	}
 	return "referenced by " + count(r.Rows, "row", "rows") + " of " + source + ": " + action
+}
+
+// FormatInsertValues returns the values of on_insert as a plan prints them
+// in its line `on insert:`, and a script in its comment: column="value"
+// pairs that two spaces separate (ADR-0035). A value is the text of the
+// settings, not a value that the database read, so it always prints in
+// double quotes, with the escapes of Go: the same settings print the same
+// line on every run, also for a value such as now.
+func FormatInsertValues(values []config.InsertValue) string {
+	fields := make([]string, len(values))
+	for i, v := range values {
+		fields[i] = FormatName(v.Column) + "=" + strconv.Quote(v.Value)
+	}
+	return strings.Join(fields, "  ")
 }
 
 // keyError reports a row whose key does not fit the key of its table.

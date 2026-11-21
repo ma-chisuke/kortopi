@@ -1,0 +1,20 @@
+facility.rooms (upsert, key: name)
+  column floor: known after the schema is applied
+  on insert: "Created By"="kortopi"  created_at="now"  note=""  sort_order="0"  tag="say \"hi\"\t"
+  + name=annex  capacity=10
+  + name=hall  capacity=80
+  ~ name=lobby  capacity: 20 -> 30
+  2 to insert, 1 to update
+
+facility.room_types (insert, key: code)
+  on insert: created_at="now"
+  + code=suite  name=Suite
+  1 to insert
+
+facility.wings (upsert, key: code)
+  ~ code=east  name: East -> "East Wing"
+  0 to insert, 1 to update
+
+Plan: 3 to insert, 2 to update, 0 to delete in 4 tables.
+Known after the schema is applied: 1 column.
+1 table without changes is not shown.

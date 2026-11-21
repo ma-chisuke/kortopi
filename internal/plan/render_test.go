@@ -235,6 +235,41 @@ func TestRender(t *testing.T) {
 			}},
 		},
 		{
+			// The values of on_insert print with the rows to insert, as the
+			// settings write them, and not for a table without such rows.
+			name: "on_insert",
+			plan: &Plan{Tables: []Table{
+				{
+					Name: name("facility", "rooms"), Mode: config.ModeUpsert,
+					Key: []string{"name"}, Compare: []string{"capacity"}, PendingColumns: []string{"floor"},
+					OnInsert: []config.InsertValue{
+						{Column: "Created By", Value: "kortopi"}, {Column: "created_at", Value: "now"},
+						{Column: "note", Value: ""}, {Column: "sort_order", Value: "0"}, {Column: "tag", Value: "say \"hi\"\t"},
+					},
+					Diff: TableDiff{
+						Inserts: []Row{{Key: values("annex"), Values: values("10")}, {Key: values("hall"), Values: values("80")}},
+						Updates: []Update{{Key: values("lobby"), Changes: []Change{{Column: "capacity", Old: text("20"), New: text("30")}}}},
+					},
+				},
+				{
+					Name: name("facility", "room_types"), Mode: config.ModeInsert,
+					Key: []string{"code"}, Compare: []string{"name"},
+					OnInsert: []config.InsertValue{{Column: "created_at", Value: "now"}},
+					Diff:     TableDiff{Inserts: []Row{{Key: values("suite"), Values: values("Suite")}}},
+				},
+				{
+					Name: name("facility", "wings"), Mode: config.ModeUpsert,
+					Key: []string{"code"}, Compare: []string{"name"},
+					OnInsert: []config.InsertValue{{Column: "created_at", Value: "now"}},
+					Diff:     TableDiff{Updates: []Update{{Key: values("east"), Changes: []Change{{Column: "name", Old: text("East"), New: text("East Wing")}}}}},
+				},
+				{
+					Name: name("facility", "zones"), Mode: config.ModeUpsert, Key: []string{"code"},
+					OnInsert: []config.InsertValue{{Column: "created_at", Value: "now"}},
+				},
+			}},
+		},
+		{
 			name: "references",
 			plan: &Plan{Tables: []Table{
 				{
