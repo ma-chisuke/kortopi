@@ -25,7 +25,7 @@
 | パス | 中身 |
 |---|---|
 | `cmd/kortopi/` | CLI の入口。 |
-| `internal/` | kortopi のパッケージ。データベースごとに違う部分は、1つのパッケージにまとめる。（ADR-0019） |
+| `internal/` | kortopi のパッケージ。データベースごとに違う部分は、`internal/postgres/` のような、その DB ごとの部品のパッケージにまとめる。ほかの部分は `internal/dialect/` を通して使い、`lint-go` がそれを守らせる。（ADR-0019、ADR-0036） |
 | `tools/` | このリポジトリのチェックと生成器（独立した Go のモジュールとスクリプト）。ここにあるものはバイナリに入らない。 |
 | `make/` | make のターゲット。分野ごとに1ファイル。 |
 | `docs/adr/` | 決定の記録。 |
@@ -45,4 +45,4 @@
 - **GitHub Actions。** ワークフローのステップは、チェックアウトと mise の準備のあとは `make` だけを呼ぶ。Action はコミット SHA で固定する。（ADR-0004、ADR-0005）
 - **禁止。** `.env` を読まない。force push をしない。`main` に push しない。
 
-<!-- i18n-source: AGENTS.md sha256:376b7df5005d98d3990f4841329f0a036a88e3d706133463513b9a440e2a7b94 -->
+<!-- i18n-source: AGENTS.md sha256:4937ba84f10ff46b1eb4dcd0846aefd51ba3b9d715c3694f23781428c018a28a -->
