@@ -44,7 +44,7 @@ ADR-0031 は、データベースの名前と空白か大小だけが違う名�
 - データベースの名前と空白か大小だけが違う名前は、それ自体のエラー（ADR-0031）を保ち、`--no-pending` のエラーは出さない。`kortopi.toml` が照合キーに挙げた列がテーブルにないときは、その列のエラーだけを出し、スキーマの変更を待つキーの列のエラーは重ねない。
 - そうした名前がなければ、出力と終了コードは、フラグなしの計画とまったく同じである。
 - このフラグは、`--format text` と `--format sql`、`--exit-code`、`--schema` と組み合わせて使える。`--schema` は、検査の前に宣言済みのテーブルを絞る。
-- `apply` には、このフラグはない。apply は、データベースにないテーブルや列があれば必ず止まり、何も変えない（ADR-0026）。`apply --no-pending` と `export --no-pending` には、未知のフラグのエラーを出し、ヒントを添える。apply はスキーマの変更を待つ名前で必ず止まり、書き出しはデータベースにない名前で必ず止まるというものである。
+- `apply` には、このフラグはない。apply は、データベースにないテーブルや列があれば必ず止まり、何も変えない（ADR-0026）。`apply --no-pending` と `export --no-pending` には、未知のフラグのエラーを出し、ヒントを添える。apply へのヒントは、apply がスキーマの変更を待つ名前で必ず止まることを述べ、フラグを外すか、apply の前に `kortopi plan --no-pending` を実行するよう告げる。書き出しへのヒントは、書き出しがデータベースにない名前で必ず止まることを述べ、フラグを外すよう告げる。
 - これは ADR-0016 と ADR-0024 を細かくする。その計画は、そうした名前をすべてスキーマの適用後に決まるものとして示す。`--no-pending` があれば、どれもエラーになる。
 - ADR-0021 も細かくする。ADR-0021 のコマンドラインの形は plan のフラグを挙げており、plan に `--no-pending` が加わる。終了コード 1 は、`--no-pending` があれば、宣言済みのテーブルや列が存在しないことも意味するようになる。`--exit-code` だけなら、そうした名前は違いとして数え、終了コードは 2 である。
 - ADR-0031 が別の記録に委ねた決定を、この記録が下す。
@@ -88,4 +88,4 @@ ADR-0031 は、データベースの名前と空白か大小だけが違う名�
 
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#スキーマの変更を待つテーブルと列)、[docs/reference/automation.ja.md](../reference/automation.ja.md#プルリクエストで)
 
-<!-- i18n-source: ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md sha256:d4a071ca956b2041ffc112d7f9bca74cd57d8f137bc3cadf0beb95d4ada23f87 -->
+<!-- i18n-source: ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md sha256:1190d0270d1edef5fd6874f83939dfd78bf5e41462a58bde9c36efef69b06acd -->
