@@ -213,6 +213,25 @@ func TestRun(t *testing.T) {
 			wantOut: "wrote DIR/billing/plans.csv (3 rows)\nExported 1 table with 3 rows.\n",
 		},
 		{
+			// A new file leaves out the columns that on_insert names, next to
+			// the generated ones; a refresh keeps the columns of its file.
+			name:  "the columns of on_insert",
+			files: map[string]string{"facility/rooms.csv": "id,note\n"},
+			decl: []declaration.Table{
+				{Name: tn("facility.rooms"), Columns: []string{"id", "note"}, Format: csv, File: "facility/rooms.csv"},
+			},
+			settings: config.New(map[declaration.TableName]config.Table{
+				tn("facility.room_types"): {OnInsert: []config.InsertValue{{Column: "name", Value: "new"}, {Column: "absent", Value: "x"}}},
+				tn("facility.rooms"):      {OnInsert: []config.InsertValue{{Column: "note", Value: ""}}},
+			}),
+			opts: Options{Schemas: []string{"facility"}, Format: csv, Overwrite: true},
+			wantFiles: map[string]string{
+				"facility/room_types.csv": line("facility.room_types", csv, "code,capacity", "code"),
+				"facility/rooms.csv":      line("facility.rooms", csv, "id,note", "id"),
+			},
+			wantOut: "wrote DIR/facility/room_types.csv (2 rows)\nwrote DIR/facility/rooms.csv (2 rows)\nExported 2 tables with 4 rows.\n",
+		},
+		{
 			name: "a table without a key",
 			opts: Options{Tables: []declaration.TableName{tn("misc.tags")}, Format: csv},
 			wantFiles: map[string]string{
@@ -441,6 +460,19 @@ func TestRunErrors(t *testing.T) {
 			settings: config.New(map[declaration.TableName]config.Table{tn("billing.plans"): {Key: []string{"kode"}}}),
 			opts:     Options{Tables: []declaration.TableName{tn("billing.plans")}, Format: csv},
 			want:     `DIR/kortopi.toml: key of table billing.plans names column "kode", which the table does not have: correct the key`,
+		},
+		{
+			// The file would lack its key, and a plan of it would stop.
+			name: "a key column that on_insert names, of the primary key and of the settings",
+			settings: config.New(map[declaration.TableName]config.Table{
+				tn("facility.rooms"): {OnInsert: []config.InsertValue{{Column: "id", Value: "1"}}},
+				tn("billing.plans"):  {Key: []string{"code"}, OnInsert: []config.InsertValue{{Column: "code", Value: "x"}, {Column: "name", Value: "y"}}},
+			}),
+			opts: Options{Tables: []declaration.TableName{tn("facility.rooms"), tn("billing.plans")}, Format: csv},
+			want: `DIR/kortopi.toml: on_insert of table billing.plans gives a value to column "code", which is a column of the match key: ` +
+				"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert\n" +
+				`DIR/kortopi.toml: on_insert of table facility.rooms gives a value to column "id", which is a column of the match key: ` +
+				"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert",
 		},
 		{
 			name: "a table of generated columns only",

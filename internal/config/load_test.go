@@ -116,6 +116,50 @@ mode = "upsert"
 				name("Facility", "Rooms"): {Key: []string{"Code"}, Mode: config.ModeUpsert},
 			},
 		},
+		{
+			name: "on_insert as an inline table",
+			src:  "[tables.\"facility.rooms\"]\nkey = [\"name\"]\non_insert = { created_at = \"now\" }\n",
+			want: map[declaration.TableName]config.Table{
+				name("facility", "rooms"): {Key: []string{"name"}, Mode: config.ModeUpsert, OnInsert: []config.InsertValue{{Column: "created_at", Value: "now"}}},
+			},
+		},
+		{
+			// The values come sorted by the name of the column, whatever the
+			// order of the file. The names are exact, and the strings are
+			// values as they are, the empty string among them.
+			name: "on_insert as a section",
+			src: `[tables."facility.rooms"]
+mode = "insert"
+
+[tables."facility.rooms".on_insert]
+sort_order = "0"
+created_at = "now"
+"Created By" = "kortopi"
+note = ""
+`,
+			want: map[declaration.TableName]config.Table{
+				name("facility", "rooms"): {Mode: config.ModeInsert, OnInsert: []config.InsertValue{
+					{Column: "Created By", Value: "kortopi"},
+					{Column: "created_at", Value: "now"},
+					{Column: "note", Value: ""},
+					{Column: "sort_order", Value: "0"},
+				}},
+			},
+		},
+		{
+			name: "on_insert as dotted keys",
+			src:  "[tables.\"facility.rooms\"]\non_insert.created_at = \"today\"\non_insert.\"a.b\" = \"x\"\n",
+			want: map[declaration.TableName]config.Table{
+				name("facility", "rooms"): {Mode: config.ModeUpsert, OnInsert: []config.InsertValue{{Column: "a.b", Value: "x"}, {Column: "created_at", Value: "today"}}},
+			},
+		},
+		{
+			name: "on_insert without values",
+			src:  "[tables.\"facility.rooms\"]\non_insert = {}\n",
+			want: map[declaration.TableName]config.Table{
+				name("facility", "rooms"): {Mode: config.ModeUpsert},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -135,7 +179,7 @@ mode = "upsert"
 			}
 			for n, want := range tt.want {
 				got := s.Table(n)
-				if got.Mode != want.Mode || !slices.Equal(got.Key, want.Key) {
+				if got.Mode != want.Mode || !slices.Equal(got.Key, want.Key) || !slices.Equal(got.OnInsert, want.OnInsert) {
 					t.Errorf("Table(%s) = %+v, want %+v", n, got, want)
 				}
 			}
@@ -208,14 +252,14 @@ func TestLoadErrors(t *testing.T) {
 		{
 			name: "misspelled setting",
 			src:  "[tables.\"a.b\"]\nmood = \"sync\"\n",
-			want: []string{`:2: unknown setting tables."a.b".mood: the settings of a table are key and mode`},
+			want: []string{`:2: unknown setting tables."a.b".mood: the settings of a table are key, mode, and on_insert`},
 		},
 		{
 			name: "every unknown setting",
 			src:  "[tables.\"a.b\"]\nmood = \"sync\"\nkeys = [\"code\"]\n",
 			want: []string{
-				`:2: unknown setting tables."a.b".mood: the settings of a table are key and mode`,
-				`:3: unknown setting tables."a.b".keys: the settings of a table are key and mode`,
+				`:2: unknown setting tables."a.b".mood: the settings of a table are key, mode, and on_insert`,
+				`:3: unknown setting tables."a.b".keys: the settings of a table are key, mode, and on_insert`,
 			},
 		},
 		{
@@ -226,7 +270,7 @@ func TestLoadErrors(t *testing.T) {
 		{
 			name: "unknown section in a table",
 			src:  "[tables.\"a.b\".modes]\nx = 1\n",
-			want: []string{`:1: unknown setting tables."a.b".modes: the settings of a table are key and mode`},
+			want: []string{`:1: unknown setting tables."a.b".modes: the settings of a table are key, mode, and on_insert`},
 		},
 		{
 			name: "mode is a table",
@@ -309,6 +353,75 @@ func TestLoadErrors(t *testing.T) {
 			want: []string{`: table "a.b": key names the column "code" twice: name each column once`},
 		},
 		{
+			name: "misspelled on_insert",
+			src:  "[tables.\"a.b\"]\non_inserts = { created_at = \"now\" }\n",
+			want: []string{`:2: unknown setting tables."a.b".on_inserts: the settings of a table are key, mode, and on_insert`},
+		},
+		{
+			name: "on_insert is not a table",
+			src:  "[tables.\"a.b\"]\non_insert = \"now\"\n",
+			want: []string{`: table "a.b": on_insert must be a table of columns and their values, as in on_insert = { created_at = "now" }`},
+		},
+		{
+			name: "on_insert with an integer",
+			src:  "[tables.\"a.b\"]\non_insert = { sort_order = 0 }\n",
+			want: []string{`: table "a.b": on_insert gives column "sort_order" an integer, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in sort_order = "0"`},
+		},
+		{
+			name: "on_insert with a float",
+			src:  "[tables.\"a.b\"]\non_insert = { rate = 1.5 }\n",
+			want: []string{`: table "a.b": on_insert gives column "rate" a float, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in rate = "1.5"`},
+		},
+		{
+			name: "on_insert with a boolean",
+			src:  "[tables.\"a.b\"]\non_insert = { \"Is Active\" = true }\n",
+			want: []string{`: table "a.b": on_insert gives column "Is Active" a boolean, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in "Is Active" = "true"`},
+		},
+		{
+			name: "on_insert with a date of TOML",
+			src:  "[tables.\"a.b\"]\non_insert = { day = 2026-11-21 }\n",
+			want: []string{`: table "a.b": on_insert gives column "day" a date or a time of TOML, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in day = "2026-11-21"`},
+		},
+		{
+			name: "on_insert with a time of TOML",
+			src:  "[tables.\"a.b\"]\non_insert = { at = 09:30:00 }\n",
+			want: []string{`: table "a.b": on_insert gives column "at" a date or a time of TOML, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in at = "09:30:00"`},
+		},
+		{
+			name: "on_insert with a local date and time of TOML",
+			src:  "[tables.\"a.b\"]\non_insert = { at = 2026-11-21T09:30:00 }\n",
+			want: []string{`: table "a.b": on_insert gives column "at" a date or a time of TOML, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in at = "2026-11-21T09:30:00"`},
+		},
+		{
+			name: "on_insert with an instant of TOML",
+			src:  "[tables.\"a.b\"]\non_insert = { at = 2026-11-21T09:30:00+09:00 }\n",
+			want: []string{`: table "a.b": on_insert gives column "at" a date or a time of TOML, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column, as in at = "2026-11-21T09:30:00+09:00"`},
+		},
+		{
+			name: "on_insert with an array",
+			src:  "[tables.\"a.b\"]\non_insert = { tags = [\"a\"] }\n",
+			want: []string{`: table "a.b": on_insert gives column "tags" an array, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column`},
+		},
+		{
+			name: "on_insert with a table",
+			src:  "[tables.\"a.b\".on_insert.created]\nat = \"now\"\n",
+			want: []string{`: table "a.b": on_insert gives column "created" a table, not a string: ` +
+				`write the value as a string, which the database reads by the type of the column`},
+		},
+		{
+			name: "on_insert with an empty column name",
+			src:  "[tables.\"a.b\"]\non_insert = { \"\" = \"x\" }\n",
+			want: []string{`: table "a.b": on_insert holds an empty column name: name each column as the table has it`},
+		},
+		{
 			name: "first wrong table in sorted order",
 			src:  "[tables.\"z.z\"]\nmode = \"x\"\n[tables.\"a.a\"]\nmode = \"y\"\n",
 			want: []string{`: table "a.a": unknown mode "y"`},
@@ -385,6 +498,18 @@ func TestCheckDeclared(t *testing.T) {
 		t.Errorf("CheckDeclared() = %v, want %q", err, want)
 	}
 
+	// Values of on_insert are settings like any other: for a table that no
+	// file declares, they are an error too.
+	dir = writeSettings(t, "[tables.\"facility.room\"]\non_insert = { created_at = \"now\" }\n")
+	if s, err = config.Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	err = s.CheckDeclared(declared)
+	want = filepath.Join(dir, config.FileName) + `: table "facility.room" has settings, but no file declares it: correct the name, or remove its settings`
+	if err == nil || err.Error() != want {
+		t.Errorf("CheckDeclared() of on_insert = %v, want %q", err, want)
+	}
+
 	var none *config.Settings
 	if err := none.CheckDeclared(nil); err != nil {
 		t.Errorf("nil.CheckDeclared() = %v, want nil", err)
@@ -407,14 +532,21 @@ func TestNew(t *testing.T) {
 	t.Parallel()
 
 	key := []string{"code"}
+	values := []config.InsertValue{{Column: "z", Value: "1"}, {Column: "a", Value: "2"}}
 	s := config.New(map[declaration.TableName]config.Table{
-		name("facility", "rooms"):      {Key: key},
+		name("facility", "rooms"):      {Key: key, OnInsert: values},
 		name("facility", "room_types"): {Mode: config.ModeSync},
 	})
 	key[0] = "changed"
+	values[0].Value = "changed"
 
-	if got := s.Table(name("facility", "rooms")); got.Mode != config.ModeUpsert || !slices.Equal(got.Key, []string{"code"}) {
+	got := s.Table(name("facility", "rooms"))
+	if got.Mode != config.ModeUpsert || !slices.Equal(got.Key, []string{"code"}) {
 		t.Errorf("Table(facility.rooms) = %+v, want mode upsert and key code", got)
+	}
+	// The values are copied, and sorted by column as Load sorts them.
+	if want := []config.InsertValue{{Column: "a", Value: "2"}, {Column: "z", Value: "1"}}; !slices.Equal(got.OnInsert, want) {
+		t.Errorf("Table(facility.rooms).OnInsert = %+v, want %+v", got.OnInsert, want)
 	}
 	if got := s.Table(name("facility", "room_types")); got.Mode != config.ModeSync {
 		t.Errorf("Table(facility.room_types) = %+v, want mode sync", got)

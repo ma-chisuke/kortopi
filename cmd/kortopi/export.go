@@ -45,7 +45,8 @@ const exportHelp = "usage: kortopi export [flags]\n" +
 	"\n" +
 	"A table that no file declares gets a new file, <schema>/<table>.csv, or\n" +
 	".sql with --format sql. It holds every column of the table but the\n" +
-	"generated ones: remove the columns that the declaration should not manage.\n" +
+	"generated ones and those that on_insert in kortopi.toml names: remove the\n" +
+	"columns that the declaration should not manage.\n" +
 	"\n" +
 	"A table that a file declares already is written again only with\n" +
 	"--overwrite, into that file, in its format, and with its columns.\n" +

@@ -100,6 +100,11 @@ func (f *fakeDB) CountRows(_ context.Context, table declaration.Table) (int, err
 	return 1, f.record("CountRows " + table.Name.String())
 }
 
+// CheckValues accepts every value of on_insert.
+func (f *fakeDB) CheckValues(_ context.Context, table declaration.TableName, _ []config.InsertValue) ([]plan.RefusedValue, error) {
+	return nil, f.record("CheckValues " + table.String())
+}
+
 func (f *fakeDB) ForeignKeys(_ context.Context, names []declaration.TableName) ([]ForeignKey, error) {
 	return f.keys, f.record("ForeignKeys " + namesOf(names))
 }
@@ -344,6 +349,17 @@ func TestRun(t *testing.T) {
 				`table z.parent has no column "name" yet: apply the schema change first, and then the rows`,
 		},
 		{
+			// The error names the settings file, from which the column comes.
+			name: "a column of on_insert that waits for the schema change",
+			settings: config.New(map[declaration.TableName]config.Table{
+				parent: {Mode: config.ModeSync, OnInsert: []config.InsertValue{{Column: "floor", Value: "1"}}}, child: {Mode: config.ModeSync},
+			}),
+			db:      &fakeDB{diffs: full},
+			opts:    all,
+			want:    diffs,
+			wantErr: `kortopi.toml: on_insert of table z.parent names column "floor", which the table does not have yet: apply the schema change first, and then the rows`,
+		},
+		{
 			name:     "a column that the rows to insert lack",
 			settings: sync,
 			db: &fakeDB{diffs: full, extra: map[declaration.TableName][]plan.ColumnInfo{
@@ -352,7 +368,8 @@ func TestRun(t *testing.T) {
 			opts: all,
 			want: diffs,
 			wantErr: `z/parent.csv: column "created_by" of table z.parent is NOT NULL and has no default, and the declaration does not name it, ` +
-				"so the 2 rows to insert would get no value for it: declare the column, or give it a default in the schema",
+				"so the 2 rows to insert would get no value for it: declare the column, give it a value in on_insert of [tables.\"z.parent\"] in kortopi.toml, " +
+				"or give it a default in the schema",
 		},
 		{
 			name:     "a mistake in the declaration",

@@ -209,6 +209,9 @@ type comparison struct {
 	// is GENERATED ALWAYS, which an insert sets only with OVERRIDING SYSTEM
 	// VALUE.
 	overriding bool
+	// onInsert holds the columns that an insert gives a value of on_insert
+	// (ADR-0035). Nothing compares them.
+	onInsert []insertColumn
 }
 
 // match returns the condition that pairs a declared row with a stored row:
@@ -394,19 +397,28 @@ func (c *comparison) updatesSQL() string {
 
 // insertSQL inserts the declared rows that no stored row matches: the rows of
 // insertsSQL. It names the key and the compared columns, so that every other
-// column gets its default (ADR-0011).
+// column gets its default (ADR-0011), and the columns of on_insert, each with
+// its value as a literal without a cast (ADR-0035). PostgreSQL reads such a
+// literal of INSERT ... SELECT by the type of the column that receives it,
+// as in VALUES, once for the statement, so that every row that the statement
+// inserts gets the same value.
 func (c *comparison) insertSQL() string {
 	columns := slices.Concat(c.key, c.compare)
 	names := make([]string, len(columns))
 	for i, col := range columns {
 		names[i] = col.name
 	}
+	values := quoteColumns(declaredAlias+".", names)
+	for _, col := range c.onInsert {
+		names = append(names, col.name)
+		values += ", " + col.literal
+	}
 	overriding := ""
 	if c.overriding {
 		overriding = " OVERRIDING SYSTEM VALUE"
 	}
 	return "INSERT INTO " + c.table + " (" + quoteColumns("", names) + ")" + overriding +
-		" SELECT " + quoteColumns(declaredAlias+".", names) + " FROM " + c.declared + " AS " + declaredAlias +
+		" SELECT " + values + " FROM " + c.declared + " AS " + declaredAlias +
 		" WHERE " + c.missing()
 }
 

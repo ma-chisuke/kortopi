@@ -158,7 +158,7 @@ The apply wrote both changes in one transaction, as a role with `INSERT` and `UP
 ## How it behaves
 
 - **PostgreSQL decides what a value is.** kortopi loads the declared rows into a temporary table with the column types of the real table and compares them in SQL. Equal dates, numbers, and JSON documents are never reported as different because they were written differently.
-- **Only the columns that you declare are managed.** Other columns are neither compared nor updated, and get their default in a new row.
+- **Only the columns that you declare are managed.** Other columns are neither compared nor updated, and get their default in a new row, or a value that `kortopi.toml` gives them in `on_insert`, such as the time of the insert.
 - **Rows match by the primary key, or by a unique key that you choose for a table**, such as `code`. A declaration then needs no generated IDs.
 - **Each table has a mode.** `insert` adds missing rows. `upsert`, the default, also updates rows. `sync` also deletes the rows that the declaration lacks.
 - **Deletions are guarded.** Only `sync` tables lose rows, an apply deletes nothing without `--allow-delete`, `--max-delete` (100 rows by default, cascades included) stops a large deletion, and the plan shows how many rows of other tables reference a row before it goes.

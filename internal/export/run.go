@@ -84,8 +84,9 @@ type job struct {
 //     SQL file that declares other tables too, and a file that is a symbolic
 //     link, are not replaced.
 //   - A new table gets the file <schema>/<table>.csv or .sql in the format of
-//     opts, with every column of the table but the generated ones, in the
-//     order of the table. Its names must make a file name that every file
+//     opts, with every column of the table but the generated ones and those
+//     that the settings of the table name in on_insert, in the order of the
+//     table. Its names must make a file name that every file
 //     system keeps apart from the others of the run and of the directory,
 //     also one that ignores case or the form of Unicode characters.
 //   - A table without rows cannot be written as SQL: a SQL file without an
@@ -338,8 +339,12 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 					quotedName(name), part.what, why, part.what))
 			}
 		}
+		// A column that on_insert names is set when a row is inserted, and a
+		// declaration that names it too is a mistake of a plan (ADR-0035),
+		// so a new file leaves it out, as it leaves out a generated column.
+		onInsert := settings.Table(name).OnInsert
 		for _, c := range info.Columns {
-			if !c.Generated {
+			if !c.Generated && !slices.ContainsFunc(onInsert, func(v config.InsertValue) bool { return v.Column == c.Name }) {
 				j.req.Columns = append(j.req.Columns, c.Name)
 			}
 		}
@@ -364,6 +369,14 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 		if _, ok := byName[c]; !ok {
 			errs = append(errs, fmt.Errorf("%s: key of table %s names column %q, which the table does not have: correct the key",
 				filepath.Join(decl.Dir, config.FileName), name, c))
+		}
+	}
+	// A key column that on_insert names would be left out of a new file,
+	// and a plan of any file stops on it: the export stops first, with the
+	// error of the plan.
+	for _, v := range settings.Table(name).OnInsert {
+		if slices.Contains(key, v.Column) {
+			errs = append(errs, plan.OnInsertKeyError(filepath.Join(decl.Dir, config.FileName), name, v.Column))
 		}
 	}
 	var note string

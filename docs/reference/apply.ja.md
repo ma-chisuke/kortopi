@@ -50,12 +50,12 @@ apply は何も尋ねない。実行する前に、`kortopi plan` で計画を�
 
 ## apply に要るもの
 
-apply には、計画に要るものがすべて要る（[kortopi plan](plan.ja.md#セッションに要るもの)）。書き込みのできるプライマリのセッション、データベースに対する `TEMPORARY`、スキーマに対する `USAGE`、宣言した列に対する `SELECT` である。行単位セキュリティがロールから行を隠していてはならない。
+apply には、計画に要るものがすべて要る（[kortopi plan](plan.ja.md#セッションに要るもの)）。書き込みのできるプライマリのセッション、データベースに対する `TEMPORARY`、スキーマに対する `USAGE`、宣言した列と `on_insert` の列に対する `SELECT` である。行単位セキュリティがロールから行を隠していてはならない。
 さらに、テーブルの変更の種類ごとに権限が要る。
 
 | 行のあるテーブル | 権限 | 検査する時点 |
 |---|---|---|
-| 挿入する行 | 宣言した列に対する `INSERT` | 最初の書き込みより前 |
+| 挿入する行 | 宣言した列と `on_insert` の列に対する `INSERT` | 最初の書き込みより前 |
 | 更新する行 | 比べるすべての列（キー以外の宣言した列）に対する `UPDATE` | 最初の書き込みより前 |
 | 削除する行 | テーブルに対する `DELETE` | 最初の削除の直前。`--allow-delete` のときだけ |
 
@@ -75,7 +75,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 1. 計画と同じように、ファイルと設定を読み、接続する。ファイルの誤りは、接続する前に報告する。
 2. トランザクションに kortopi のロックを取る。そのため、1つのデータベースの2つの apply は順に動く。別の apply がロックを持っていれば、`kortopi: waiting for another apply on database "app" to finish` を標準エラー出力に出して待ち、やり直す。
 3. 分離レベル `REPEATABLE READ` の1つのトランザクションで、`kortopi plan` のコードを使って計画を求める。すべてのテーブルを検査し、宣言の行を一時テーブルに読み込み、比べる。
-4. データベースにまだないテーブルや列はエラーである。先にスキーマの変更を適用する。挿入する行のあるテーブルで、`NOT NULL` で既定値がなく、宣言が挙げない列もエラーである。その行は、その列の値を得られないからである。
+4. データベースにまだないテーブルや列はエラーである。先にスキーマの変更を適用する。挿入する行のあるテーブルで、`NOT NULL` で既定値がなく、宣言も `on_insert` も挙げない列もエラーである。その行は、その列の値を得られないからである。
 5. 計画を標準出力に出す。
 6. 削除の安全策と、外部キーの循環を検査する。
 7. 参照されるテーブルから参照するテーブルへの順に、各テーブルの足りない行を挿入し、それから違う行を更新する。
@@ -86,7 +86,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 計画と書き込みは1つのスナップショットから来るので、出力した計画が、apply の書き込むものである。
 その間に別のトランザクションが同じ行を変えれば、apply は失敗し、もう一度実行するよう求める。
 
-挿入は宣言した列だけを挙げるので、ほかの列には既定値が入る。
+挿入は、宣言した列と `kortopi.toml` の `on_insert` の列を挙げる。`on_insert` の列は、挿入するすべての行でその値を得る（[宣言のファイル](declaration.ja.md#kortopitoml)）。ほかの列には既定値が入る。
+kortopi は `on_insert` の列を更新しない。すでにある行は、持っている値を保つ。
 更新は、値が違わない列に保存されている値を戻すので、等しいとみなす値は保存されているテキストを保つ。
 kortopi はシーケンスを読みも動かしもしない。
 
@@ -271,6 +272,13 @@ kortopi: table billing.discounts does not exist in the database yet: apply the s
 kortopi: nothing was changed
 ```
 
+`on_insert` が挙げ、テーブルにない列には、設定ファイルを挙げるエラーを出す。
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "floor", which the table does not have yet: apply the schema change first, and then the rows
+kortopi: nothing was changed
+```
+
 ### 上限を超える削除
 
 ```text
@@ -294,6 +302,7 @@ kortopi: flag --max-delete needs --allow-delete, without which an apply deletes 
 
 ```text
 kortopi: an apply needs INSERT on table app.t, and the role "deployer" may not insert into its column "id": grant the role INSERT on the table
+kortopi: an apply needs INSERT on table facility.rooms, and the role "deployer" may not insert into its column "created_by": grant the role INSERT on the table
 kortopi: an apply needs UPDATE on table app.t, and the role "deployer" may not update its column "v": grant the role UPDATE on the table
 kortopi: an apply needs DELETE on table app.t, and the role "deployer" lacks it: grant the role DELETE on the table, or apply without deleting rows
 ```
@@ -327,11 +336,12 @@ kortopi: insert into table app.b: new row for relation "b" violates check constr
 ### 挿入する行が値を得られない列
 
 ```text
-kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 kortopi: nothing was changed
 ```
 
 apply はこの誤りを計画を出す前に報告し、`kortopi plan` も報告する。
+その列を宣言するか、`on_insert` で値を与える（[宣言のファイル](declaration.ja.md#kortopitoml)）か、スキーマで既定値を与える。
 
 ### 遅らせられる外部キーのない循環
 
@@ -378,4 +388,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:993eba11ac798442c56588898c711fed8e90384d67145e96a10f5cee914072c6 -->
+<!-- i18n-source: apply.md sha256:27b89f7d07c4d81fbafe88e29aa8a37ac35accda729989a7762a41295ca4b843 -->

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
+	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
@@ -44,6 +45,8 @@ type Header struct {
 //   - A table or a column that waits for the schema change is named in a
 //     comment. A pending table has no statement, and a pending column is
 //     left out of the statements of its table, as in a plan.
+//   - The INSERT of a table with values of on_insert follows a comment that
+//     names them, and says that PostgreSQL reads them when the script runs.
 //
 // An empty plan gives one comment line, and a second one that names the
 // tables of mode insert, whose values were not compared, when the plan has
@@ -94,7 +97,13 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 	o := apply.Arrange(names, keys, writes)
 
 	b.WriteString("\n")
-	comment(&b, "These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.")
+	if insertsOnInsert(p) {
+		// The values of on_insert are the text of the settings, which the
+		// session that runs the script reads in its own settings.
+		comment(&b, "These settings make the values below, but those of on_insert, mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.")
+	} else {
+		comment(&b, "These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.")
+	}
 	if err := db.WriteStatements(ctx, &b, Step{Kind: Settings}); err != nil {
 		return err
 	}
@@ -121,6 +130,10 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 		for _, kind := range []Kind{Insert, Update} {
 			if kind == Insert && len(t.Diff.Inserts) == 0 || kind == Update && len(t.Diff.Updates) == 0 {
 				continue
+			}
+			if kind == Insert && len(t.OnInsert) > 0 {
+				comment(&b, "on insert: "+plan.FormatInsertValues(t.OnInsert))
+				comment(&b, onInsertNote)
 			}
 			if err := db.WriteStatements(ctx, &b, Step{Kind: kind, Table: *t}); err != nil {
 				return err
@@ -151,6 +164,18 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 	return err
 }
 
+// insertsOnInsert reports whether the script writes values of on_insert: a
+// table of the plan has rows to insert and values of on_insert.
+func insertsOnInsert(p *plan.Plan) bool {
+	return slices.ContainsFunc(p.Tables, func(t plan.Table) bool { return len(t.Diff.Inserts) > 0 && len(t.OnInsert) > 0 })
+}
+
+// onInsertNote follows the values of on_insert before the INSERT of a table
+// (ADR-0035). The INSERT writes them as the settings do, and PostgreSQL reads
+// them when the script runs, where an apply reads them in its own session.
+const onInsertNote = "The database reads the values of on_insert when the script runs, in the settings of its session: " +
+	"a value such as now is the time of the transaction that runs the script."
+
 // writeHeader writes the header comment: where the plan comes from, its
 // counts, the tables and columns that wait for the schema change, and how
 // to run the script.
@@ -178,6 +203,10 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 		for _, c := range t.PendingColumns {
 			comment(b, fmt.Sprintf("%s: column %s is known after the schema is applied; the statements leave it out.",
 				plan.FormatTable(t.Name), plan.FormatName(c)))
+		}
+		for _, c := range t.PendingOnInsert {
+			comment(b, fmt.Sprintf("%s: column %s of on_insert in %s is known after the schema is applied; the statements leave it out.",
+				plan.FormatTable(t.Name), plan.FormatName(c), config.FileName))
 		}
 	}
 }

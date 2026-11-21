@@ -50,12 +50,12 @@ An apply asks no question: review its plan with `kortopi plan` before you run it
 
 ## What an apply needs
 
-An apply needs everything that a plan needs ([kortopi plan](plan.md#what-the-session-needs)): a session on the primary that can write, `TEMPORARY` on the database, `USAGE` on the schemas, `SELECT` on the declared columns, and no row-level security that hides rows from the role.
+An apply needs everything that a plan needs ([kortopi plan](plan.md#what-the-session-needs)): a session on the primary that can write, `TEMPORARY` on the database, `USAGE` on the schemas, `SELECT` on the declared columns and on the columns of `on_insert`, and no row-level security that hides rows from the role.
 It also needs a privilege for each kind of change that a table has:
 
 | A table with rows to | Privilege | Checked |
 |---|---|---|
-| insert | `INSERT` on the declared columns | before the first write |
+| insert | `INSERT` on the declared columns and on the columns of `on_insert` | before the first write |
 | update | `UPDATE` on every compared column, the declared columns outside the key | before the first write |
 | delete | `DELETE` on the table | just before the first deletion, only with `--allow-delete` |
 
@@ -75,7 +75,7 @@ An apply refuses a session whose `session_replication_role` is not `origin`, bec
 1. It reads the files and the settings, and connects, as a plan does. A mistake in a file is reported before it connects.
 2. It takes the lock of kortopi for its transaction, so that two applies on one database run one after the other. If another apply holds it, the apply prints `kortopi: waiting for another apply on database "app" to finish` on standard error, waits, and starts again.
 3. In one transaction at the isolation level `REPEATABLE READ`, it computes the plan with the code of `kortopi plan`: it checks every table, loads the declared rows into temporary tables, and compares them.
-4. A table or a column that the database does not have yet is an error: apply the schema change first. So is a `NOT NULL` column without a default that the declaration does not name, in a table with rows to insert: those rows would get no value for it.
+4. A table or a column that the database does not have yet is an error: apply the schema change first. So is a `NOT NULL` column without a default that neither the declaration nor `on_insert` names, in a table with rows to insert: those rows would get no value for it.
 5. It prints the plan on standard output.
 6. It checks the guards on deletions and the cycles of the foreign keys.
 7. From referenced tables to referencing ones, it inserts the missing rows of each table and then updates the rows that differ.
@@ -86,7 +86,8 @@ Each statement must change as many rows as the plan shows; otherwise a trigger o
 Because the plan and the writes come from one snapshot, the printed plan is what the apply writes.
 When another transaction changes the same rows in the meantime, the apply fails and asks you to run it again.
 
-An insert names only the declared columns, so every other column gets its default.
+An insert names the declared columns and the columns of `on_insert` in `kortopi.toml`, which get their values in every row that it inserts ([Declaration files](declaration.md#kortopitoml)), so every other column gets its default.
+kortopi never updates a column of `on_insert`: a row that exists keeps what it holds.
 An update gives a column whose value does not differ its stored value back, so a value that compares equal keeps its stored text.
 kortopi neither reads nor moves sequences.
 
@@ -271,6 +272,13 @@ kortopi: table billing.discounts does not exist in the database yet: apply the s
 kortopi: nothing was changed
 ```
 
+A column that `on_insert` names and the table lacks gets an error that names the settings file:
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "floor", which the table does not have yet: apply the schema change first, and then the rows
+kortopi: nothing was changed
+```
+
 ### More deletions than the limit
 
 ```text
@@ -294,6 +302,7 @@ kortopi: flag --max-delete needs --allow-delete, without which an apply deletes 
 
 ```text
 kortopi: an apply needs INSERT on table app.t, and the role "deployer" may not insert into its column "id": grant the role INSERT on the table
+kortopi: an apply needs INSERT on table facility.rooms, and the role "deployer" may not insert into its column "created_by": grant the role INSERT on the table
 kortopi: an apply needs UPDATE on table app.t, and the role "deployer" may not update its column "v": grant the role UPDATE on the table
 kortopi: an apply needs DELETE on table app.t, and the role "deployer" lacks it: grant the role DELETE on the table, or apply without deleting rows
 ```
@@ -327,11 +336,12 @@ kortopi: insert into table app.b: new row for relation "b" violates check constr
 ### A column that the rows to insert would lack
 
 ```text
-kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 kortopi: nothing was changed
 ```
 
 An apply reports this mistake before it prints its plan, and `kortopi plan` reports it too.
+Declare the column, give it a value with `on_insert` ([Declaration files](declaration.md#kortopitoml)), or give it a default in the schema.
 
 ### A cycle without a deferrable foreign key
 

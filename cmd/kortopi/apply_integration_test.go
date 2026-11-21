@@ -186,7 +186,8 @@ func TestApplyCommand(t *testing.T) {
 			checkRun(t, code, stdout, stderr, exitError, "",
 				"kortopi: "+filepath.Join(lacking, "facility", "rooms.csv")+`: column "room_type" of table facility.rooms is NOT NULL and has no default, `+
 					"and the declaration does not name it, so the row to insert would get no value for it: "+
-					"declare the column, or give it a default in the schema\n"+
+					`declare the column, give it a value in on_insert of [tables."facility.rooms"] in `+filepath.Join(lacking, "kortopi.toml")+", "+
+					"or give it a default in the schema\n"+
 					"kortopi: nothing was changed\n")
 			checkRows(t, rows, rowsApplied)
 

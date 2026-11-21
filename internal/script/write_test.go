@@ -105,6 +105,12 @@ func table(name declaration.TableName, mode config.Mode, d plan.TableDiff) plan.
 	return plan.Table{Name: name, Mode: mode, Key: []string{"id"}, Compare: []string{"name"}, Diff: d}
 }
 
+// withOnInsert returns t with the values of on_insert.
+func withOnInsert(t plan.Table, values ...config.InsertValue) plan.Table {
+	t.OnInsert = values
+	return t
+}
+
 var (
 	regions = tn("geo", "regions")
 	cities  = tn("geo", "cities")
@@ -214,7 +220,7 @@ func TestWrite(t *testing.T) {
 				{Name: tn("billing", "discounts"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 2},
 				{
 					Name: tn("billing", "plans"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
-					PendingColumns: []string{"floor", "wing"}, Diff: plan.TableDiff{Inserts: inserts("1")},
+					PendingColumns: []string{"floor", "wing"}, PendingOnInsert: []string{"created by"}, Diff: plan.TableDiff{Inserts: inserts("1")},
 				},
 				{Name: tn("billing", "taxes"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 1},
 			}},
@@ -227,6 +233,19 @@ func TestWrite(t *testing.T) {
 				{Name: tn("billing", "discounts"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 2},
 			}},
 			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			// The comment of the values of on_insert stands before the
+			// INSERT of its table, and only there.
+			name: "on_insert",
+			plan: &plan.Plan{Tables: []plan.Table{
+				withOnInsert(table(cities, config.ModeUpsert, plan.TableDiff{Inserts: inserts("10", "11"), Updates: updates("12")}),
+					config.InsertValue{Column: "created_at", Value: "now"}, config.InsertValue{Column: "note", Value: "line\nbreak"}),
+				withOnInsert(table(regions, config.ModeUpsert, plan.TableDiff{Updates: updates("1")}),
+					config.InsertValue{Column: "created_at", Value: "now"}),
+			}},
+			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
 			header: Header{Dir: "data", Database: "shop"},
 		},
 		{

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -27,8 +28,9 @@ type fileTOML struct {
 // values are checked after decoding, so that an error can name the table and
 // say what to write instead.
 type tableTOML struct {
-	Key  any `toml:"key"`
-	Mode any `toml:"mode"`
+	Key      any `toml:"key"`
+	Mode     any `toml:"mode"`
+	OnInsert any `toml:"on_insert"`
 }
 
 // validModes is the list of modes for messages.
@@ -44,6 +46,8 @@ func New(tables map[declaration.TableName]Table) *Settings {
 			t.Mode = ModeUpsert
 		}
 		t.Key = slices.Clone(t.Key)
+		t.OnInsert = slices.Clone(t.OnInsert)
+		slices.SortFunc(t.OnInsert, compareInsertValues)
 		s.tables[name] = t
 	}
 	return s
@@ -148,7 +152,91 @@ func parseTable(raw tableTOML) (Table, error) {
 		}
 		t.Key = key
 	}
+	if raw.OnInsert != nil {
+		values, err := parseOnInsert(raw.OnInsert)
+		if err != nil {
+			return Table{}, err
+		}
+		t.OnInsert = values
+	}
 	return t, nil
+}
+
+// parseOnInsert checks the values of on_insert, and returns them sorted by
+// the name of the column, so that a plan and its statements name them in the
+// same order on every run. Each value is a string, which the database reads
+// by the type of its column (ADR-0035): a value of another kind of TOML could
+// mean another value of the column than it seems to, such as a date of TOML
+// in a timestamptz column.
+func parseOnInsert(raw any) ([]InsertValue, error) {
+	columns, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New(`on_insert must be a table of columns and their values, as in on_insert = { created_at = "now" }`)
+	}
+	values := make([]InsertValue, 0, len(columns))
+	for _, column := range slices.Sorted(maps.Keys(columns)) {
+		if column == "" {
+			return nil, errors.New("on_insert holds an empty column name: name each column as the table has it")
+		}
+		value, ok := columns[column].(string)
+		if !ok {
+			return nil, fmt.Errorf("on_insert gives column %q %s, not a string: write the value as a string, which the database reads by the type of the column%s",
+				column, tomlKind(columns[column]), stringExample(column, columns[column]))
+		}
+		values = append(values, InsertValue{Column: column, Value: value})
+	}
+	return values, nil
+}
+
+// compareInsertValues orders values of on_insert by the name of the column.
+func compareInsertValues(a, b InsertValue) int {
+	return strings.Compare(a.Column, b.Column)
+}
+
+// tomlKind names the kind of a TOML value that is not a string, as decoded
+// into any, for messages.
+func tomlKind(v any) string {
+	switch v.(type) {
+	case int64:
+		return "an integer"
+	case float64:
+		return "a float"
+	case bool:
+		return "a boolean"
+	case toml.LocalDate, toml.LocalTime, toml.LocalDateTime, time.Time:
+		return "a date or a time of TOML"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "a table"
+	}
+	return "a value"
+}
+
+// stringExample returns how the setting of column writes v as a string, as
+// in `, as in sort_order = "0"`, for a value that TOML writes in one word; it
+// returns "" for an array or a table.
+func stringExample(column string, v any) string {
+	var text string
+	switch v := v.(type) {
+	case int64:
+		text = strconv.FormatInt(v, 10)
+	case float64:
+		text = strconv.FormatFloat(v, 'g', -1, 64)
+	case bool:
+		text = strconv.FormatBool(v)
+	case toml.LocalDate:
+		text = v.String()
+	case toml.LocalTime:
+		text = v.String()
+	case toml.LocalDateTime:
+		text = v.String()
+	case time.Time:
+		text = v.Format(time.RFC3339Nano)
+	default:
+		return ""
+	}
+	return ", as in " + formatKey(toml.Key{column}) + " = " + strconv.Quote(text)
 }
 
 // parseKey checks the columns of a chosen match key.
@@ -206,7 +294,7 @@ func unknownSetting(key toml.Key) string {
 		// [tables.facility.rooms] is two nested tables, not one name.
 		return fmt.Sprintf("unknown setting %s: write the name of the table in quotes, as in [tables.%s]", name, strconv.Quote(key[1]+"."+key[2]))
 	default:
-		return fmt.Sprintf("unknown setting %s: the settings of a table are key and mode", name)
+		return fmt.Sprintf("unknown setting %s: the settings of a table are key, mode, and on_insert", name)
 	}
 }
 

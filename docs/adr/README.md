@@ -40,3 +40,4 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0032](ADR-0032-require-the-name-of-the-database.md) | Require the name of the database, and do not fall back to the name of the user | accepted | 2026-11-21 |
 | [ADR-0033](ADR-0033-check-titles-of-the-dependency-bot-for-their-form-not-their-length.md) | Check the titles of the dependency bot for their form, not their length, by the author that GitHub reports | accepted | 2026-11-21 |
 | [ADR-0034](ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md) | Let a plan stop on every name that the database lacks, with `--no-pending` | accepted | 2026-11-21 |
+| [ADR-0035](ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md) | Let the settings name values that only an insert sets | accepted | 2026-11-21 |

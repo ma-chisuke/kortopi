@@ -142,7 +142,7 @@ Before it loads a table, kortopi checks in the catalogs, in this order:
 
 1. The server is not a standby, the transaction is not read-only, and the role has `TEMPORARY` on the database. kortopi checks this once, for the first table that it loads.
 2. The role has `USAGE` on the schema of the table.
-3. The role may read every declared column that the table has: `SELECT` on the table, or `SELECT` on those columns alone.
+3. The role may read every declared column that the table has, and every column of `on_insert` in `kortopi.toml`, whose type the plan reads to check its value: `SELECT` on the table, or `SELECT` on those columns alone. kortopi checks the columns of `on_insert` before it reads any of their values.
 4. Row-level security does not apply to the role on the table: the table has none enabled, or the role has `BYPASSRLS`, or the role owns a table that does not force row-level security.
 
 PostgreSQL itself checks that the role may connect, with `CONNECT` on the database, and grants `CONNECT` and `TEMPORARY` to `PUBLIC` by default.
@@ -183,6 +183,7 @@ In the database, a plan does the following and nothing else:
 - It opens one connection, with `application_name` set to `kortopi` unless `PGAPPNAME` sets another.
 - It runs everything in one transaction at the isolation level `REPEATABLE READ`, so all tables are compared against one snapshot, and rolls the transaction back at the end.
 - It pins the settings that change how values are read ([How values are compared](comparison.md#the-settings-of-the-session)).
+- For each value of `on_insert` of a table that exists, before it loads any row, it creates a temporary table of that column alone inside a savepoint, inserts the value into it, and rolls the savepoint back ([Values that only an insert sets](#values-that-only-an-insert-sets)).
 - For each declared table, it creates a temporary table inside a savepoint, loads the declared rows into it, compares them with the real table, and rolls the savepoint back, so the temporary table is gone before the next table.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
 
@@ -316,6 +317,27 @@ kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_t
 - The flag works with `--format sql`, with `--exit-code`, and with `--schema`, which narrows the tables that it checks.
 - An apply has no such flag: it always stops on a table or a column that the database lacks, and changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). `kortopi apply --no-pending` is an error that says so.
 
+### Values that only an insert sets
+
+A table whose settings give columns values in `on_insert` ([Declaration files](declaration.md#kortopitoml)) shows the values in one line when it has rows to insert:
+
+```text
+facility.rooms (upsert, key: name)
+  on insert: created_at="now"  created_by="kortopi"  note=""  sort_order="0"
+  + name=annex  capacity=10
+  + name=hall  capacity=80
+  ~ name=lobby  capacity: 20 -> 30
+  2 to insert, 1 to update
+
+Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
+```
+
+- The values print as `kortopi.toml` writes them, always in double quotes, not as PostgreSQL reads them: `now` stays `"now"`, so two plans of the same settings print the same line. An apply gives these values to every row that it inserts.
+- The line comes after the lines of the pending columns and before the rows. A table without rows to insert shows no such line.
+- kortopi never compares these columns, so they never show as a change, and a row that exists keeps what it holds.
+- A column of `on_insert` that the table lacks waits for the schema change, as a declared column does, and its line says where the name comes from: `column floor of on_insert in kortopi.toml: known after the schema is applied`.
+- The plan reads every value of a table that exists by the type of its column before it loads any row, also when no row is to insert. The values of a table that waits for the schema change are checked once the table exists. For each value, inside a savepoint of its own that it rolls back, it makes a temporary table of that column alone, which takes its type from the column of the table, and inserts the value into it. So no other column gets a value or a default, and the role needs `SELECT` on these columns, to read their types, as on the declared columns ([What the session needs](#what-the-session-needs)).
+
 ### Rows that reference rows to delete
 
 Under the rows to delete of a table, a plan shows every foreign key that points at them, once per table:
@@ -422,12 +444,22 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 ### Read the script
 
 - The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan. After the header come the tables and the columns that wait for a schema change, one comment line each.
-- After a comment, three `SET LOCAL` statements pin, until the end of the transaction, the settings that change how a literal of the script reads ([Values in the script](#values-in-the-script)).
+- After a comment, three `SET LOCAL` statements pin, until the end of the transaction, the settings that change how a literal of the script reads ([Values in the script](#values-in-the-script)). When the script holds values of `on_insert`, the comment says that the settings make the values mean what they meant to the plan "but those of on_insert", which the session reads in its own settings.
 - When an apply would defer foreign keys of a cycle, a `SET CONSTRAINTS ... DEFERRED` follows ([kortopi apply](apply.md#foreign-keys-and-cycles)). When another table of the schema has a constraint of the same name that is not deferrable, the plan fails with the error of an apply ([kortopi apply](apply.md#a-constraint-of-the-same-name)).
 - The tables follow in the order of an apply, from referenced tables to referencing ones, each under a comment line with its counts. A table gets one `INSERT` for its rows to insert, each row on a line of its own, and one `UPDATE` for each row to update, which sets only the columns that differ.
 - The deletions come last, in the reverse order, as comments: one `DELETE` for each table, which lists the keys of its rows one on each line ([Deletions](#deletions)).
 - Every name is in double quotes, because a name that is plain on one version of PostgreSQL can be a keyword on another. An ordinary table has `ONLY`, as in an apply, and a partitioned table does not.
 - A table that waits for a schema change has no statement, and a column that waits for one is left out of the statements of its table.
+- The `INSERT` of a table with values of `on_insert` names their columns after the declared ones and gives every row the values, under two comment lines:
+
+  ```sql
+  -- facility.rooms: 2 to insert, 1 to update
+  -- on insert: created_at="now"  created_by="kortopi"  note=""  sort_order="0"
+  -- The database reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
+  INSERT INTO "facility"."rooms" ("name", "capacity", "created_at", "created_by", "note", "sort_order") VALUES
+    ('annex', '10', 'now', 'kortopi', '', '0'),
+    ('hall', '80', 'now', 'kortopi', '', '0');
+  ```
 
 A plan with nothing to do gives one line:
 
@@ -500,6 +532,10 @@ A key that finds a row is cast to the type of its column, with the schema of the
 "code" OPERATOR("pg_catalog".=) 'pro'::"pg_catalog"."text"
 ```
 
+A value of `on_insert` is the text that `kortopi.toml` writes, not a value as a plan prints it ([Values that only an insert sets](#values-that-only-an-insert-sets)).
+PostgreSQL reads it when the script runs, in the settings of the session that runs it: `now` is the time of that transaction, not of the plan, and a value whose meaning depends on the settings, such as a timestamp without an offset, can read otherwise than in an apply, which reads it in the settings that a plan pins.
+Write such a value so that it reads the same in any session: a timestamp with its offset, and a date as `YYYY-MM-DD`.
+
 Three settings change how a literal reads, and no literal can carry them: `client_encoding` for text that is not ASCII, `lc_monetary` for `money`, and `xmloption` for an `xml` value that is a fragment rather than a whole document.
 The script pins them with `SET LOCAL`, as the plan read the values.
 The tests of kortopi run on servers with only the locales C and en_US, which write `money` the same way, so they show only that pinning `lc_monetary` does no harm there.
@@ -531,9 +567,9 @@ A failed plan prints nothing on standard output.
 kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
-2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. With `--no-pending`, it also checks that the database has every declared table and column. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
+2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. With `--no-pending`, it also checks that the database has every declared table and column. It checks the columns of `on_insert` too, and lets PostgreSQL read their values. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
-4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that the declaration does not name is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
+4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that neither the declaration nor `on_insert` names is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 5. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
 
 [Declaration files](declaration.md#common-mistakes) lists the common mistakes and their messages.

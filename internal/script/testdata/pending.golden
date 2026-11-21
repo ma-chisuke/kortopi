@@ -4,6 +4,7 @@
 -- billing.discounts: known after the schema is applied (2 declared rows); the script has no statement for it.
 -- billing.plans: column floor is known after the schema is applied; the statements leave it out.
 -- billing.plans: column wing is known after the schema is applied; the statements leave it out.
+-- billing.plans: column "created by" of on_insert in kortopi.toml is known after the schema is applied; the statements leave it out.
 -- billing.taxes: known after the schema is applied (1 declared row); the script has no statement for it.
 
 -- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.

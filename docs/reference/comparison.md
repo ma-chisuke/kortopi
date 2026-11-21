@@ -99,7 +99,7 @@ After loading a table and before comparing it, a plan checks the declared rows:
 
 After it has compared every table, a plan checks that the rows to insert get a value for every column that needs one:
 
-- A column that is `NOT NULL`, has no default, and is not named by the declaration gets no value in a new row, so an apply of the rows to insert would fail. A plan reports such a column for every table with rows to insert, all tables together. A default here is a default of the column or of its domain, a `serial`, an identity column, or a generated column.
+- A column that is `NOT NULL`, has no default, and that neither the declaration nor `on_insert` in `kortopi.toml` names gets no value in a new row, so an apply of the rows to insert would fail. A plan reports such a column for every table with rows to insert, all tables together. A default here is a default of the column or of its domain, a `serial`, an identity column, or a generated column.
 
 A plan also checks the declared columns against the table:
 
