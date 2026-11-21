@@ -98,7 +98,7 @@ func NewRegistry(dialects ...Dialect) (*Registry, error) {
 	for _, d := range dialects {
 		for _, other := range r.dialects {
 			if other.Name() == d.Name() {
-				return nil, fmt.Errorf("this build of kortopi holds the dialect %s twice: build kortopi again with each dialect once", d.Name())
+				return nil, fmt.Errorf("this build of kortopi holds the database %s twice: build kortopi again with each database once", d.Name())
 			}
 		}
 		r.dialects = append(r.dialects, d)

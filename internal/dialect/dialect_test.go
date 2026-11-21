@@ -82,7 +82,7 @@ func TestNewRegistryTwice(t *testing.T) {
 	t.Parallel()
 
 	r, err := NewRegistry(named("first"), named("second"), named("first"))
-	want := "this build of kortopi holds the dialect first twice: build kortopi again with each dialect once"
+	want := "this build of kortopi holds the database first twice: build kortopi again with each database once"
 	if r != nil || err == nil || err.Error() != want {
 		t.Errorf("NewRegistry() of a name twice = %v, %v, want the error %q", r, err, want)
 	}
