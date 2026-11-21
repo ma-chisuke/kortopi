@@ -143,4 +143,4 @@ kortopi は、宣言が挙げない列には、新しい行でその列の既定
   - [docs/reference/apply.ja.md](../reference/apply.ja.md#apply-がすること)
   - [docs/reference/export.ja.md](../reference/export.ja.md#最初の書き出しのあとに直すこと)
 
-<!-- i18n-source: ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md sha256:4d8d87388f9ff88da70df3414e1d94d208f221264409ebe39ce67dcc8d64c47d -->
+<!-- i18n-source: ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md sha256:0ed784cb0dc86e5dfb513288b7f214e2ca0a796a361aa87c483bd5c4024aad05 -->
