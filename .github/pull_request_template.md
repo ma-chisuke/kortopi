@@ -12,3 +12,4 @@ type, for example `feat!: rename the orders endpoint`.
 - [ ] `make check` passes.
 - [ ] A changed document `foo.md` comes with its translation `foo.ja.md`.
 - [ ] A changed decision comes with a record under `docs/adr/`.
+- [ ] An issue that this closes is named here as `Closes #N`, and in no commit message.
