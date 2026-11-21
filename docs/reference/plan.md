@@ -142,7 +142,7 @@ Before it loads a table, kortopi checks in the catalogs, in this order:
 
 1. The server is not a standby, the transaction is not read-only, and the role has `TEMPORARY` on the database. kortopi checks this once, for the first table that it loads.
 2. The role has `USAGE` on the schema of the table.
-3. The role may read every declared column that the table has: `SELECT` on the table, or `SELECT` on those columns alone.
+3. The role may read every declared column that the table has, and every column of `on_insert` in `kortopi.toml`, whose type the plan reads to check its value: `SELECT` on the table, or `SELECT` on those columns alone. kortopi checks the columns of `on_insert` before it reads any of their values.
 4. Row-level security does not apply to the role on the table: the table has none enabled, or the role has `BYPASSRLS`, or the role owns a table that does not force row-level security.
 
 PostgreSQL itself checks that the role may connect, with `CONNECT` on the database, and grants `CONNECT` and `TEMPORARY` to `PUBLIC` by default.
@@ -335,7 +335,7 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - The line comes after the lines of the pending columns and before the rows. A table without rows to insert shows no such line.
 - kortopi never compares these columns, so they never show as a change, and a row that exists keeps what it holds.
 - A column of `on_insert` that the table lacks shows as `column <name>: known after the schema is applied`, as a declared column does.
-- The plan reads every value by the type of its column before it loads any row, also when no row is to insert, in a temporary table inside a savepoint that it rolls back. It needs no privilege on these columns.
+- The plan reads every value by the type of its column before it loads any row, also when no row is to insert. For each value, inside a savepoint of its own that it rolls back, it makes a temporary table of that column alone, which takes its type from the column of the table, and inserts the value into it. So no other column gets a value or a default, and the role needs `SELECT` on these columns, to read their types, as on the declared columns ([What the session needs](#what-the-session-needs)).
 
 ### Rows that reference rows to delete
 

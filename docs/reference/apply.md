@@ -50,7 +50,7 @@ An apply asks no question: review its plan with `kortopi plan` before you run it
 
 ## What an apply needs
 
-An apply needs everything that a plan needs ([kortopi plan](plan.md#what-the-session-needs)): a session on the primary that can write, `TEMPORARY` on the database, `USAGE` on the schemas, `SELECT` on the declared columns, and no row-level security that hides rows from the role.
+An apply needs everything that a plan needs ([kortopi plan](plan.md#what-the-session-needs)): a session on the primary that can write, `TEMPORARY` on the database, `USAGE` on the schemas, `SELECT` on the declared columns and on the columns of `on_insert`, and no row-level security that hides rows from the role.
 It also needs a privilege for each kind of change that a table has:
 
 | A table with rows to | Privilege | Checked |

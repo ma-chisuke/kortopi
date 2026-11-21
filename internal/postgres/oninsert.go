@@ -19,9 +19,6 @@ import (
 // insert gives it.
 type insertColumn struct {
 	name string
-	// fullType is the type of the column with its type modifier, for a
-	// temporary column that takes the value as the column would.
-	fullType string
 	// literal is the value as a string literal, written by literal, with no
 	// cast: PostgreSQL reads it by the type of the column that receives it,
 	// with the input function of the type, as it reads a field of a CSV file
@@ -36,8 +33,7 @@ type insertColumn struct {
 func insertColumns(meta *tableMeta, table declaration.Table, values []config.InsertValue) ([]insertColumn, error) {
 	columns := make([]insertColumn, len(values))
 	for i, v := range values {
-		col, ok := meta.column(v.Column)
-		switch {
+		switch _, ok := meta.column(v.Column); {
 		case !ok:
 			return nil, fmt.Errorf("table %s has no column %q, which on_insert names", meta.name, v.Column)
 		case slices.Contains(table.Columns, v.Column):
@@ -47,7 +43,7 @@ func insertColumns(meta *tableMeta, table declaration.Table, values []config.Ins
 		if err != nil {
 			return nil, fmt.Errorf("table %s: the value of column %q of on_insert is not valid UTF-8", meta.name, v.Column)
 		}
-		columns[i] = insertColumn{name: v.Column, fullType: col.fullType, literal: lit}
+		columns[i] = insertColumn{name: v.Column, literal: lit}
 	}
 	return columns, nil
 }
@@ -56,19 +52,20 @@ func insertColumns(meta *tableMeta, table declaration.Table, values []config.Ins
 // insert of the value reads it, and returns the values that PostgreSQL
 // refuses, with its message (ADR-0035).
 //
-// The values go into a temporary table whose columns have the types of the
-// columns of the table, with their type modifiers and domains, inside a
-// savepoint that is rolled back, so that the session changes nothing and an
-// error leaves it usable. Each value has a savepoint of its own, so that every
-// value that PostgreSQL refuses is reported. The statement writes the value
-// as an insert of the table writes it. Only the types come from the table:
-// none of its rows or columns is read, so the check needs no privilege on the
-// columns, only the TEMPORARY privilege that a plan needs anyway.
+// Each value has a savepoint of its own, which is rolled back, so that the
+// session changes nothing, every value that PostgreSQL refuses is reported,
+// and an error leaves the session usable. Inside it, a temporary table with
+// the one column takes its type from the column of the table, as the
+// temporary table of the declared rows does (createDeclaredSQL): with its
+// type modifier, its domain, and its collation, and without its constraints
+// and its default. The statement that inserts the value names that column,
+// and writes the value as an insert of the table writes it. No other column
+// gets a value or a default, so a domain of another column, its NOT NULL, and
+// its default play no part, and no type is looked up by its name.
 //
-// A value is refused when PostgreSQL reports a data exception, such as text
-// that its type does not read or a value out of range, or the violation of a
-// constraint of a domain. Any other error, such as a lock timeout or a broken
-// connection, is an error of the session.
+// The role needs SELECT on the columns, which the check reads the types of,
+// as for the declared columns, and the TEMPORARY privilege that a plan needs
+// anyway. Both are checked in the catalogs first.
 func (s *Session) CheckValues(ctx context.Context, name declaration.TableName, values []config.InsertValue) (_ []plan.RefusedValue, err error) {
 	defer s.explainWait(ctx, &err)
 	if s.export {
@@ -85,52 +82,48 @@ func (s *Session) CheckValues(ctx context.Context, name declaration.TableName, v
 	if err != nil || len(columns) == 0 {
 		return nil, err
 	}
+	names := make([]string, len(columns))
+	for i, col := range columns {
+		names[i] = col.name
+	}
+	if err := s.checkPrivileges(meta, name, names); err != nil {
+		return nil, err
+	}
 	if err := s.checkTemporary(ctx); err != nil {
 		return nil, err
 	}
 	var refused []plan.RefusedValue
-	err = s.savepoint(ctx, false, func(tx pgx.Tx) error {
-		temp := s.nextTemp()
-		if _, err := tx.Exec(ctx, createTypedSQL(temp, columns)); err != nil {
-			return fmt.Errorf("create the temporary table of the values of on_insert of table %s: %w", name, err)
+	for _, col := range columns {
+		reason, err := s.readValue(ctx, name, col)
+		if err != nil {
+			return nil, fmt.Errorf("read the value of column %q of on_insert of table %s: %w", col.name, name, err)
 		}
-		for _, col := range columns {
-			reason, err := readValue(ctx, tx, temp, col)
-			if err != nil {
-				return fmt.Errorf("read the value of column %q of on_insert of table %s: %w", col.name, name, err)
-			}
-			if reason != "" {
-				refused = append(refused, plan.RefusedValue{Column: col.name, Reason: reason})
-			}
+		if reason != "" {
+			refused = append(refused, plan.RefusedValue{Column: col.name, Reason: reason})
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return refused, nil
 }
 
-// readValue inserts the value of col into the temporary table temp, inside a
-// savepoint that it rolls back, and returns what PostgreSQL says when it
-// refuses the value, or "".
-func readValue(ctx context.Context, tx pgx.Tx, temp string, col insertColumn) (string, error) {
-	sp, err := tx.Begin(ctx)
-	if err != nil {
-		return "", fmt.Errorf("start a savepoint: %w", err)
-	}
-	_, execErr := sp.Exec(ctx, "INSERT INTO "+temp+" ("+quoteIdent(col.name)+") VALUES ("+col.literal+")")
-	if err := sp.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-		return "", errors.Join(execErr, fmt.Errorf("roll back to the savepoint: %w", err))
-	}
-	if execErr == nil {
-		return "", nil
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(execErr, &pgErr) && refusesValue(pgErr) {
-		return refusal(pgErr), nil
-	}
-	return "", execErr
+// readValue inserts the value of col into a temporary table of that column
+// alone, inside a savepoint that it rolls back, and returns what PostgreSQL
+// says when it refuses the value, or "".
+func (s *Session) readValue(ctx context.Context, name declaration.TableName, col insertColumn) (string, error) {
+	var reason string
+	err := s.savepoint(ctx, false, func(tx pgx.Tx) error {
+		temp := s.nextTemp()
+		if err := s.create(ctx, tx, declaration.Table{Name: name}, createDeclaredSQL(temp, name, []tempColumn{{name: col.name, typed: true}})); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, "INSERT INTO "+temp+" ("+quoteIdent(col.name)+") VALUES ("+col.literal+")")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && refusesValue(pgErr) {
+			reason = refusal(pgErr)
+			return nil
+		}
+		return err
+	})
+	return reason, err
 }
 
 // refusesValue reports whether err says that PostgreSQL does not take a
@@ -153,24 +146,4 @@ func refusal(err *pgconn.PgError) string {
 		msg += " (hint: " + err.Hint + ")"
 	}
 	return msg
-}
-
-// createTypedSQL returns the statement that creates the temporary table temp
-// with a column for each of columns, of the type of the real column with its
-// type modifier, and with neither constraints nor defaults.
-func createTypedSQL(temp string, columns []insertColumn) string {
-	var b strings.Builder
-	b.WriteString("CREATE TEMPORARY TABLE ")
-	b.WriteString(temp)
-	b.WriteString(" (")
-	for i, col := range columns {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(quoteIdent(col.name))
-		b.WriteString(" ")
-		b.WriteString(col.fullType)
-	}
-	b.WriteString(") ON COMMIT DROP")
-	return b.String()
 }

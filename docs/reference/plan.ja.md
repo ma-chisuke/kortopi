@@ -142,7 +142,7 @@ kortopi は、テーブルを読み込む前に、次の順でカタログを調
 
 1. サーバーがスタンバイでなく、トランザクションが読み取り専用でなく、ロールがデータベースに対する `TEMPORARY` を持つ。kortopi はこれを、最初に読み込むテーブルで1回だけ調べる。
 2. ロールが、そのテーブルのスキーマに対する `USAGE` を持つ。
-3. ロールが、テーブルにある宣言したすべての列を読める。テーブルに対する `SELECT` でも、それらの列だけに対する `SELECT` でもよい。
+3. ロールが、テーブルにある宣言したすべての列と、`kortopi.toml` の `on_insert` のすべての列を読める。`on_insert` の列は、計画がその値を検査するために型を読む。テーブルに対する `SELECT` でも、それらの列だけに対する `SELECT` でもよい。kortopi は、`on_insert` の列の値をどれも読む前に、その列を調べる。
 4. そのテーブルで、行単位セキュリティがロールにかからない。テーブルで有効になっていないか、ロールが `BYPASSRLS` を持つか、ロールが行単位セキュリティを強制していないテーブルを所有していればよい。
 
 ロールが接続できること（データベースに対する `CONNECT`）は、PostgreSQL 自身が調べる。PostgreSQL は、既定で `CONNECT` と `TEMPORARY` を `PUBLIC` に与えている。
@@ -335,7 +335,7 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - この行は、適用待ちの列の行のあと、行の前に置く。挿入する行のないテーブルには、この行を出さない。
 - kortopi はこれらの列を比べない。そのため変更として示すことはなく、すでにある行は持っている値を保つ。
 - テーブルにない `on_insert` の列は、宣言した列と同じく `column <name>: known after the schema is applied` として示す。
-- 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、それぞれの値を列の型で読む。読む先は、ロールバックするセーブポイントの中の一時テーブルである。これらの列への権限は要らない。
+- 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、それぞれの値を列の型で読む。値ごとに、ロールバックする専用のセーブポイントの中で、その列だけを持つ一時テーブルを作り、値を挿入する。一時テーブルの列は、テーブルの列から型を受け継ぐ。そのため、ほかの列が値や既定値を得ることはない。また、ロールには、型を読むためにこれらの列に対する `SELECT` が要る。宣言した列と同じである（[セッションに要るもの](#セッションに要るもの)）。
 
 ### 削除する行を参照する行
 
@@ -602,4 +602,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:ed628e62d6810a48d6507a272e9934adb1471ea70f65767a0225c0ec6cea0daa -->
+<!-- i18n-source: plan.md sha256:e30bcde1b15ddd3c35330eb1b363de70e34d1dbb2770810a1049aecf019c040d -->

@@ -4,9 +4,13 @@ package postgres
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -104,24 +108,32 @@ func TestCheckValues(t *testing.T) {
 	}
 }
 
-// CheckValues needs no privilege on the table beyond what a plan needs: a
-// role with USAGE on the schema and TEMPORARY on the database, and no SELECT
-// on the columns that on_insert names, can check their values. In a session
-// of an apply, the values leave nothing behind either.
+// CheckValues reads the types of the columns of on_insert, so a role needs
+// SELECT on them, as on the declared columns: without it, the check stops
+// with the error of the privilege before any value is read. With it, and
+// with USAGE on the schema of the table and TEMPORARY on the database, the
+// role can check the values. In a session of an apply, the values leave
+// nothing behind either.
 func TestCheckValuesPrivilegesAndApply(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)
 			db.Exec(t, onInsertSchema)
 			reader := db.Role(t, "reader")
-			db.Exec(t, "GRANT USAGE ON SCHEMA app TO "+reader.User+"; GRANT SELECT (id) ON app.t TO "+reader.User)
+			db.Exec(t, "GRANT USAGE ON SCHEMA app TO "+quoteIdent(reader.User)+"; GRANT SELECT (id, n) ON app.t TO "+quoteIdent(reader.User))
 			ctx := t.Context()
 			values := []config.InsertValue{{Column: "at", Value: "now"}, {Column: "n", Value: "x"}}
 			want := []plan.RefusedValue{{Column: "n", Reason: `invalid input syntax for type integer: "x"`}}
 
 			s := db.sessionWith(t, reader, t.TempDir())
+			denied := `a plan needs SELECT on table app.t, and the role "` + reader.User + `" may not read its column "at": grant the role SELECT on the table`
+			if refused, err := s.CheckValues(ctx, onInsertTable, values); err == nil || err.Error() != denied || refused != nil {
+				t.Errorf("CheckValues as a role without SELECT on a column = %+v, %v, want the error %s", refused, err, denied)
+			}
+			db.Exec(t, "GRANT SELECT (at) ON app.t TO "+quoteIdent(reader.User))
+			s = db.sessionWith(t, reader, t.TempDir())
 			if refused, err := s.CheckValues(ctx, onInsertTable, values); err != nil || !slices.Equal(refused, want) {
-				t.Errorf("CheckValues as a role without SELECT on the columns = %+v, %v, want %+v", refused, err, want)
+				t.Errorf("CheckValues as a role with SELECT on the columns = %+v, %v, want %+v", refused, err, want)
 			}
 
 			a := db.applySession(t, db.Config, t.TempDir())
@@ -134,6 +146,134 @@ func TestCheckValuesPrivilegesAndApply(t *testing.T) {
 			}
 			if err := a.Close(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// onInsertTypesSchema has a table whose columns of on_insert take types that
+// the check must read as the columns do: a domain that is NOT NULL, a domain
+// with a default from a sequence, a type in a schema that the role of the
+// tests may not use, a domain whose schema and name need quotes, type
+// modifiers, an array of a type with a modifier, and an enum.
+const onInsertTypesSchema = `
+CREATE SCHEMA app;
+CREATE DOMAIN app.who AS varchar(10) NOT NULL;
+CREATE SEQUENCE app.tickets;
+CREATE DOMAIN app.ticket AS bigint DEFAULT pg_catalog.nextval('app.tickets');
+CREATE TYPE app.mood AS ENUM ('sad', 'ok');
+CREATE SCHEMA ext;
+CREATE TYPE ext.level AS ENUM ('low', 'high');
+CREATE SCHEMA "We ""Odd"" Ones";
+CREATE DOMAIN "We ""Odd"" Ones"."Mixed Name" AS integer CHECK (VALUE > 0);
+CREATE TABLE app.rooms (
+	name text PRIMARY KEY,
+	created_at timestamptz NOT NULL,
+	created_by app.who,
+	ticket app.ticket,
+	lvl ext.level,
+	odd "We ""Odd"" Ones"."Mixed Name",
+	short varchar(3),
+	price numeric(4, 1),
+	at3 timestamp(3) with time zone,
+	codes varchar(2)[],
+	mood app.mood
+);
+`
+
+// onInsertTypesValues are valid values of on_insert for every column of
+// app.rooms but the key.
+var onInsertTypesValues = map[string]string{
+	"created_at": "now", "created_by": "kortopi", "ticket": "7", "lvl": "high", "odd": "5", "short": "abc",
+	"price": "1.25", "at3": "2026-11-21 09:00:00.12345+00", "codes": "{ab,cd}", "mood": "ok",
+}
+
+// onInsertSettings returns the settings of app.rooms with the values of
+// onInsertTypesValues, and more in place of some of them.
+func onInsertTypesSettings(more map[string]string) *config.Settings {
+	var values []config.InsertValue
+	for column, value := range onInsertTypesValues {
+		if v, ok := more[column]; ok {
+			value = v
+		}
+		values = append(values, config.InsertValue{Column: column, Value: value})
+	}
+	return config.New(map[declaration.TableName]config.Table{{Schema: "app", Name: "rooms"}: {OnInsert: values}})
+}
+
+// The check reads each value by the type of its own column, one value at a
+// time, so the domain NOT NULL of another column, and the default of a
+// domain, play no part: a plan leaves the sequence of that default where it
+// was. A value that the type refuses names its own column. The types are
+// taken from the columns, not looked up by name, so a role that may not use
+// the schema of a type, or a schema whose name needs quotes, plans and
+// applies all the same, and the values arrive as the columns read them.
+func TestOnInsertTypes(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, onInsertTypesSchema)
+			writer := db.Role(t, "writer")
+			db.Exec(t, "GRANT USAGE ON SCHEMA app TO "+quoteIdent(writer.User)+"; GRANT SELECT, INSERT, UPDATE ON app.rooms TO "+quoteIdent(writer.User))
+			dir := writeFiles(t, map[string]string{"app/rooms.csv": "name\nannex\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "rooms", "name")}}
+			ctx := t.Context()
+			sequence := func() []string {
+				return db.Query(t, "SELECT last_value::text || ' ' || is_called::text FROM app.tickets")[0]
+			}
+			before := sequence()
+
+			for _, cfg := range []struct {
+				name string
+				conn *pgx.ConnConfig
+			}{{"superuser", db.Config}, {"role without USAGE on the schemas of the types", writer}} {
+				s := db.sessionWith(t, cfg.conn, dir)
+				p, err := plan.Build(ctx, decl, onInsertTypesSettings(nil), s, plan.Options{})
+				if err != nil {
+					t.Fatalf("plan as the %s: %v", cfg.name, err)
+				}
+				if len(p.Tables) != 1 || len(p.Tables[0].OnInsert) != len(onInsertTypesValues) || len(p.Tables[0].Diff.Inserts) != 1 {
+					t.Errorf("plan as the %s = %+v", cfg.name, p.Tables)
+				}
+				if err := s.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if got := sequence(); !slices.Equal(got, before) {
+					t.Errorf("the sequence after the plan as the %s = %v, want %v", cfg.name, got, before)
+				}
+			}
+
+			// A value that the domain refuses names the column of that
+			// domain, and the others pass.
+			s := db.sessionWith(t, writer, dir)
+			_, err := plan.Build(ctx, decl, onInsertTypesSettings(map[string]string{"created_by": "far too long", "odd": "0"}), s, plan.Options{})
+			settingsFile := filepath.Join(dir, "kortopi.toml")
+			want := settingsFile + `: on_insert of table app.rooms gives column "created_by" the value "far too long", which the type of the column does not read: ` +
+				"value too long for type character varying(10): write the value as a CSV file writes a value of the column\n" +
+				settingsFile + `: on_insert of table app.rooms gives column "odd" the value "0", which the type of the column does not read: ` +
+				`value for domain "We ""Odd"" Ones"."Mixed Name" violates check constraint "Mixed Name_check": write the value as a CSV file writes a value of the column`
+			if err == nil || err.Error() != want {
+				t.Errorf("plan with values that the domains refuse = %v, want\n%s", err, want)
+			}
+
+			a, err := ConnectConfig(ctx, writer, Options{Dir: dir, Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := apply.Run(ctx, decl, onInsertTypesSettings(nil), a, apply.Options{})
+			if closeErr := a.Close(context.Background()); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			if err != nil || r.Inserted != 1 {
+				t.Fatalf("apply as the role = %+v, %v", r, err)
+			}
+			rows := db.Query(t, "SELECT created_by, ticket, lvl, odd, short, price, at3, codes, mood FROM app.rooms")
+			wantRows := [][]string{{"kortopi", "7", "high", "5", "abc", "1.3", "2026-11-21 09:00:00.123+00", "{ab,cd}", "ok"}}
+			if !slices.EqualFunc(rows, wantRows, slices.Equal) {
+				t.Errorf("rows after the apply = %v, want %v", rows, wantRows)
+			}
+			if got := sequence(); !slices.Equal(got, before) {
+				t.Errorf("the sequence after the apply = %v, want %v", got, before)
 			}
 		})
 	}

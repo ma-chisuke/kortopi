@@ -16,9 +16,9 @@ func onInsertMeta() *tableMeta {
 	return &tableMeta{
 		name: declaration.TableName{Schema: "s", Name: "t"}, exists: true,
 		columns: []columnMeta{
-			{name: "id", typeName: `"pg_catalog"."int4"`, fullType: "integer"},
-			{name: "created at", typeName: `"pg_catalog"."timestamptz"`, fullType: "timestamp(3) with time zone"},
-			{name: `by"who`, typeName: `"pg_catalog"."varchar"`, fullType: "character varying(10)"},
+			{name: "id", typeName: `"pg_catalog"."int4"`},
+			{name: "created at", typeName: `"pg_catalog"."timestamptz"`},
+			{name: `by"who`, typeName: `"pg_catalog"."varchar"`},
 		},
 	}
 }
@@ -31,15 +31,11 @@ func TestInsertColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []insertColumn{
-		{name: "created at", fullType: "timestamp(3) with time zone", literal: "'now'"},
-		{name: `by"who`, fullType: "character varying(10)", literal: `E'it''s\n'`},
+		{name: "created at", literal: "'now'"},
+		{name: `by"who`, literal: `E'it''s\n'`},
 	}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("insertColumns = %+v, want %+v", got, want)
-	}
-	sql := createTypedSQL(`pg_temp."kortopi_1"`, got)
-	if want := `CREATE TEMPORARY TABLE pg_temp."kortopi_1" ("created at" timestamp(3) with time zone, "by""who" character varying(10)) ON COMMIT DROP`; sql != want {
-		t.Errorf("createTypedSQL =\n%s\nwant\n%s", sql, want)
 	}
 
 	for _, tt := range []struct {
@@ -93,5 +89,29 @@ func TestCheckValuesWithoutATable(t *testing.T) {
 	}
 	if got, err := s.CheckValues(t.Context(), meta.name, nil); err != nil || got != nil {
 		t.Errorf("CheckValues of no values = %v, %v, want nothing", got, err)
+	}
+}
+
+// The check reads the types of the columns of on_insert, so it needs USAGE
+// on the schema and SELECT on those columns, as for the declared columns:
+// the privilege check of a plan comes before any value is read.
+func TestCheckValuesPrivileges(t *testing.T) {
+	meta := onInsertMeta()
+	s := &Session{role: "planner", tables: map[declaration.TableName]*tableMeta{meta.name: meta}}
+	values := []config.InsertValue{{Column: "created at", Value: "now"}, {Column: `by"who`, Value: "x"}}
+	usage := `a plan needs USAGE on schema "s" and SELECT on table s.t, and the role "planner" lacks USAGE on the schema: ` +
+		"grant the role USAGE on the schema and SELECT on the table, or narrow the plan with --schema to the schemas that the role may use"
+	if _, err := s.CheckValues(t.Context(), meta.name, values); err == nil || err.Error() != usage {
+		t.Errorf("CheckValues without USAGE = %v, want %s", err, usage)
+	}
+	meta.schemaUsage = true
+	none := `a plan needs SELECT on table s.t, and the role "planner" lacks it: grant the role SELECT on the table`
+	if _, err := s.CheckValues(t.Context(), meta.name, values); err == nil || err.Error() != none {
+		t.Errorf("CheckValues without SELECT = %v, want %s", err, none)
+	}
+	meta.columns[1].selectable = true
+	one := `a plan needs SELECT on table s.t, and the role "planner" may not read its column "by\"who": grant the role SELECT on the table`
+	if _, err := s.CheckValues(t.Context(), meta.name, values); err == nil || err.Error() != one {
+		t.Errorf("CheckValues without SELECT on one column = %v, want %s", err, one)
 	}
 }

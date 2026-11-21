@@ -50,7 +50,7 @@ apply は何も尋ねない。実行する前に、`kortopi plan` で計画を�
 
 ## apply に要るもの
 
-apply には、計画に要るものがすべて要る（[kortopi plan](plan.ja.md#セッションに要るもの)）。書き込みのできるプライマリのセッション、データベースに対する `TEMPORARY`、スキーマに対する `USAGE`、宣言した列に対する `SELECT` である。行単位セキュリティがロールから行を隠していてはならない。
+apply には、計画に要るものがすべて要る（[kortopi plan](plan.ja.md#セッションに要るもの)）。書き込みのできるプライマリのセッション、データベースに対する `TEMPORARY`、スキーマに対する `USAGE`、宣言した列と `on_insert` の列に対する `SELECT` である。行単位セキュリティがロールから行を隠していてはならない。
 さらに、テーブルの変更の種類ごとに権限が要る。
 
 | 行のあるテーブル | 権限 | 検査する時点 |
@@ -381,4 +381,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:eaa4dc09d474b99dc21eab48f976c04b19d05fa50a82c741a2e131dc5a8904e9 -->
+<!-- i18n-source: apply.md sha256:5430203db63cf0228611b5f99201d8e1fa4b54c7a04cd1e83a31d1b56bb29550 -->

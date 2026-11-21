@@ -61,8 +61,8 @@ func scriptSession(partitioned, identity bool) *Session {
 			{name: "id", typ: 23, typeName: `"pg_catalog"."int4"`, eq: op, ordered: true, identityAlways: identity},
 			{name: "order", typ: 25, typeName: `"pg_catalog"."text"`, eq: op, ordered: true},
 			{name: "Name", typ: 25, typeName: `"pg_catalog"."text"`, eq: op, ordered: true},
-			{name: "at", typ: 1184, typeName: `"pg_catalog"."timestamptz"`, fullType: "timestamp with time zone"},
-			{name: "by", typ: 25, typeName: `"pg_catalog"."text"`, fullType: "text"},
+			{name: "at", typ: 1184, typeName: `"pg_catalog"."timestamptz"`},
+			{name: "by", typ: 25, typeName: `"pg_catalog"."text"`},
 		},
 	}
 	return &Session{tables: map[declaration.TableName]*tableMeta{meta.name: meta}}

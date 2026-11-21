@@ -66,14 +66,14 @@ kortopi は、宣言が挙げない列には、新しい行でその列の既定
 - 照合キーの列はエラーである。宣言したどの行も、自分のキーを持つからである。
 - 生成列と、`GENERATED ALWAYS` の識別列はエラーである。どちらも挿入で値を受け取らない。
 - テーブルにない列は、テーブルにない宣言した列と同じに扱う。計画の行を伴ってスキーマの変更を待ち（ADR-0016）、テーブルの列と空白か大小だけが違う名前はエラーであり（ADR-0031）、`--no-pending` があればエラーになり（ADR-0034）、apply はそこで止まる。
-- ほかのすべての値は、挿入する行がないときも含めて必ず PostgreSQL が読む。PostgreSQL が拒んだ値はエラーであり、エラーは設定ファイル・テーブル・列・引用符で囲んだ値・PostgreSQL のメッセージを挙げる。値は、テーブルの列と同じ型（型修飾子とドメインを含む）の列を持つ一時テーブルに、ロールバックするセーブポイントの中で入れる。拒まれた値が計画を中断させないようにするためである。この検査はテーブルの行も列も読まないので、計画が必要とする `TEMPORARY` 権限のほかに権限を要しない（ADR-0024）。
+- ほかのすべての値は、挿入する行がないときも含めて必ず PostgreSQL が読む。PostgreSQL が拒んだ値はエラーであり、エラーは設定ファイル・テーブル・列・引用符で囲んだ値・PostgreSQL のメッセージを挙げる。値は1つずつ、ロールバックする専用のセーブポイントの中で、その列だけを持つ一時テーブルに入れる。一時テーブルの列は、宣言の行の一時テーブルと同じく、型修飾子とドメインを含めてテーブルの列から型を受け継ぐ（ADR-0024）。そのため、拒まれた値は計画を中断させず、ほかの列が値や既定値を得ることはなく、型を名前で探すこともない。この検査はこれらの列の型を読むので、計画と apply には、宣言した列と同じくこれらの列に対する `SELECT` が要る。計画がもともと必要とする `TEMPORARY` 権限も要る。この権限は、どの値を読むよりも前にカタログで確かめる。
 - どのファイルも宣言しないテーブルの `on_insert` は、そうしたテーブルのほかの設定と同じくエラーである（ADR-0022）。
 - 宣言が挙げない `NOT NULL` で既定値のない列についての ADR-0026 の検査は、`on_insert` の列を除く。そのメッセージは、列を宣言することとスキーマで既定値を与えることに並べて、`on_insert` を解決策として挙げる。
 
 出力と文：
 
 - 計画は、挿入する行のあるテーブルについて、`on insert: created_at="now"` という行を1つ、適用待ちの列の行のあと、行の前に示す。値は、設定が書く文字列のまま、常に二重引用符で囲み、Go のエスケープを使って出す。同じ設定の2つの計画が同じ行を出すようにするためである。挿入する行のないテーブルには、この行を出さない。これは、テーブルの行を列挙する ADR-0024 を細かくする。
-- apply の挿入は、宣言した列のあとに `on_insert` の列を挙げ、それぞれの値をキャストのない文字列リテラルで書く。PostgreSQL は、それを受け取る列の型でこのリテラルを読む。apply は最初の書き込みの前に、これらの列の `INSERT` 権限も確かめ、文が挿入した行の件数をこれまでどおり確かめる。これは、挿入がキーと比べる列だけを挙げるとする ADR-0026 を細かくする。
+- apply の挿入は、宣言した列のあとに `on_insert` の列を挙げ、それぞれの値をキャストのない文字列リテラルで書く。PostgreSQL は、それを受け取る列の型でこのリテラルを読む。apply には、検査のための `SELECT` に加えて、これらの列に対する `INSERT` も要る。apply は最初の書き込みの前にそれを確かめ、文が挿入した行の件数をこれまでどおり確かめる。これは、挿入がキーと比べる列だけを挙げるとする ADR-0026 を細かくする。
 - SQL としての計画の `INSERT` もこれらの列を挙げ、スクリプトがあらゆる値に使うリテラルで値を書く（ADR-0029）。文の前の2行のコメントが値を挙げ、PostgreSQL がそれをスクリプトの実行時に、そのセッションの設定で読むことを述べる。したがって `now` のような値は、スクリプトを実行するトランザクションの時刻になる。これは、どのセッションでも同じに読めるリテラルを書くとする ADR-0029 を細かくする。`on_insert` の値は設定の文字列であり、計画が出力した値ではないからである。
 - まだどのファイルも宣言していないテーブルの書き出しは、生成列に並べて、設定が `on_insert` に挙げる列を除く。新しいファイルと設定がぶつからないようにするためである。書き出し直しは、そのファイルが宣言した列を保つ。これは、新しいファイルが生成列のほかのすべての列を持つとする ADR-0028 を細かくする。
 
@@ -87,7 +87,8 @@ kortopi は、宣言が挙げない列には、新しい行でその列の既定
 - 悪い点：kortopi がテーブルに挿入する行は、どれも同じ値を得る。行ごとに違う値が要る列は、引き続き宣言しなければならない。
 - 悪い点：データファイルを読む人は、`kortopi.toml` を開かなければ、新しい行が何を得るかが分からない。ADR-0013 がすべての設定について述べるとおりである。
 - 悪い点：SQL としての計画は、スクリプトの実行時に、それを実行するセッションの設定で値を読む。`now` は計画の時刻ではなくスクリプトの時刻になる。また、オフセットのないタイムスタンプのように意味が設定に左右される値は、apply とは違う値として読まれることがある。オフセット付きのタイムスタンプのように、どこでも同じに読める値を書けば、後者は避けられる。
-- 悪い点：値の検査は、値を持つテーブルごとに一時テーブルを作るので、対象のデータベースの作業が少し増える。
+- 悪い点：値の検査は、値ごとに一時テーブルを作るので、対象のデータベースの作業が少し増える。
+- 悪い点：ロールには `on_insert` の列に対する `SELECT` が要る。kortopi はその列の値を読まないが、検査がその型を読むからである。
 - 悪い点：検査は値を型とドメインだけで読む。テーブルの `CHECK` 制約・外部キー・一意キーに値が反することは、apply でしか見つからない。
 
 ### 確認の方法
@@ -100,11 +101,13 @@ kortopi は、宣言が挙げない列には、新しい行でその列の既定
   - `TestBuildMissingValues` は、`on_insert` がある場合とない場合の、`NOT NULL` の列の検査を確かめる。
   - `TestRender` のゴールデンファイル `on_insert.golden` が、計画の行を固定する。
 - 文・権限・スクリプトのコメント・書き出しの列は、次の単体テストが固定する。
-  - `internal/postgres` の `TestInsertColumns`・`TestRefusedValue`・`TestWriteStatements`・`TestCheckWrites`・`TestScriptStatements`
+  - `internal/postgres` の `TestInsertColumns`・`TestRefusedValue`・`TestCheckValuesPrivileges`
+  - `internal/postgres` の `TestWriteStatements`・`TestCheckWrites`・`TestScriptStatements`
   - `internal/script` の `TestWrite`（`on_insert.golden`）
   - `internal/export` の `TestRun`
 - 残りは、`make check-all` で PostgreSQL 15 から 18 に対して動く結合テストが確かめる。
-  - `internal/postgres` の `TestCheckValues` と `TestCheckValuesPrivilegesAndApply` は、PostgreSQL の拒む値と、そのあともセッションが続くことを確かめる。
+  - `internal/postgres` の `TestCheckValues` と `TestCheckValuesPrivilegesAndApply` は、PostgreSQL の拒む値・そのあともセッションが続くこと・検査の権限を確かめる。
+  - `internal/postgres` の `TestOnInsertTypes` は、ドメイン・型修飾子・ほかのスキーマの型を値ごとに検査することと、計画が既定値のシーケンスを動かさないことを確かめる。
   - `internal/postgres` の `TestApplyOnInsert` と `TestApplyOnInsertPrivileges` は、挿入とその権限を確かめる。
   - `cmd/kortopi` の `TestOnInsertCommand` は、CSV と SQL の宣言について各モードで plan と apply を実行する。トランザクションの時刻が、apply の前後に読んだ時計の時刻の間にあることも確かめる。
   - `cmd/kortopi` の `TestOnInsertMistakes` はエラーを確かめる。`TestOnInsertScriptAndExport` は、素の接続で実行した SQL としての計画と、書き出しを確かめる。
@@ -143,4 +146,4 @@ kortopi は、宣言が挙げない列には、新しい行でその列の既定
   - [docs/reference/apply.ja.md](../reference/apply.ja.md#apply-がすること)
   - [docs/reference/export.ja.md](../reference/export.ja.md#最初の書き出しのあとに直すこと)
 
-<!-- i18n-source: ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md sha256:0ed784cb0dc86e5dfb513288b7f214e2ca0a796a361aa87c483bd5c4024aad05 -->
+<!-- i18n-source: ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md sha256:ff9a5c9f2266412159145027e5cbd01c56808021df12846cde8ec94177fba30c -->
