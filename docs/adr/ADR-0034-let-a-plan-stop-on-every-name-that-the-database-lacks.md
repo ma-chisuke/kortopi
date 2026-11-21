@@ -45,7 +45,7 @@ The rules are as follows.
 - Without such a name, the output and the exit status are exactly those of a plan without the flag.
 - The flag works with `--format text` and `--format sql`, with `--exit-code`, and with `--schema`, which narrows the declared tables before they are checked.
 - `apply` has no such flag. An apply always stops on a table or a column that the database does not have, and changes nothing (ADR-0026). `apply --no-pending` and `export --no-pending` get the error of an unknown flag, with a hint. For an apply, it says that an apply always stops on names that wait for a schema change, and to remove the flag or run `kortopi plan --no-pending` before the apply. For an export, it says that an export always stops on names that the database lacks, and to remove the flag.
-- This refines ADR-0016 and ADR-0024, whose plans show every such name as known after the schema is applied: with `--no-pending`, each is an error.
+- This refines ADR-0016 and ADR-0024, whose plans show every such name as known after the schema is applied: with `--no-pending`, each is an error. ADR-0016 also says that the run in CI that applies the new schema and then the rows to a throwaway PostgreSQL is an ordinary apply and needs nothing special from kortopi. This record recommends a plan with `--no-pending` before that apply, so that a misspelled name stops at the plan, with the file that declares it.
 - It refines ADR-0021 too, whose shape of the command line lists the flags of plan: plan gets `--no-pending`. Status 1 now also means, with `--no-pending`, that a declared table or column does not exist, where `--exit-code` alone counts such a name as a difference, with status 2.
 - It makes the decision that ADR-0031 left to a record of its own.
 
