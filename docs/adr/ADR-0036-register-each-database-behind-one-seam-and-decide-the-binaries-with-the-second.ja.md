@@ -62,7 +62,7 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 
 境界は次の決まりに従う。
 
-- `.golangci.yml` の depguard のルール `postgres` は、`internal/postgres` とドライバー（`github.com/jackc/pgx`）の import を禁じる。SQL のパーサ（`github.com/pganalyze/pg_query_go` と `github.com/wasilibs/go-pgquery`）の import も禁じる。PostgreSQL のテスト用のサーバーを起動するモジュール（`github.com/testcontainers/testcontainers-go/modules/postgres`）も同じである。禁止の対象から外れるのは、`internal/postgres` のファイル、`cmd/kortopi/dialect_postgres.go`、コマンドを PostgreSQL に対して動かす結合テストだけである。`dialect_postgres_off.go` は PostgreSQL の何も import しないので、例外は要らない。そのため、共有のパッケージも、接点も、ほかの DB ごとの部品のパッケージも、これらを import できない。ルールのメッセージは、データベースのコードの置き場所を告げ、ADR-0019 を挙げる。
+- `.golangci.yml` の depguard のルール `postgres` は、`internal/postgres` とドライバーの import を禁じる。ドライバーと同じ作者の、libpq のパスワードファイルとサービスファイルを読むモジュールも禁じ、これらは `github.com/jackc/` の下にすべて入る。SQL のパーサ（`github.com/pganalyze/pg_query_go` と `github.com/wasilibs/go-pgquery`）の import も禁じる。PostgreSQL のテスト用のサーバーを起動するモジュール（`github.com/testcontainers/testcontainers-go/modules/postgres`）も同じである。禁止の対象から外れるのは、`internal/postgres` のファイル、`cmd/kortopi/dialect_postgres.go`、コマンドを PostgreSQL に対して動かす結合テストだけである。`dialect_postgres_off.go` は PostgreSQL の何も import しないので、例外は要らない。そのため、共有のパッケージも、接点も、ほかの DB ごとの部品のパッケージも、これらを import できない。ルールのメッセージは、データベースのコードの置き場所を告げ、ADR-0019 を挙げる。
 - 2つ目の DB ごとの部品には、`postgres` と同じ形の専用のルールを足す。対象はその部品のパッケージとライブラリで、そのパッケージ、その部品を返すコマンドのファイル、その部品に対するコマンドのテストを除くすべての場所で禁じる。2つ目の部品のパッケージは、すでにルール `postgres` の対象なので、PostgreSQL を import できない。
 - これは ADR-0019 を細かくする。境界には、コマンドの中に名前の付いた接点ができ、リンターがその境界を守らせる。これで、ADR-0019 の「確認の方法」に残っていた未決の点が片づく。
 
@@ -115,4 +115,4 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 - 接点は `internal/dialect/dialect.go` で、ルールは `.golangci.yml` の `postgres` である。
 - コマンドの中の PostgreSQL のファイルは、`cmd/kortopi/dialect_postgres.go` と `dialect_postgres_off.go` である。レジストリは、`cmd/kortopi/main.go` の `newRegistry` が作る。
 
-<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:434c65f0587663efcfc25f43d29c03f1e48cc7994bc835ed2476dd6dcc3f6547 -->
+<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:36dd0b64a7878632ed3d24c183c4af68a4feb845b261ce005250c9ee77935a69 -->

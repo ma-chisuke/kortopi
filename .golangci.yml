@@ -70,8 +70,10 @@ linters:
               desc: use math/rand/v2
             - pkg: log$
               desc: use log/slog
-        # The dialect of PostgreSQL: its package, its driver, its SQL parser,
-        # and the module that starts its test servers. Only the dialect
+        # The dialect of PostgreSQL: its package, its driver and the modules
+        # of its author that read the password file and the service file of
+        # libpq, its SQL parser, and the module that starts its test
+        # servers. Only the dialect
         # imports them, with the file of the command that registers it and
         # the tests of the command against PostgreSQL. Every other package,
         # a shared one or the package of another dialect, reaches PostgreSQL
@@ -86,8 +88,8 @@ linters:
           deny:
             - pkg: github.com/ma-chisuke/kortopi/internal/postgres
               desc: code specific to a database goes in the package of its dialect, internal/postgres for PostgreSQL, and every other package reaches it through internal/dialect (ADR-0019)
-            - pkg: github.com/jackc/pgx
-              desc: the driver of PostgreSQL belongs to its dialect, so code that talks to PostgreSQL goes in internal/postgres (ADR-0019)
+            - pkg: github.com/jackc/
+              desc: the driver of PostgreSQL, and the modules that read the password file and the service file of libpq, belong to its dialect, so code that talks to PostgreSQL goes in internal/postgres (ADR-0019)
             - pkg: github.com/pganalyze/pg_query_go
               desc: the SQL parser of PostgreSQL belongs to its dialect, so code that reads SQL goes in internal/postgres (ADR-0019)
             - pkg: github.com/wasilibs/go-pgquery
