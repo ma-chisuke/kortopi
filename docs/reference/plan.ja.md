@@ -310,7 +310,7 @@ kortopi: data/billing/discounts.csv: table billing.discounts does not exist in t
 kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
 ```
 
-- そうしたテーブルと列には、1つごとにエラーを1つ出す。エラーは、それを宣言したファイルと、ファイルが書いたとおりの名前を挙げる。これらのエラーは、計画がどの行も読み込む前に見つけるほかの誤りと一緒に出る（[エラー](#エラー)）。計画は終了コード 1 で終わり、標準出力には何も出さない。
+- そうしたテーブルと列には、1つごとにエラーを1つ出す。エラーは、それを宣言したファイルと、宣言が指す名前を挙げる。CSV ファイルなら書いたとおりの名前であり、SQL ファイルなら PostgreSQL が読んだとおりの名前で、引用符のない名前は小文字になる。これらのエラーは、計画がどの行も読み込む前に見つけるほかの誤りと一緒に出る（[エラー](#エラー)）。計画は終了コード 1 で終わり、標準出力には何も出さない。
 - データベースの名前と空白か大小だけが違う名前は、フラグがないときと同じく、それ自体のエラーになる。
 - 宣言したテーブルと列がすべてあれば、出力と終了コードはフラグなしの計画と同じである。
 - このフラグは、`--format sql`・`--exit-code`・`--schema` と組み合わせて使える。`--schema` は、検査するテーブルを絞る。
@@ -567,4 +567,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:8770407d098118ece283af43918ad32a708704c5afa52707ca6a91f143f7242f -->
+<!-- i18n-source: plan.md sha256:e20493217df088579a476a51ae734c736f489bbb4af9a5e731e0e43c045b36c8 -->

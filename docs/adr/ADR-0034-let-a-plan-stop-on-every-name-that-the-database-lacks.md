@@ -40,7 +40,7 @@ Chosen option: "A flag of plan, `--no-pending`, that makes every pending name an
 The rules are as follows.
 
 - With `kortopi plan --no-pending`, every declared table that the database does not have, and every declared column that its table does not have, is an error instead of a line of the plan.
-- Each such name gets one error. It names the file and the table or the column as the declaration writes it, says that the table or the column does not exist in the database, and says that without `--no-pending` it would wait for the schema change. The errors are among the mistakes that a plan reports together before it loads any row (ADR-0024), and the plan exits with status 1.
+- Each such name gets one error. It names the file and the table or the column as the declaration names it, which is as a CSV file writes it, or as PostgreSQL reads a SQL file, with an unquoted name in lower case. It says that the table or the column does not exist in the database, and says that without `--no-pending` it would wait for the schema change. The errors are among the mistakes that a plan reports together before it loads any row (ADR-0024), and the plan exits with status 1.
 - A name that differs from a name of the database only in white space or case keeps its own error (ADR-0031), and gets no error of `--no-pending`. A column of the match key that `kortopi.toml` names and the table lacks gets the error of the column alone, not also the error of a key column that waits for the schema change.
 - Without such a name, the output and the exit status are exactly those of a plan without the flag.
 - The flag works with `--format text` and `--format sql`, with `--exit-code`, and with `--schema`, which narrows the declared tables before they are checked.

@@ -310,7 +310,7 @@ kortopi: data/billing/discounts.csv: table billing.discounts does not exist in t
 kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
 ```
 
-- Each such table and column gets one error, with the file that declares it and the name as the file writes it. The errors come with the other mistakes that a plan finds before it loads any row ([Errors](#errors)), and the plan exits with status 1 and prints nothing on standard output.
+- Each such table and column gets one error, with the file that declares it and the name as the declaration names it: as a CSV file writes it, or as PostgreSQL reads a SQL file, with an unquoted name in lower case. The errors come with the other mistakes that a plan finds before it loads any row ([Errors](#errors)), and the plan exits with status 1 and prints nothing on standard output.
 - A name that differs from a name of the database only in white space or case gets its own error, as without the flag.
 - When every declared table and column exists, the output and the exit status are those of a plan without the flag.
 - The flag works with `--format sql`, with `--exit-code`, and with `--schema`, which narrows the tables that it checks.
