@@ -556,6 +556,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 - 各文が、計画の示す数の行を変えたかを検査しない。行が計画と違うデータベースでは、行の見つからない更新や削除は、エラーなしに何も変えない。挿入がキーで失敗することもある。文のすることを変えるトリガーやルールにも気づかない。
 - `--max-delete` を当てはめず、削除の前に参照を数え直すこともしない。
 - 更新は値の違う列だけを設定する。そのため、要るのはそれらの列に対する `UPDATE` だけであり、`UPDATE OF` のトリガーもそれらの列でしか働かない。
+- 1つの文で1行を更新する。適用は、テーブルの行を1つの文で更新する。PostgreSQL は、遅らせていない外部キーと、遅らせていなくても `DEFERRABLE` な一意制約を、各文の終わりに検査する。そのため、テーブルのすべての行が変わって初めて成り立つ変更は、適用では動き、スクリプトでは失敗する。そうした一意制約の値を2つの行で入れ替える変更や、同じテーブルのほかの行が参照する値（親カテゴリのコードなど）をその参照と一緒に変える変更である。1つのトランザクションで実行すれば、スクリプトは失敗し、何も変えない。対処は2つある。apply を実行するか、制約を `DEFERRABLE` と宣言し、更新より前の `SET CONSTRAINTS ... DEFERRED` によって、スクリプトのトランザクションの中で遅らせるかである。遅らせられない一意制約は行ごとに検査される。そのため、その値の入れ替えは適用でもできない。
 - 順序と遅らせるキーは、`--allow-delete` のある適用と同じく削除も数えて決める。そのため、削除のコメントを外しても、スクリプトの順序は正しいままである。
 - 適用が拒む外部キーの循環も、エラーにしない。そのテーブルは名前の順に置き、その上にコメントを置く。コメントは、どの外部キーで文が失敗しうるかを示し、そのどれかを `DEFERRABLE` にするように示す。削除があるときだけ適用がその循環を拒むなら、コメントは、`--allow-delete` のある適用はそれを拒み、ない適用は拒まないと示す。
 
@@ -605,4 +606,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:95e6bda8cf7d97f2e0683f00251194571caa515b6870d3532a942d5db6c0d58f -->
+<!-- i18n-source: plan.md sha256:334e52153946bfc42d0dc146fa4ab7fa3d7c4c99a294d2e1689b1fcc7e00487e -->
