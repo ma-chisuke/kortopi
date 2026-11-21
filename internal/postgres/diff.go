@@ -85,7 +85,7 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		if _, err := tx.Exec(ctx, "ANALYZE "+c.declared); err != nil {
 			return fmt.Errorf("analyze the declared rows of table %s: %w", table.Name, err)
 		}
-		if err := s.checkKeys(ctx, tx, table, c); err != nil {
+		if err := s.checkKeys(ctx, tx, table, c, splitColumns(meta, c)); err != nil {
 			return err
 		}
 		if err := s.checkNotNull(ctx, tx, table, c, req.Updates); err != nil {
@@ -170,6 +170,15 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 	}
 	if c.compare, err = requestColumns(meta, table, req.Compare); err != nil {
 		return nil, nil, err
+	}
+	for i, col := range c.compare {
+		// An interval compares by its months, its days, and its time, which
+		// its text tells apart and its equality does not (ADR-0040). A key
+		// column keeps the equality of its type, as the unique index of the
+		// key does, and checkKeys stops a plan where the two disagree.
+		if m, _ := meta.column(col.name); m.interval {
+			c.compare[i].eq = textEquality
+		}
 	}
 	if c.notNull, err = requestColumns(meta, table, req.NotNull); err != nil {
 		return nil, nil, err
@@ -426,8 +435,11 @@ func (s *Session) insertSQL(ctx context.Context, tx pgx.Tx, table declaration.Ta
 
 // checkKeys returns an error when a declared row holds NULL in a key column,
 // or when two declared rows hold the same key: such rows match no stored
-// row, or the same one.
-func (s *Session) checkKeys(ctx context.Context, tx pgx.Tx, table declaration.Table, c *comparison) error {
+// row, or the same one. For the key columns of splits, whose type holds an
+// interval, it also returns an error when the equality of their type and
+// their text disagree on a declared key (checkDeclaredSplits and
+// checkStoredSplits).
+func (s *Session) checkKeys(ctx context.Context, tx pgx.Tx, table declaration.Table, c *comparison, splits []column) error {
 	names := make([]string, len(c.key))
 	for i, k := range c.key {
 		names[i] = k.name
@@ -441,6 +453,10 @@ func (s *Session) checkKeys(ctx context.Context, tx pgx.Tx, table declaration.Ta
 	if nulls > 0 {
 		return fmt.Errorf("%s: %d declared %s NULL in the key (%s): give every row a value in each key column",
 			table.Path(s.dir), nulls, plural(nulls, "row holds", "rows hold"), keyNames)
+	}
+	// Keys that differ only by their text would look repeated below.
+	if err := s.checkDeclaredSplits(ctx, tx, table, c, splits); err != nil {
+		return err
 	}
 
 	rows, err := tx.Query(ctx, c.duplicatesSQL(maxDuplicates+1))
@@ -470,7 +486,7 @@ func (s *Session) checkKeys(ctx context.Context, tx pgx.Tx, table declaration.Ta
 		return fmt.Errorf("check the keys of the declared rows of table %s: %w", table.Name, err)
 	}
 	if len(dups) == 0 {
-		return nil
+		return s.checkStoredSplits(ctx, tx, table, c, splits)
 	}
 	more := ""
 	if len(dups) > maxDuplicates {

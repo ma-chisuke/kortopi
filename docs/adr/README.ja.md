@@ -44,6 +44,7 @@
 | [ADR-0036](ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.ja.md) | データベースはそれぞれ1つの接点に登録し、バイナリを1つにするかデータベースごとに分けるかは2つ目のデータベースが来たときに決める | accepted | 2026-11-21 |
 | [ADR-0037](ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) | apply の行はセッションの設定で書き、書く行は固定した設定で決める | accepted | 2026-11-21 |
 | [ADR-0038](ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) | apply がルールを通して書くことになる、宣言したテーブルのルールで止まる | accepted | 2026-11-22 |
+| [ADR-0040](ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) | 期間は月数・日数・時間で比べる | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.ja.md) | issue は、必須の欄を持つフォームで書く | accepted | 2026-11-21 |
 
-<!-- i18n-source: README.md sha256:1a4c490666e1ff74ee45e8514f2b94b83b103199050a5c9418faf6ce9156d2cb -->
+<!-- i18n-source: README.md sha256:3234222659ffee6b52aad6e5beb250c03cfdb5e6803c4a65b39f5e1f1009a173 -->

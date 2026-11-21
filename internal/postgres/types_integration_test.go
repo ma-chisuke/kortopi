@@ -65,7 +65,8 @@ var typeCases = []typeCase{
 	{name: "time written differently", typ: "time", stored: "'09:00'", csv: "09:00:00.000", sql: "'9:00 AM'"},
 	{name: "time changed", typ: "time", stored: "'09:00'", csv: "09:00:01", sql: "'09:00:01'", want: `v: "09:00:00" -> "09:00:01"`},
 	{name: "interval written differently", typ: "interval", stored: "'1 hour'", csv: "60 minutes", sql: "'PT1H'"},
-	{name: "interval of a day equals 24 hours", typ: "interval", stored: "'1 day'", csv: "24:00:00", sql: "'24 hours'"},
+	// An interval compares by its months, days, and time (ADR-0040).
+	{name: "interval of a day against 24 hours", typ: "interval", stored: "'1 day'", csv: "24:00:00", sql: "'24 hours'", want: `v: "1 day" -> "24:00:00"`},
 	{name: "interval changed", typ: "interval", stored: "'1 day'", csv: "2 days", sql: "'2 days'", want: `v: "1 day" -> "2 days"`},
 
 	// jsonb ignores the order of keys and white space; json is compared as
