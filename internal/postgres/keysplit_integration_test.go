@@ -22,6 +22,9 @@ CREATE TABLE k.plans (id integer PRIMARY KEY, code text NOT NULL, span interval 
 INSERT INTO k.plans VALUES (1, 'a', '30 days');
 CREATE TABLE k.sets (spans interval[] PRIMARY KEY, label text);
 INSERT INTO k.sets VALUES ('{"30 days"}', 'x');
+CREATE TYPE k.term AS (n numeric, span interval);
+CREATE TABLE k.terms_of (term k.term PRIMARY KEY, label text);
+INSERT INTO k.terms_of VALUES (ROW(1.0, '1 mon'), 'x');
 `
 
 // storedSplit and declaredSplit are the parts of the errors of a key whose
@@ -45,15 +48,17 @@ func TestIntervalKeys(t *testing.T) {
 			db := database(t, srv)
 			db.Exec(t, intervalKeysSchema)
 			dir := writeFiles(t, map[string]string{
-				"k/terms.csv":       "span,label\n720:00:00,thirty days\nP1D,day\n1 year,year\n",
-				"k/same.csv":        "span,label\n30 days,thirty days\nP1D,day\n1 year,year\n",
-				"k/repeated.csv":    "span,label\n1 day,a\n1 day,b\n",
-				"k/split.csv":       "span,label\n30 days,a\n1 mon,b\n24:00:00,c\n1 day,d\n1 mon,e\n720:00:00,f\n",
-				"k/plans.csv":       "code,span\na,1 mon\n",
-				"k/sets.csv":        "spans,label\n\"{\"\"1 mon\"\"}\",x\n",
-				"k/many.csv":        manySplits(12),
-				"k/one_group.csv":   oneGroup(12),
-				"k/stored_only.csv": "span,label\n1 mon,month\n",
+				"k/terms.csv":          "span,label\n720:00:00,thirty days\nP1D,day\n1 year,year\n",
+				"k/same.csv":           "span,label\n30 days,thirty days\nP1D,day\n1 year,year\n",
+				"k/repeated.csv":       "span,label\n1 day,a\n1 day,b\n",
+				"k/split.csv":          "span,label\n30 days,a\n1 mon,b\n24:00:00,c\n1 day,d\n1 mon,e\n720:00:00,f\n",
+				"k/plans.csv":          "code,span\na,1 mon\n",
+				"k/sets.csv":           "spans,label\n\"{\"\"1 mon\"\"}\",x\n",
+				"k/many.csv":           manySplits(12),
+				"k/one_group.csv":      oneGroup(12),
+				"k/stored_only.csv":    "span,label\n1 mon,month\n",
+				"k/terms_of.csv":       "term,label\n\"(1.0,\"\"1 mon\"\")\",y\n",
+				"k/terms_of_scale.csv": "term,label\n\"(1.00,\"\"1 mon\"\")\",x\n",
 			})
 			s := db.session(t, dir)
 			terms := func(file string) declaration.Table {
@@ -130,6 +135,24 @@ func TestIntervalKeys(t *testing.T) {
 			sets := csvTable("k", "sets", "spans", "label")
 			wantError(t, diffError(t, s, plan.DiffRequest{Table: sets, Key: []string{"spans"}, Compare: []string{"label"}, Updates: true}),
 				filepath.Join(dir, "k", "sets.csv")+": "+storedSplit+`(spans)=({"1 mon"}) matches the stored (spans)=({"30 days"})`)
+
+			// A key of a composite type that holds an interval compares by
+			// its text as a whole: another column of it that differs only in
+			// a way that its type ignores, such as the scale of a numeric,
+			// stops the plan too.
+			termsOf := func(file string) declaration.Table {
+				table := csvTable("k", "terms_of", "term", "label")
+				table.File = "k/" + file + ".csv"
+				return table
+			}
+			termReq := plan.DiffRequest{Key: []string{"term"}, Compare: []string{"label"}, Updates: true}
+			termReq.Table = termsOf("terms_of")
+			checkDiff(t, s, termReq, `~ "(1.0,\"1 mon\")" | label: "x" -> "y"`)
+			termReq.Table = termsOf("terms_of_scale")
+			if err, want := diffError(t, s, termReq), filepath.Join(dir, "k", "terms_of_scale.csv")+": "+storedSplit+
+				`(term)=((1.00,"1 mon")) matches the stored (term)=((1.0,"1 mon"))`+storedSplitAdvice; err.Error() != want {
+				t.Errorf("Diff: %v\nwant %s", err, want)
+			}
 
 			// An apply stops on it too, and changes nothing.
 			before := dump(t, db, "k.terms")

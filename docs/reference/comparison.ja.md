@@ -123,6 +123,10 @@ kortopi: data/billing/terms.csv: declared keys match stored rows by the equality
 
 どちらのエラーも、組かキーを10個まで挙げる。適用も同じように止まる。
 
+期間を含む複合型のキーは、その配列や範囲のキーも含め、値と同じく全体をテキストで比べる（[期間](#期間)）。
+そのため、宣言のキーが保存されているキーと複合型のほかの列だけで違うときも、2つ目のエラーで計画が止まる。その違いがその列の型の無視するものであっても止まる。たとえば、保存されている `(1.0,"1 mon")` に対する `(1.00,"1 mon")` である。
+こうしたキーは、テーブルが持つとおりに宣言する。
+
 ## 型が等しいとみなす値
 
 列の型が保存されている値と等しいとみなす宣言の値は、宣言が別の値を書いていても変更にならない。
@@ -195,4 +199,4 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 
 これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0040](../adr/ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:2791d7e71fa300413b000e3d7fc5965ddd51334c05902ca8998db19d9e32d41b -->
+<!-- i18n-source: comparison.md sha256:3c142911f02b9cb2786c27ba9ae59ea87d90d34e36531164181d30be104483d0 -->

@@ -123,6 +123,10 @@ kortopi: data/billing/terms.csv: declared keys match stored rows by the equality
 
 Each error lists up to ten pairs or keys, and an apply stops in the same way.
 
+A key of a composite type that holds an interval, or of an array or a range of one, compares by its text as a whole, as its values do ([Intervals](#intervals)).
+A declared key that differs from the stored key only in another column of the composite type, in a way that the type of that column ignores, therefore stops the plan with the second error too: `(1.00,"1 mon")` against a stored `(1.0,"1 mon")`, for example.
+Declare such a key as the table stores it.
+
 ## Values that the type takes for equal
 
 A declared value that the type of its column takes for equal to the stored value is no change, also when the declaration writes another value.

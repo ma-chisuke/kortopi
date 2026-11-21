@@ -73,6 +73,7 @@ ADR-0023 は、テストで固めた振る舞いとして「`1 day` と `24 hour
 - 宣言のキーについてこの等価性とテキストが食い違うとき、テーブルは宣言が述べるとおりのものを持てない。そこで計画は、どのモードでも、テーブルを読み込んだあと、値を比べる前に止まる。適用も同じように止まり、何も書かない。
 - `1 mon` と `30 days` のように、テキストは違うのに型の等価性が1つのキーとみなすキーを、宣言の行が持つ場合：テーブルはそのうち1行しか持てない。エラーは、そうしたキーの組を10個まで挙げ、各キーを1回だけ宣言するように促す。このエラーは、繰り返されたキーのエラーより前に出る。繰り返されたキーのエラーでは、テキストのうち1つしか示されないからである。
 - 保存されている `30 days` に対する `1 mon` のように、宣言のキーが型の等価性で保存されている行と照合するのに、テキストがその行のキーと違う場合：計画はキーを決して変えない。また、宣言のキーを挿入すると一意インデックスに反する。適用は削除の前に挿入するので（ADR-0026）、モード `sync` でも同じである。エラーは、そうしたキーを保存されているキーとともに10個まで挙げる。そして、テーブルが持つとおりにキーを宣言するか、kortopi より前に実行するスキーマの変更の中で `UPDATE` によって保存されているキーを変えるように促す。
+- 期間を含む複合型のキーの列は、その配列や範囲のキーの列も含め、値と同じく全体をテキストで比べる。そのため、どちらのエラーも、複合型のほかの列だけが保存されているキーと違う宣言のキーで計画を止める。その違いが、その列の型の無視するものであっても止める。たとえば、保存されている `(1.0,"1 mon")` に対する `(1.00,"1 mon")`、大文字と小文字を区別しない型での大文字と小文字の違い、`-0` と `0` である。こうしたキーはまれであり、kortopi はそれを分解しない。キーは、テーブルが持つとおりに宣言する。
 - これは ADR-0012 と ADR-0023 を細かくする。両者のもとでは、宣言のキーは、キーの一意インデックスが同じとみなす保存されている行と照合する。期間では、照合に部分が同じであることも要るようになり、両者が食い違えば計画は止まる。
 
 ほかの型の等価性についてリファレンスが書くこと。
@@ -91,7 +92,7 @@ ADR-0023 は、テストで固めた振る舞いとして「`1 day` と `24 hour
   An interval now compares by its months, days, and time: `1 mon` no longer equals `30 days`, nor `1 day` `24 hours`. A declaration that writes an interval in another split of parts than the database stores shows one update, which an apply writes. Such an interval in a match key stops the plan with the keys.
   ```
 
-- 悪い点：期間を含む複合型は、すべての列をテキストで比べる。そのため、ほかの列の型が無視する違い（numeric の桁数など）も、そこでは変更として現れる。
+- 悪い点：期間を含む複合型は、すべての列をテキストで比べる。そのため、ほかの列の型が無視する違い（numeric の桁数など）も、比べる列では変更として現れ、キーの列では計画を止める。
 - 悪い点：計画は、照合キーの期間を、部分の別の分け方に変えられない。その変更はスキーマの変更に入れる。
 - 悪い点：numeric の桁数のように、ほかの型の等価性が隠す変更は隠れたままであり、それを伝えるのはリファレンスだけである。
 - 悪い点：この決まりは、スタイル `postgres` での期間の出力に依っている。期間を別の形で出力する PostgreSQL のバージョンがあれば、この決まりは崩れる。テストは、kortopi が対応するどのバージョンでも実行する。
@@ -99,7 +100,7 @@ ADR-0023 は、テストで固めた振る舞いとして「`1 day` と `24 hour
 ### 確認の方法
 
 - `internal/postgres` の単体テストで、次のことを確かめる。`TestResolverHoldsInterval` は、どの型が期間を含むかを確かめる。`TestPrepareInterval` は、そうした型の比べる列をテキストで比べ、キーの列では型の等価性を使い続けることを確かめる。`TestSplitColumns` と `TestKeySplitSQL` は、キーの検査が対象とする列と、その問い合わせを確かめる。
-- 残りは、`internal/postgres` の結合テストで確かめる。結合テストは、`make check-all` で PostgreSQL 15〜18 に対して実行する。`TestIntervalTextTellsItsPartsApart` は、テキストを部分と照らし合わせる。`TestCompareIntervals` は、部分の違う期間と、部分が同じで書き方の違う期間を、CSV と SQL から計画して適用する。対象は、ふつうの列・配列・ドメイン・型修飾子のある列・範囲・複数範囲・複合型であり、負の部分・符号の混じったもの・秒の端数・PostgreSQL 17 からの `infinity` を含む。そして、テーブルがその後に持つテキストと、次の計画が空であることを確かめる。`TestIntervalKeys` は、期間のキーの照合とエラーを確かめる。対象は1列のキー・2列のキー・配列のキーであり、どのモードでも CSV と SQL から確かめる。適用がそれで止まることも確かめる。`TestCompareTypes` は、`1 day` と `24 hours` の違いが変更になることを確かめる。`TestEqualByTheTypeIsNoChange` は、リファレンスがほかの型について挙げる例を1つずつ確かめる。変更が出ないこと、適用が保存されているテキストを残すこと、`UPDATE` で書いた値が残ることである。
+- 残りは、`internal/postgres` の結合テストで確かめる。結合テストは、`make check-all` で PostgreSQL 15〜18 に対して実行する。`TestIntervalTextTellsItsPartsApart` は、テキストを部分と照らし合わせる。`TestCompareIntervals` は、部分の違う期間と、部分が同じで書き方の違う期間を、CSV と SQL から計画して適用する。対象は、ふつうの列・配列・ドメイン・型修飾子のある列・範囲・複数範囲・複合型であり、負の部分・符号の混じったもの・秒の端数・PostgreSQL 17 からの `infinity` を含む。そして、テーブルがその後に持つテキストと、次の計画が空であることを確かめる。`TestIntervalKeys` は、1列の期間のキーの照合と、その2つのエラーをどのモードでも CSV と SQL から確かめる。組を10個までにする上限も確かめる。2列のキー・期間の配列のキー・期間を含む複合型のキーのエラーも確かめる。適用がそれで止まることも確かめる。`TestCompareTypes` は、`1 day` と `24 hours` の違いが変更になることを確かめる。`TestEqualByTheTypeIsNoChange` は、リファレンスがほかの型について挙げる例を1つずつ確かめる。変更が出ないこと、適用が保存されているテキストを残すこと、`UPDATE` で書いた値が残ることである。
 
 ## 選択肢の長所と短所
 
@@ -133,4 +134,4 @@ ADR-0023 は、テストで固めた振る舞いとして「`1 day` と `24 hour
 - [日付と時刻の関数：`extract`](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT)
 - 利用者向けのリファレンス：[docs/reference/comparison.ja.md](../reference/comparison.ja.md)
 
-<!-- i18n-source: ADR-0040-compare-an-interval-by-its-months-days-and-time.md sha256:bb055fc483d048a5a18e493e9b0dfdcc9e0f9d49768bb33bbd4f6c9f4efdb2ba -->
+<!-- i18n-source: ADR-0040-compare-an-interval-by-its-months-days-and-time.md sha256:e30bcddbce6219e54f9170b81b5be8f48583d9e333df3cb5e7a3453aefd4405e -->
