@@ -148,7 +148,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
   - `TestEffectsOfColumnsThatTheRoleMayNotRead`：権限。
   - `TestApplyReferencesAgainBeforeDeletes`：数え直し。
   - `TestApplyEffectAfterConcurrentChanges`：同時の変更。
-  - `TestEffectsOnLargeTables`：大きなテーブルでの費用。
+  - `TestEffectsOnLargeTables`：大きなテーブルでの費用。最新のバージョンだけで測る。
 - `cmd/kortopi` では、`TestApplyEffectOfDeletions` と `TestDeclaredRowsInTheWay` が、各バージョンに対してコマンドを実行する。上限での `SET NULL` とロールの読めないテーブルへの `SET NULL`、3段のカスケード、SQL としての計画、削除とぶつかる宣言した行、計画が変える参照である。各 apply のあとで、すべてのテーブルの行を素の接続で数え、出力が告げたものと比べる。
 
 ## 選択肢の長所と短所
@@ -182,4 +182,4 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - [トランザクションの分離](https://www.postgresql.org/docs/current/transaction-iso.html)：`REPEATABLE READ` と直列化の失敗について
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#削除がほかの行にすること) と [docs/reference/apply.ja.md](../reference/apply.ja.md#削除の安全策)
 
-<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:097aef1aa8bfd0bbedcd0a27584f193992a751945032ddd219cdb716759169a6 -->
+<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:69c5a732918614a7922d4abd853b9e1fdb56732092177478cf58da0af1585cb4 -->

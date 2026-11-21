@@ -148,7 +148,7 @@ After the fact:
   - `TestEffectsOfColumnsThatTheRoleMayNotRead`: privileges;
   - `TestApplyReferencesAgainBeforeDeletes`: the second count;
   - `TestApplyEffectAfterConcurrentChanges`: concurrent changes;
-  - `TestEffectsOnLargeTables`: the cost on large tables.
+  - `TestEffectsOnLargeTables`: the cost on large tables, on the newest version alone.
 - In `cmd/kortopi`, `TestApplyEffectOfDeletions` and `TestDeclaredRowsInTheWay` run the command against each version: `SET NULL` at the limit and into a table that the role may not read, a cascade three levels deep, the plan as SQL, declared rows in the way, and a reference that the plan moves. After each apply, they count the rows of every table through a plain connection and compare them with what the output announced.
 
 ## Pros and Cons of the Options
