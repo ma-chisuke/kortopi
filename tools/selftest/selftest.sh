@@ -810,6 +810,72 @@ case_scope__lintignore() {
   passes
 }
 
+# Two runs of `make check` at once in one checkout, as when a hook starts one
+# while another runs in a terminal. Each keeps the results of its checks in a
+# directory of its own under .cache/check, so each counts and shows its own
+# checks, and removes the directory at the end; so does a target that runs on
+# its own. The first run waits in a check until the second has started one,
+# so the two overlap. A directory that a killed run left behind goes once it
+# is a day old, and not before.
+case_check__two_runs() {
+  TARGET=check
+  # The recipes are on the line of their target, as this file has no tabs.
+  put make/selftest-runs.mk << 'EOF'
+.PHONY: runs-fail runs-pass runs-other
+RUNS := .cache/selftest-runs
+runs-wait = n=0; until [ -f $(RUNS)/$(1) ]; do n=$$((n + 1)); if [ $$n -gt 600 ]; then echo "no $(1) after 60s"; exit 3; fi; sleep 0.1; done
+# The checks of the first run.
+runs-fail: ; @$(TASK) $@ 'touch $(RUNS)/first; $(call runs-wait,second); echo "runs-fail: the failure of the first run"; exit 1'
+runs-pass: ; @$(TASK) $@ 'true'
+# The check of the second run.
+runs-other: ; @$(TASK) $@ 'touch $(RUNS)/second'
+EOF
+  mkdir -p "$COPY/.cache/selftest-runs" "$COPY/.cache/check/run.live" || die 'cannot create the fixtures'
+  put .cache/check/run.stale/lint-go.log 'Left by a run that was killed.'
+  run touch -t 202001010000 .cache/check/run.stale
+
+  local out=$OUT first second n=0
+  (cd "$COPY" && "$make_cmd" --no-print-directory check CHECK_TARGETS='runs-fail runs-pass' CHECK_BUDGET=0) > "$out.first" 2>&1 &
+  first=$!
+  until [ -f "$COPY/.cache/selftest-runs/first" ]; do
+    n=$((n + 1))
+    if [ "$n" -gt 600 ]; then
+      kill "$first" 2> /dev/null
+      cat "$out.first"
+      die 'the first make check started no check in 60s'
+    fi
+    sleep 0.1
+  done
+  (cd "$COPY" && "$make_cmd" --no-print-directory check CHECK_TARGETS=runs-other CHECK_BUDGET=0) > "$out.second" 2>&1
+  second=$?
+  wait "$first"
+  first=$?
+
+  OUT="$out.first" LAST='the first make check'
+  if [ "$first" -eq 0 ]; then
+    report "expected $LAST to fail, but it passed"
+  fi
+  prints 'FAIL  runs-fail'
+  prints 'runs-fail: the failure of the first run'
+  prints 'check: 1 passed, 1 failed'
+  omits 'runs-other'
+
+  OUT="$out.second" LAST='the second make check'
+  if [ "$second" -ne 0 ]; then
+    report "expected $LAST to pass, but it failed"
+  fi
+  prints 'check: 1 passed, 0 failed'
+  omits 'runs-fail'
+
+  OUT=$out
+  run "$make_cmd" --no-print-directory runs-pass
+  LAST='find .cache/check'
+  run find .cache/check -mindepth 1 -maxdepth 1
+  if [ "$(cat "$OUT")" != .cache/check/run.live ]; then
+    report 'expected .cache/check to hold the directory of the run that may be alive, and nothing else'
+  fi
+}
+
 # The license rule of scan-deps (make check-all): a dependency that ships
 # under a forbidden license fails, and one under a weak copyleft license
 # passes. Trivy reads the license of an npm package from node_modules.

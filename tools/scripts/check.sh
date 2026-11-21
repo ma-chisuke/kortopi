@@ -3,6 +3,15 @@
 # enforce the time budget.
 #
 # Usage: check.sh <label> <budget seconds, 0 for none> <target>...
+#
+# Each run keeps the results of its checks in a directory of its own under
+# .cache/check, and passes it to tools/scripts/task.sh in CHECK_STATE_DIR (a
+# value from the caller is not used). So two runs in one checkout, such as
+# `make check-all` in a terminal and `make check` from a hook, never count or
+# delete the results of each other. The run removes its directory when it
+# ends, also when it is interrupted. A run that is killed outright leaves its
+# directory behind, and a later run removes it once it is a day old: no run
+# takes that long, so a directory of that age belongs to no live run.
 set -uo pipefail
 
 label="$1"
@@ -16,12 +25,20 @@ if ! "$(dirname "$0")/files.sh" --verify; then
   exit 1
 fi
 
-state_dir=.cache/check
+state_root=.cache/check
+mkdir -p "$state_root"
+# The directories of killed runs, a day after they last changed.
+find "$state_root" -mindepth 1 -maxdepth 1 -type d -name 'run.*' -mmin +1440 -exec rm -rf {} + 2> /dev/null || true
+# An absolute path, so that a check that changes its directory still finds it.
+state_dir=$(mktemp -d "$PWD/$state_root/run.XXXXXX") || exit 2
+cleanup() {
+  rm -rf "$state_dir"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 export CHECK_STATE_DIR="$state_dir"
-mkdir -p "$state_dir"
-# Forget the results of the previous run.
-find "$state_dir" -maxdepth 1 -type f \( -name '*.status' -o -name '*.log' \) -delete
-rmdir "$state_dir/.print.lock" 2> /dev/null || true
 
 start=$(date +%s)
 "${MAKE:-make}" --no-print-directory --keep-going --jobs "${JOBS:-8}" "$@" 2> "$state_dir/make.stderr"
