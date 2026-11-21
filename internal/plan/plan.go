@@ -35,6 +35,16 @@ type Database interface {
 	CountRows(ctx context.Context, table declaration.Table) (int, error)
 }
 
+// Options change what Build reports.
+type Options struct {
+	// NoPending makes every declared table and column that the database does
+	// not have a mistake, reported with the other mistakes before any row is
+	// compared, instead of a table or a column that waits for a schema change
+	// (ADR-0034). A run that knows that the schema is applied sets it, so
+	// that a misspelled name stops the plan.
+	NoPending bool
+}
+
 // TableInfo is what the database knows about a table.
 type TableInfo struct {
 	Exists  bool

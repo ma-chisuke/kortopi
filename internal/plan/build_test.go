@@ -81,6 +81,12 @@ func csvTable(name declaration.TableName, cols ...string) declaration.Table {
 	}
 }
 
+// inSeedSQL returns the declaration of t moved into the SQL file seed.sql.
+func inSeedSQL(t declaration.Table) declaration.Table {
+	t.Format, t.File = declaration.SQL, "seed.sql"
+	return t
+}
+
 // existing returns a table that exists with the columns, all of them NOT
 // NULL, and the primary key.
 func existing(pk []string, cols ...string) TableInfo {
@@ -218,7 +224,7 @@ func TestBuildRequests(t *testing.T) {
 
 			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: tt.info}}
 			decl := &declaration.Declaration{Tables: []declaration.Table{tt.table}}
-			p, err := Build(t.Context(), decl, config.New(map[declaration.TableName]config.Table{tableT: tt.settings}), db)
+			p, err := Build(t.Context(), decl, config.New(map[declaration.TableName]config.Table{tableT: tt.settings}), db, Options{})
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -269,7 +275,7 @@ func TestBuildTables(t *testing.T) {
 	}}
 	settings := config.New(map[declaration.TableName]config.Table{tableU: {Mode: config.ModeSync}})
 
-	p, err := Build(t.Context(), decl, settings, db)
+	p, err := Build(t.Context(), decl, settings, db, Options{})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -303,7 +309,7 @@ func TestBuildWithoutSettings(t *testing.T) {
 
 	db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: existing([]string{"id"}, "id")}}
 	decl := &declaration.Declaration{Tables: []declaration.Table{csvTable(tableT, "id")}}
-	p, err := Build(t.Context(), decl, nil, db)
+	p, err := Build(t.Context(), decl, nil, db, Options{})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -319,7 +325,7 @@ func TestBuildNoTables(t *testing.T) {
 	t.Parallel()
 
 	db := &fakeDB{}
-	p, err := Build(t.Context(), &declaration.Declaration{}, nil, db)
+	p, err := Build(t.Context(), &declaration.Declaration{}, nil, db, Options{})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -490,6 +496,16 @@ func TestBuildErrors(t *testing.T) {
 			want:     `table a.t has no column "code" yet, and no row can be matched by a key column that waits for the schema change: apply the schema first, or name another key with key in data/kortopi.toml`,
 		},
 		{
+			// The key column that the file declares in another case has its
+			// error, and the key column before it keeps its own.
+			name:     "chosen key with an unknown column and a column in another case",
+			table:    csvTable(tableT, "id", "Code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"zone", "Code"}},
+			want: `data/a/t.csv: column "Code" is not a column of table a.t, but column "code" is, whose name differs only in white space or case: write the name as the table has it` + "\n" +
+				`data/kortopi.toml: key of table a.t names column "zone", which the table does not have: correct the key`,
+		},
+		{
 			name:     "chosen key column that the table does not have",
 			table:    csvTable(tableT, "code", "name"),
 			info:     with(existing(pk, "id", "code", "name"), unique([]string{"code"})),
@@ -558,7 +574,7 @@ func TestBuildErrors(t *testing.T) {
 
 			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: tt.info}}
 			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{tt.table}}
-			p, err := Build(t.Context(), decl, config.New(map[declaration.TableName]config.Table{tableT: tt.settings}), db)
+			p, err := Build(t.Context(), decl, config.New(map[declaration.TableName]config.Table{tableT: tt.settings}), db, Options{})
 			if err == nil {
 				t.Fatalf("Build() = %+v, want an error", p)
 			}
@@ -584,7 +600,7 @@ func TestBuildErrorsOfSeveralTables(t *testing.T) {
 		csvTable(tableU, "id"),
 		csvTable(tableV, "id"),
 	}}
-	_, err := Build(t.Context(), decl, nil, db)
+	_, err := Build(t.Context(), decl, nil, db, Options{})
 
 	want := `table a.t has neither a primary key nor a unique key, and a match key must be one of them: give the table a primary key in the schema, or a unique key that you name with key in [tables."a.t"] of kortopi.toml` + "\n" +
 		`table c.v has neither a primary key nor a unique key, and a match key must be one of them: give the table a primary key in the schema, or a unique key that you name with key in [tables."c.v"] of kortopi.toml`
@@ -641,7 +657,7 @@ func TestBuildDatabaseErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			p, err := Build(t.Context(), decl, nil, tt.db)
+			p, err := Build(t.Context(), decl, nil, tt.db, Options{})
 			if err == nil || err.Error() != tt.want {
 				t.Fatalf("Build() = %+v, %v, want error %q", p, err, tt.want)
 			}
@@ -717,7 +733,7 @@ func TestBuildMissingValues(t *testing.T) {
 
 			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: info, tableU: info}, diffs: tt.diffs, diffErrs: tt.diffErrs}
 			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id", "note"), csvTable(tableU, "id")}}
-			p, err := Build(t.Context(), decl, nil, db)
+			p, err := Build(t.Context(), decl, nil, db, Options{})
 			if tt.want == "" {
 				if err != nil {
 					t.Errorf("Build() error = %v", err)
@@ -768,7 +784,7 @@ func TestBuildNearNames(t *testing.T) {
 			if tt.want == "" {
 				decl.Tables = decl.Tables[:1]
 			}
-			p, err := Build(t.Context(), decl, nil, db)
+			p, err := Build(t.Context(), decl, nil, db, Options{})
 			if tt.want == "" {
 				if err != nil || !p.Tables[0].PendingTable {
 					t.Errorf("Build() = %+v, %v, want table a.t pending", p, err)
@@ -782,6 +798,228 @@ func TestBuildNearNames(t *testing.T) {
 			}
 			if len(db.requests) != 0 || len(db.counted) != 0 {
 				t.Errorf("Build() called Diff %d times and CountRows %d times, want no call", len(db.requests), len(db.counted))
+			}
+		})
+	}
+}
+
+// With NoPending, every declared table and column that the database does not
+// have is a mistake, one error for each, reported with the other mistakes
+// before any row is loaded. A name that differs from a name of the database
+// only in white space or case keeps its own error.
+func TestBuildNoPending(t *testing.T) {
+	t.Parallel()
+
+	missingTable := func(table string) string {
+		return filepath.FromSlash("data/"+table[:1]+"/"+table[2:]+".csv") + ": table " + table +
+			" does not exist in the database, and without --no-pending it would wait for the schema change: " +
+			"correct the name, or apply the schema change that adds the table"
+	}
+	missingColumn := func(table, column string) string {
+		return filepath.FromSlash("data/"+table[:1]+"/"+table[2:]+".csv") + ": column " + strconv.Quote(column) + " of table " + table +
+			" does not exist in the database, and without --no-pending it would wait for the schema change: " +
+			"correct the name, or apply the schema change that adds the column"
+	}
+	// a.t has the columns id, name, and sort_order; b.u and c.v do not exist.
+	infos := map[declaration.TableName]TableInfo{tableT: existing([]string{"id"}, "id", "name", "sort_order")}
+	tableWithSpace := declaration.TableName{Schema: "a", Name: "t v"}
+	tests := []struct {
+		name     string
+		tables   []declaration.Table
+		infos    map[declaration.TableName]TableInfo
+		settings map[declaration.TableName]config.Table
+		want     string
+	}{
+		{
+			name:   "a table that the database lacks",
+			tables: []declaration.Table{csvTable(tableT, "id", "name"), csvTable(tableU, "id")},
+			want:   missingTable("b.u"),
+		},
+		{
+			name:   "a misspelled column",
+			tables: []declaration.Table{csvTable(tableT, "id", "name", "sortorder")},
+			want:   missingColumn("a.t", "sortorder"),
+		},
+		{
+			name:   "a column with a space inside its name",
+			tables: []declaration.Table{csvTable(tableT, "id", "sort order")},
+			want:   missingColumn("a.t", "sort order"),
+		},
+		{
+			// The table is named as in the other errors of its columns.
+			name:   "a column of a table whose name holds a space",
+			tables: []declaration.Table{csvTable(tableWithSpace, "id", "floor", "total")},
+			infos: map[declaration.TableName]TableInfo{
+				tableWithSpace: with(existing([]string{"id"}, "id", "total"), func(i *TableInfo) { i.Columns[1].Generated = true }),
+			},
+			want: missingColumn("a.t v", "floor") + "\n" +
+				filepath.FromSlash(`data/a/t v.csv: column "total" of table a.t v is generated, so the database computes its value: remove the column from the file`),
+		},
+		{
+			name:   "columns and a table",
+			tables: []declaration.Table{csvTable(tableT, "id", "floor", "name", "wing"), csvTable(tableU, "id")},
+			want:   missingColumn("a.t", "floor") + "\n" + missingColumn("a.t", "wing") + "\n" + missingTable("b.u"),
+		},
+		{
+			name:   "several tables",
+			tables: []declaration.Table{csvTable(tableT, "id"), csvTable(tableU, "id"), csvTable(tableV, "code")},
+			want:   missingTable("b.u") + "\n" + missingTable("c.v"),
+		},
+		{
+			name:   "with names in another case",
+			tables: []declaration.Table{csvTable(tableT, "id", "Name", "floor"), csvTable(tableU, "id"), csvTable(tableV, "id")},
+			infos: map[declaration.TableName]TableInfo{
+				tableT: infos[tableT],
+				tableU: {NearNames: []declaration.TableName{{Schema: "b", Name: "U"}}},
+			},
+			want: filepath.FromSlash(`data/a/t.csv: column "Name" is not a column of table a.t, but column "name" is, whose name differs only in white space or case: write the name as the table has it`) + "\n" +
+				missingColumn("a.t", "floor") + "\n" +
+				filepath.FromSlash(`data/b/u.csv: table b.u does not exist, but table b.U does, whose name differs only in white space or case: write the name as the database has it`) + "\n" +
+				missingTable("c.v"),
+		},
+		{
+			// A schema in another case gets its own error, and no error
+			// of --no-pending.
+			name:   "with a schema in another case",
+			tables: []declaration.Table{csvTable(tableU, "id"), csvTable(tableV, "id")},
+			infos:  map[declaration.TableName]TableInfo{tableU: {NearSchemas: []string{"B"}}},
+			want: filepath.FromSlash(`data/b/u.csv: schema "b" of table b.u does not exist, but schema "B" does, whose name differs only in white space or case: write the name as the database has it`) + "\n" +
+				missingTable("c.v"),
+		},
+		{
+			// Both errors name the SQL file, which declares both tables.
+			name:   "a SQL file that declares a table that the database lacks and a missing column",
+			tables: []declaration.Table{inSeedSQL(csvTable(tableT, "id", "floor")), inSeedSQL(csvTable(tableU, "id"))},
+			want: filepath.FromSlash("data/seed.sql") + `: column "floor" of table a.t does not exist in the database, and without --no-pending it would wait for the schema change: ` +
+				"correct the name, or apply the schema change that adds the column\n" +
+				filepath.FromSlash("data/seed.sql") + ": table b.u does not exist in the database, and without --no-pending it would wait for the schema change: " +
+				"correct the name, or apply the schema change that adds the table",
+		},
+		{
+			name:   "with the other mistakes of a table",
+			tables: []declaration.Table{csvTable(tableT, "name", "floor"), csvTable(tableU, "id")},
+			settings: map[declaration.TableName]config.Table{
+				tableT: {Mode: "merge"},
+				tableU: {Mode: "merge"},
+			},
+			want: filepath.FromSlash(`data/kortopi.toml: mode "merge" of table a.t is unknown: use insert, upsert, or sync`) + "\n" +
+				missingColumn("a.t", "floor") + "\n" +
+				filepath.FromSlash(`data/a/t.csv: column "id" of the primary key of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml`) + "\n" +
+				filepath.FromSlash(`data/kortopi.toml: mode "merge" of table b.u is unknown: use insert, upsert, or sync`) + "\n" +
+				missingTable("b.u"),
+		},
+		{
+			// The column is the mistake, not the key that names it.
+			name:   "a key column that the table lacks",
+			tables: []declaration.Table{csvTable(tableT, "code", "name")},
+			infos: map[declaration.TableName]TableInfo{
+				tableT: with(infos[tableT], func(i *TableInfo) { i.UniqueKeys = [][]string{{"name"}} }),
+			},
+			settings: map[declaration.TableName]config.Table{tableT: {Key: []string{"code"}}},
+			want:     missingColumn("a.t", "code"),
+		},
+		{
+			// The key column before the one that the table lacks keeps its
+			// error.
+			name:   "a key with an unknown column and a column that the table lacks",
+			tables: []declaration.Table{csvTable(tableT, "code", "name")},
+			infos: map[declaration.TableName]TableInfo{
+				tableT: with(infos[tableT], func(i *TableInfo) { i.UniqueKeys = [][]string{{"name"}} }),
+			},
+			settings: map[declaration.TableName]config.Table{tableT: {Key: []string{"zone", "code"}}},
+			want: missingColumn("a.t", "code") + "\n" +
+				filepath.FromSlash(`data/kortopi.toml: key of table a.t names column "zone", which the table does not have: correct the key`),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{infos: infos}
+			if tt.infos != nil {
+				db.infos = tt.infos
+			}
+			decl := &declaration.Declaration{Dir: "data", Tables: tt.tables}
+			p, err := Build(t.Context(), decl, config.New(tt.settings), db, Options{NoPending: true})
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, tt.want)
+			}
+			if len(db.requests) != 0 || len(db.counted) != 0 {
+				t.Errorf("Build() called Diff %d times and CountRows %d times, want no call", len(db.requests), len(db.counted))
+			}
+		})
+	}
+}
+
+// Without a table or a column that the database lacks, NoPending changes
+// nothing: the plan, and the calls of the database, are those without it.
+func TestBuildNoPendingWithoutPendingNames(t *testing.T) {
+	t.Parallel()
+
+	diff := TableDiff{Inserts: []Row{{Key: []Value{{Text: "2"}}, Values: []Value{{Text: "b"}}}}}
+	decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id", "name"), csvTable(tableV, "id")}}
+	newDB := func() *fakeDB {
+		return &fakeDB{
+			infos: map[declaration.TableName]TableInfo{
+				tableT: existing([]string{"id"}, "id", "name"),
+				tableV: existing([]string{"id"}, "id"),
+			},
+			diffs: map[declaration.TableName]TableDiff{tableT: diff},
+		}
+	}
+	without, noPending := newDB(), newDB()
+	want, err := Build(t.Context(), decl, nil, without, Options{})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	got, err := Build(t.Context(), decl, nil, noPending, Options{NoPending: true})
+	if err != nil {
+		t.Fatalf("Build() with NoPending error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Build() with NoPending = %+v, want %+v", got, want)
+	}
+	if !reflect.DeepEqual(noPending.describes, without.describes) || !reflect.DeepEqual(noPending.requests, without.requests) || len(noPending.counted) != 0 {
+		t.Errorf("Build() with NoPending called Describe %v, Diff %+v, and CountRows %v, want %v, %+v, and none",
+			noPending.describes, noPending.requests, noPending.counted, without.describes, without.requests)
+	}
+}
+
+// --schema narrows the declaration before Build, so NoPending sees only the
+// declared tables of the named schemas.
+func TestBuildNoPendingNarrowedBySchema(t *testing.T) {
+	t.Parallel()
+
+	full := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id"), csvTable(tableU, "id")}}
+	tests := []struct {
+		schema string
+		want   string
+	}{
+		{schema: "a"},
+		{
+			schema: "b",
+			want: filepath.FromSlash("data/b/u.csv") + ": table b.u does not exist in the database, and without --no-pending it would wait for the schema change: " +
+				"correct the name, or apply the schema change that adds the table",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.schema, func(t *testing.T) {
+			t.Parallel()
+
+			decl, err := full.OnlySchemas([]string{tt.schema})
+			if err != nil {
+				t.Fatal(err)
+			}
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: existing([]string{"id"}, "id")}}
+			p, err := Build(t.Context(), decl, nil, db, Options{NoPending: true})
+			if tt.want == "" {
+				if err != nil || len(p.Tables) != 1 || p.Tables[0].Name != tableT {
+					t.Errorf("Build() = %+v, %v, want the plan of a.t alone", p, err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("Build() = %+v, %v, want the error\n%s", p, err, tt.want)
 			}
 		})
 	}
@@ -848,7 +1086,7 @@ func TestBuildPartitionDeclaredWithItsParent(t *testing.T) {
 
 			db := &fakeDB{infos: infos}
 			decl := &declaration.Declaration{Dir: "data", Tables: tt.tables}
-			p, err := Build(t.Context(), decl, nil, db)
+			p, err := Build(t.Context(), decl, nil, db, Options{})
 			if tt.want == "" {
 				if err != nil {
 					t.Errorf("Build() error = %v", err)

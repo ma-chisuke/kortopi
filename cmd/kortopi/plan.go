@@ -14,7 +14,9 @@ import (
 // planOnlyFlags is the help of the flags that only plan has.
 const planOnlyFlags = "  --format <name>   text (the default), or sql: print the plan as SQL\n" +
 	"                    statements that run as they are\n" +
-	"  --exit-code       exit with status 2 when the plan is not empty\n"
+	"  --exit-code       exit with status 2 when the plan is not empty\n" +
+	"  --no-pending      fail on a table or a column that the database lacks,\n" +
+	"                    instead of showing it as waiting for the schema change\n"
 
 // planFlags lists the flags of plan, for its help.
 var planFlags = sourceFlags("plan") + planOnlyFlags + connectionFlags
@@ -48,6 +50,8 @@ type planOptions struct {
 	// sql is true for --format sql.
 	sql      bool
 	exitCode bool
+	// noPending is true for --no-pending (ADR-0034).
+	noPending bool
 }
 
 // errInterrupted replaces the error of a plan that an interrupt stopped.
@@ -108,6 +112,7 @@ func planFlagSet(o *planOptions) *flag.FlagSet {
 		return nil
 	})
 	fs.BoolVar(&o.exitCode, "exit-code", false, "")
+	fs.BoolVar(&o.noPending, "no-pending", false, "")
 	return fs
 }
 
@@ -130,7 +135,7 @@ func makePlan(ctx context.Context, o planOptions, connect connectFunc, sql *byte
 			p, err = nil, closeErr
 		}
 	}()
-	p, err = plan.Build(ctx, decl, settings, db)
+	p, err = plan.Build(ctx, decl, settings, db, plan.Options{NoPending: o.noPending})
 	if err != nil || sql == nil {
 		return p, err
 	}

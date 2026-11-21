@@ -225,6 +225,116 @@ func TestPlanCommand(t *testing.T) {
 	}
 }
 
+// TestPlanCommandNoPending runs `kortopi plan --no-pending` against each
+// version: a misspelled column and a table that the database lacks, in CSV
+// files and in a SQL file, are errors in both formats, and a declaration
+// without such names gives the output and the exit status of a plan without
+// the flag. It sets the environment, so it does not run in parallel with
+// other tests.
+func TestPlanCommandNoPending(t *testing.T) {
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := srv.Database(t)
+			db.Exec(t, e2eSchema)
+			e := connect(t, db)
+
+			const (
+				discounts  = "billing/discounts.csv"
+				roomTypes  = "facility/room_types.csv"
+				misspelled = "code,name,capacty\nsingle,Single,1\n"
+			)
+			// missingTable and missingColumn are the errors, with the file
+			// that declares the table, as a path with forward slashes.
+			missingTable := func(dir, file string) string {
+				return "kortopi: " + filepath.Join(dir, filepath.FromSlash(file)) +
+					": table billing.discounts does not exist in the database, and without --no-pending it would wait for the schema change: " +
+					"correct the name, or apply the schema change that adds the table\n"
+			}
+			missingColumn := func(dir, file string) string {
+				return "kortopi: " + filepath.Join(dir, filepath.FromSlash(file)) +
+					`: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: ` +
+					"correct the name, or apply the schema change that adds the column\n"
+			}
+			column := writeFiles(t, map[string]string{roomTypes: misspelled})
+			table := writeFiles(t, map[string]string{discounts: "code,percent\nspring,10\nsummer,15\n"})
+			both := writeFiles(t, map[string]string{roomTypes: misspelled, discounts: "code,percent\nspring,10\nsummer,15\n"})
+			// A SQL file names both, unquoted and in another case, which
+			// PostgreSQL reads in lower case.
+			inSQL := writeFiles(t, map[string]string{"seed.sql": "INSERT INTO Billing.Discounts (code, percent) VALUES ('spring', 10);\n" +
+				"INSERT INTO facility.room_types (code, name, Capacty) VALUES ('single', 'Single', 1);\n"})
+			for _, tt := range []struct {
+				dir  string
+				args []string
+				want string
+			}{
+				{dir: column, want: missingColumn(column, roomTypes)},
+				{dir: column, args: []string{"--format", "sql"}, want: missingColumn(column, roomTypes)},
+				{dir: table, want: missingTable(table, discounts)},
+				{dir: table, args: []string{"--format", "sql"}, want: missingTable(table, discounts)},
+				{dir: both, args: []string{"--exit-code"}, want: missingTable(both, discounts) + missingColumn(both, roomTypes)},
+				{dir: both, args: []string{"--format", "sql", "--exit-code"}, want: missingTable(both, discounts) + missingColumn(both, roomTypes)},
+				{dir: inSQL, want: missingTable(inSQL, "seed.sql") + missingColumn(inSQL, "seed.sql")},
+				{dir: inSQL, args: []string{"--format", "sql"}, want: missingTable(inSQL, "seed.sql") + missingColumn(inSQL, "seed.sql")},
+			} {
+				args := append([]string{"--dir", tt.dir, "--no-pending"}, tt.args...)
+				code, stdout, stderr := e.plan(t, args...)
+				if code != exitError || stdout != "" || stderr != tt.want {
+					t.Errorf("kortopi plan %s = %d, stdout\n%s\nstderr\n%s\nwant %d, no stdout, and stderr\n%s",
+						strings.Join(args, " "), code, stdout, stderr, exitError, tt.want)
+				}
+			}
+
+			// Without the flag, the same names wait for the schema change.
+			code, stdout, stderr := e.plan(t, "--dir", both, "--exit-code")
+			checkRun(t, code, stdout, stderr, exitChanges, lines(
+				"billing.discounts: known after the schema is applied (2 declared rows)",
+				"",
+				"facility.room_types (upsert, key: code)",
+				"  column capacty: known after the schema is applied",
+				"  no changes",
+				"",
+				"Plan: 0 to insert, 0 to update, 0 to delete in 2 tables.",
+				"Known after the schema is applied: 1 table, 1 column.",
+			))
+
+			// A name that differs only in white space or case gets its own
+			// error, with the flag as without it.
+			near := writeFiles(t, map[string]string{roomTypes: "code, name,capacity\nsingle,Single,1\n"})
+			code, stdout, stderr = e.plan(t, "--dir", near, "--no-pending")
+			checkRun(t, code, stdout, stderr, exitError, "",
+				"kortopi: "+filepath.Join(near, filepath.FromSlash(roomTypes))+`: column " name" is not a column of table facility.room_types, but column "name" is, `+
+					"whose name differs only in white space or case: write the name as the table has it\n")
+			if strings.Contains(stderr, "--no-pending") {
+				t.Errorf("stderr:\n%s\nwant only the error of the name in another case", stderr)
+			}
+
+			// A declaration whose names the database has: the flag changes
+			// nothing, in either format.
+			dir := writeFiles(t, e2eFiles)
+			for _, args := range [][]string{
+				{"--dir", dir},
+				{"--dir", dir, "--exit-code"},
+				{"--dir", dir, "--format", "sql", "--exit-code"},
+				{"--dir", dir, "--schema", "facility"},
+			} {
+				wantCode, wantStdout, wantStderr := e.plan(t, args...)
+				code, stdout, stderr := e.plan(t, append(args, "--no-pending")...)
+				if code != wantCode || stdout != wantStdout || stderr != wantStderr {
+					t.Errorf("kortopi plan %s --no-pending = %d, stdout\n%s\nstderr\n%s\nwant those without the flag: %d, stdout\n%s\nstderr\n%s",
+						strings.Join(args, " "), code, stdout, stderr, wantCode, wantStdout, wantStderr)
+				}
+				if wantStderr != "" || wantStdout == "" {
+					t.Errorf("kortopi plan %s = %d, stdout\n%s\nstderr\n%s\nwant a plan", strings.Join(args, " "), wantCode, wantStdout, wantStderr)
+				}
+			}
+			code, stdout, stderr = e.plan(t, "--dir", dir, "--no-pending")
+			checkRun(t, code, stdout, stderr, exitOK, e2ePlan)
+			code, stdout, stderr = e.plan(t, "--dir", dir, "--no-pending", "--exit-code")
+			checkRun(t, code, stdout, stderr, exitChanges, e2ePlan)
+		})
+	}
+}
+
 // A connection that fails gives a clear error, and nothing on stdout.
 func TestPlanCommandConnectionErrors(t *testing.T) {
 	srv := pgtest.Servers()[0]

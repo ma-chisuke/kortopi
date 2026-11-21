@@ -188,6 +188,11 @@ var undefinedFlagMessage = regexp.MustCompile(`^flag provided but not defined: -
 var otherCommandsFlags = map[string]string{
 	"plan --table":  "a plan narrows the declaration by schema, with --schema <name>, and only an export takes --table",
 	"apply --table": "an apply narrows the declaration by schema, with --schema <name>, and only an export takes --table",
+	// An apply and an export cannot leave out a name that the database lacks
+	// (ADR-0034).
+	"apply --no-pending": "an apply always stops on names that wait for a schema change, and only a plan takes --no-pending: " +
+		"remove --no-pending, or run kortopi plan --no-pending before the apply",
+	"export --no-pending": "an export always stops on names that the database lacks, and only a plan takes --no-pending: remove --no-pending",
 }
 
 // The errors of the flag package, which name a flag with one dash.

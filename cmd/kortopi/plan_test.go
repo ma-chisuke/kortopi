@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -87,6 +89,15 @@ func TestParsePlan(t *testing.T) {
 		{name: "format sql", args: []string{"--format", "sql", "--exit-code"}, want: planOptions{common: common{dir: "."}, sql: true, exitCode: true}},
 		{name: "format text", args: []string{"--format=sql", "--format=text"}, want: planOptions{common: common{dir: "."}}},
 		{name: "format of an export", args: []string{"--format", "csv"}, wantErr: "invalid value for flag --format: give text or sql"},
+		{name: "no pending", args: []string{"--no-pending"}, want: planOptions{common: common{dir: "."}, noPending: true}},
+		{
+			name: "no pending with the other flags of plan",
+			args: []string{"--schema", "app", "--format", "sql", "--exit-code", "--no-pending"},
+			want: planOptions{common: common{dir: ".", schemas: []string{"app"}}, sql: true, exitCode: true, noPending: true},
+		},
+		{name: "no pending turned off", args: []string{"--no-pending", "--no-pending=false"}, want: planOptions{common: common{dir: "."}}},
+		{name: "value of no pending", args: []string{"--no-pending=yes"},
+			wantErr: `invalid value for flag --no-pending: give the flag alone, or --no-pending=true or --no-pending=false`},
 		{name: "flag of the password", args: []string{"--password", "x"}, wantErr: "flag provided but not defined: --password"},
 		{name: "positional argument", args: []string{"data"}, wantErr: `plan takes no arguments, but got "data": give the data directory with --dir`},
 		{name: "positional argument before flags", args: []string{"data", "--exit-code"}, wantErr: `plan takes no arguments, but got "data": give the data directory with --dir`},
@@ -354,6 +365,122 @@ func TestRunPlan(t *testing.T) {
 				t.Errorf("kortopi plan described %v, want %v", tt.session.described, tt.wantDescribed)
 			}
 		})
+	}
+}
+
+// --no-pending makes each declared table and column that the database lacks
+// an error, before any row is compared, with every format, with --exit-code,
+// and with --schema: the plan exits with 1 and prints nothing on standard
+// output.
+func TestRunPlanNoPending(t *testing.T) {
+	t.Parallel()
+
+	const missingCountries = "kortopi: DIR/geo/countries.csv: table geo.countries does not exist in the database, and without --no-pending it would wait for the schema change: " +
+		"correct the name, or apply the schema change that adds the table\n"
+	const missingFloor = `kortopi: DIR/app/plans.csv: column "floor" of table app.plans does not exist in the database, and without --no-pending it would wait for the schema change: ` +
+		"correct the name, or apply the schema change that adds the column\n"
+	withFloor := with(twoTables, map[string]string{"app/plans.csv": "id,name,floor\n1,Basic,2\n"})
+	noCountries := map[declaration.TableName]bool{countries: true}
+
+	tests := []struct {
+		name       string
+		files      map[string]string
+		missing    map[declaration.TableName]bool
+		args       []string
+		wantStderr string
+	}{
+		{name: "a table", files: twoTables, missing: noCountries, wantStderr: missingCountries},
+		{name: "a column", files: withFloor, wantStderr: missingFloor},
+		{name: "a column and a table", files: withFloor, missing: noCountries, wantStderr: missingFloor + missingCountries},
+		{name: "as SQL", files: withFloor, missing: noCountries, args: []string{"--format", "sql"}, wantStderr: missingFloor + missingCountries},
+		{name: "with exit code", files: withFloor, missing: noCountries, args: []string{"--exit-code"}, wantStderr: missingFloor + missingCountries},
+		{
+			name: "as SQL with exit code", files: withFloor, missing: noCountries,
+			args: []string{"--format", "sql", "--exit-code"}, wantStderr: missingFloor + missingCountries,
+		},
+		{name: "narrowed to the schema of the table", files: withFloor, missing: noCountries, args: []string{"--schema", "geo"}, wantStderr: missingCountries},
+		{name: "narrowed to the schema of the column", files: withFloor, missing: noCountries, args: []string{"--schema", "app"}, wantStderr: missingFloor},
+		{
+			// The errors name the SQL file, and the names as PostgreSQL
+			// reads them: unquoted, in lower case.
+			name: "a SQL file",
+			files: map[string]string{"seed.sql": "INSERT INTO App.Plans (id, Name, Floor) VALUES (1, 'Basic', 2);\n" +
+				"INSERT INTO geo.countries (id, name) VALUES (1, 'Japan');\n"},
+			missing: noCountries,
+			wantStderr: strings.ReplaceAll(missingFloor, "app/plans.csv", "seed.sql") +
+				strings.ReplaceAll(missingCountries, "geo/countries.csv", "seed.sql"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := writeFiles(t, tt.files)
+			session := &fakeSession{diffs: newPlan, missing: tt.missing}
+			fc := &fakeConnect{session: session}
+			args := append([]string{"plan", "--dir", dir, "--no-pending"}, tt.args...)
+			code, stdout, stderr := runTest(t, args, fc.connect)
+
+			want := strings.ReplaceAll(filepath.FromSlash(tt.wantStderr), "DIR", dir)
+			if code != exitError || stdout != "" || stderr != want {
+				t.Errorf("kortopi %s = %d, stdout %q, stderr\n%s\nwant %d, no stdout, and stderr\n%s", strings.Join(args, " "), code, stdout, stderr, exitError, want)
+			}
+			// The errors come before any row is loaded or counted.
+			if len(session.calls) != 0 {
+				t.Errorf("kortopi plan called %v, want no call after Describe", session.calls)
+			}
+			if !session.closed {
+				t.Error("kortopi plan left the session open")
+			}
+		})
+	}
+}
+
+// Without a table or a column that the database lacks, --no-pending changes
+// nothing: the output and the exit status are those of the plan without it,
+// in every format and with --exit-code and --schema.
+func TestRunPlanNoPendingWithoutPendingNames(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range [][]string{
+		nil,
+		{"--exit-code"},
+		{"--format", "sql"},
+		{"--format", "sql", "--exit-code"},
+		{"--schema", "app", "--exit-code"},
+	} {
+		for _, diffs := range []map[declaration.TableName]plan.TableDiff{nil, newPlan} {
+			name := "no other flag"
+			if len(args) > 0 {
+				name = strings.Join(args, " ")
+			}
+			if diffs != nil {
+				name += " with changes"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				dir := writeFiles(t, twoTables)
+				var results [2][3]string
+				var calls [2][]string
+				for i, flags := range [][]string{nil, {"--no-pending"}} {
+					session := &fakeSession{diffs: diffs}
+					fc := &fakeConnect{session: session}
+					code, stdout, stderr := runTest(t, append(append([]string{"plan", "--dir", dir}, args...), flags...), fc.connect)
+					results[i] = [3]string{strconv.Itoa(code), stdout, stderr}
+					calls[i] = session.calls
+				}
+				if results[1] != results[0] {
+					t.Errorf("kortopi plan %s --no-pending gave status, stdout, and stderr\n%q\nwant those without the flag\n%q", name, results[1], results[0])
+				}
+				if !slices.Equal(calls[1], calls[0]) {
+					t.Errorf("kortopi plan %s --no-pending called %v, want %v", name, calls[1], calls[0])
+				}
+				if results[0][2] != "" || len(calls[0]) == 0 {
+					t.Errorf("kortopi plan %s gave stderr %q and called %v, want a plan", name, results[0][2], calls[0])
+				}
+			})
+		}
 	}
 }
 
