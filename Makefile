@@ -7,7 +7,9 @@
 #   make check-all   fast and slow checks; CI runs this
 #
 # Narrow any target to a set of files with CHECK_SCOPE=staged|changed or
-# CHECK_FILES=<paths>. Add VERBOSE=1 to see the output of passing checks.
+# CHECK_FILES=<paths>, with the paths separated by newlines, as in
+# CHECK_FILES=$'README.md\nAGENTS.md'. Add VERBOSE=1 to see the output of
+# passing checks.
 #
 # Each area keeps its targets in make/<area>.mk and registers them in
 # SETUP_TARGETS, FMT_TARGETS, GEN_TARGETS, CHECK_TARGETS, or CHECK_ALL_TARGETS.
