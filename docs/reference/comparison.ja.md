@@ -99,7 +99,7 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 
 すべてのテーブルを比べたあと、計画は、挿入する行が値の要るどの列にも値を得られることを検査する。
 
-- `NOT NULL` で既定値がなく、宣言が挙げない列は、新しい行で値を得られない。そのため、挿入する行を適用すると失敗する。計画は、挿入する行のあるテーブルごとにそうした列を報告し、すべてのテーブルをまとめて報告する。ここでの既定値とは、列かそのドメインの既定値、`serial`、識別列、生成列である。
+- `NOT NULL` で既定値がなく、宣言も `kortopi.toml` の `on_insert` も挙げない列は、新しい行で値を得られない。そのため、挿入する行を適用すると失敗する。計画は、挿入する行のあるテーブルごとにそうした列を報告し、すべてのテーブルをまとめて報告する。ここでの既定値とは、列かそのドメインの既定値、`serial`、識別列、生成列である。
 
 計画は、宣言した列もテーブルと照らし合わせる。
 
@@ -122,4 +122,4 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 
 これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md) と [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:4977be8c14a5bf271696b428e4f33522ef732d7375db8fc0fc500be9e2caa6f7 -->
+<!-- i18n-source: comparison.md sha256:1a8c6efc727cffefa107019a6031b67850452df5a70d8ff475f5a728f3efd303 -->
