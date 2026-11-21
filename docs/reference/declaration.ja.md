@@ -348,7 +348,7 @@ kortopi: data/kortopi.toml:1: unknown setting tables.facility.room_types: write 
 
 ```text
 kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": write "insert", "upsert", or "sync"
-kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key and mode
+kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key, mode, and on_insert
 ```
 
 ### キーの列のないファイル
@@ -439,4 +439,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:0b25e3f90cc40fa24ed5156dbb2c7d7231f53757326a7b93747ecee095e20992 -->
+<!-- i18n-source: declaration.md sha256:50f437a3fa226cf1b9f19f4343abefda5a1a0b714e1b5dd3a025f3fa81ec039f -->

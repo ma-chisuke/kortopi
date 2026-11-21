@@ -347,7 +347,7 @@ kortopi: data/kortopi.toml:1: unknown setting tables.facility.room_types: write 
 
 ```text
 kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": write "insert", "upsert", or "sync"
-kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key and mode
+kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key, mode, and on_insert
 ```
 
 ### A file without the columns of the key

@@ -31,6 +31,18 @@ type Table struct {
 	// (ADR-0012).
 	Key  []string
 	Mode Mode
+	// OnInsert holds the values that kortopi gives columns of the table when
+	// it inserts a row, and at no other time (ADR-0035), sorted by the name
+	// of the column. Such a column is not managed: it is neither compared nor
+	// updated.
+	OnInsert []InsertValue
+}
+
+// InsertValue is a value of on_insert: the database reads Value by the type
+// of Column, as it reads a declared value (ADR-0009), and no SQL expression.
+type InsertValue struct {
+	Column string
+	Value  string
 }
 
 // Settings is the content of kortopi.toml.
