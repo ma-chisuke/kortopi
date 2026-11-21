@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
@@ -45,7 +46,8 @@ var settingsStatements = []string{
 //	) AS d ("key") WHERE s."key" OPERATOR("pg_catalog".=) d."key";
 //
 // An INSERT names the key and the compared columns, so a pending column is
-// left out, and adds OVERRIDING SYSTEM VALUE where an apply does. An UPDATE
+// left out, then the columns of on_insert with their values, and adds
+// OVERRIDING SYSTEM VALUE where an apply does. An UPDATE
 // is one statement for each row, and sets only the columns that differ.
 // UPDATE and DELETE take ONLY for a table that is not partitioned, and find
 // rows by the match key with the equality of the plan, each key value cast
@@ -136,13 +138,24 @@ func onlyTable(meta *tableMeta, name declaration.TableName) string {
 }
 
 // insertStatement returns the INSERT of the rows to insert of t, one row on
-// each line, or nothing when there is none.
+// each line, or nothing when there is none. After the key and the compared
+// columns, it names the columns of on_insert, and gives each row their
+// values as literals, as an apply does (ADR-0035): PostgreSQL reads them by
+// the types of the columns when the script runs.
 func (s *Session) insertStatement(meta *tableMeta, t plan.Table) ([]string, error) {
 	if len(t.Diff.Inserts) == 0 {
 		return nil, nil
 	}
-	columns := append(append([]string{}, t.Key...), t.Compare...)
-	head := "INSERT INTO " + quoteTable(t.Name) + " (" + quoteColumns("", columns) + ")"
+	columns := slices.Concat(t.Key, t.Compare)
+	set, err := insertColumns(meta, declaration.Table{Name: t.Name, Columns: columns}, t.OnInsert)
+	if err != nil {
+		return nil, err
+	}
+	named := slices.Clone(columns)
+	for _, col := range set {
+		named = append(named, col.name)
+	}
+	head := "INSERT INTO " + quoteTable(t.Name) + " (" + quoteColumns("", named) + ")"
 	for _, name := range t.Key {
 		if col, ok := meta.column(name); ok && col.identityAlways {
 			head += " OVERRIDING SYSTEM VALUE"
@@ -161,6 +174,9 @@ func (s *Session) insertStatement(meta *tableMeta, t plan.Table) ([]string, erro
 			if literals[i], err = columnLiteral(t.Name, columns[i], v); err != nil {
 				return nil, err
 			}
+		}
+		for _, col := range set {
+			literals = append(literals, col.literal)
 		}
 		rows[r] = "  (" + strings.Join(literals, ", ") + ")"
 	}

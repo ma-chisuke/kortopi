@@ -1,0 +1,16 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 2 to insert, 2 to update, 0 to delete in 2 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- geo.regions: 1 to update
+UPDATE geo.regions SET 1 columns WHERE (1);
+
+-- geo.cities: 2 to insert, 1 to update
+-- on insert: created_at="now"  note="line\nbreak"
+-- PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
+INSERT INTO geo.cities (10, n10);
+INSERT INTO geo.cities (11, n11);
+UPDATE geo.cities SET 1 columns WHERE (12);

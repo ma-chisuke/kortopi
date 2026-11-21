@@ -44,6 +44,8 @@ type Header struct {
 //   - A table or a column that waits for the schema change is named in a
 //     comment. A pending table has no statement, and a pending column is
 //     left out of the statements of its table, as in a plan.
+//   - The INSERT of a table with values of on_insert follows a comment that
+//     names them, and says that PostgreSQL reads them when the script runs.
 //
 // An empty plan gives one comment line, and a second one that names the
 // tables of mode insert, whose values were not compared, when the plan has
@@ -122,6 +124,10 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 			if kind == Insert && len(t.Diff.Inserts) == 0 || kind == Update && len(t.Diff.Updates) == 0 {
 				continue
 			}
+			if kind == Insert && len(t.OnInsert) > 0 {
+				comment(&b, "on insert: "+plan.FormatInsertValues(t.OnInsert))
+				comment(&b, onInsertNote)
+			}
 			if err := db.WriteStatements(ctx, &b, Step{Kind: kind, Table: *t}); err != nil {
 				return err
 			}
@@ -150,6 +156,12 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 	_, err = w.Write(b.Bytes())
 	return err
 }
+
+// onInsertNote follows the values of on_insert before the INSERT of a table
+// (ADR-0035). The INSERT writes them as the settings do, and PostgreSQL reads
+// them when the script runs, where an apply reads them in its own session.
+const onInsertNote = "PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: " +
+	"a value such as now is the time of the transaction that runs the script."
 
 // writeHeader writes the header comment: where the plan comes from, its
 // counts, the tables and columns that wait for the schema change, and how

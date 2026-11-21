@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 	"github.com/ma-chisuke/kortopi/internal/script"
@@ -44,6 +45,12 @@ func TestLiteral(t *testing.T) {
 	}
 }
 
+// withOnInsert returns t with the values of on_insert.
+func withOnInsert(t plan.Table, values ...config.InsertValue) plan.Table {
+	t.OnInsert = values
+	return t
+}
+
 // scriptSession is a session that knows the table s.t from the catalogs, so
 // that it writes statements without a server.
 func scriptSession(partitioned, identity bool) *Session {
@@ -54,6 +61,8 @@ func scriptSession(partitioned, identity bool) *Session {
 			{name: "id", typ: 23, typeName: `"pg_catalog"."int4"`, eq: op, ordered: true, identityAlways: identity},
 			{name: "order", typ: 25, typeName: `"pg_catalog"."text"`, eq: op, ordered: true},
 			{name: "Name", typ: 25, typeName: `"pg_catalog"."text"`, eq: op, ordered: true},
+			{name: "at", typ: 1184, typeName: `"pg_catalog"."timestamptz"`, fullType: "timestamp with time zone"},
+			{name: "by", typ: 25, typeName: `"pg_catalog"."text"`, fullType: "text"},
 		},
 	}
 	return &Session{tables: map[declaration.TableName]*tableMeta{meta.name: meta}}
@@ -91,6 +100,15 @@ func TestScriptStatements(t *testing.T) {
 		{name: "settings", step: script.Step{Kind: script.Settings},
 			want: "SET LOCAL client_encoding = 'UTF8';\nSET LOCAL lc_monetary = 'C';\nSET LOCAL xmloption = content;\n"},
 		{name: "insert", step: script.Step{Kind: script.Insert, Table: table}, want: insert},
+		{
+			// The columns of on_insert follow the declared ones, with the
+			// same literals in every row.
+			name: "insert with values of on_insert",
+			step: script.Step{Kind: script.Insert, Table: withOnInsert(table, config.InsertValue{Column: "at", Value: "now"}, config.InsertValue{Column: "by", Value: "it's\n"})},
+			want: `INSERT INTO "s"."t" ("id", "order", "Name", "at", "by") VALUES` + "\n" +
+				`  ('1', E'a\nb', NULL, 'now', E'it''s\n'),` + "\n" +
+				`  ('4', 'c', 'd', 'now', E'it''s\n');` + "\n",
+		},
 		{
 			name: "insert of an identity key", identity: true,
 			step: script.Step{Kind: script.Insert, Table: table},
@@ -157,6 +175,11 @@ func TestScriptStatements(t *testing.T) {
 	if err := s.WriteStatements(t.Context(), &strings.Builder{}, script.Step{Kind: script.Update, Table: notUTF8}); err == nil ||
 		!strings.Contains(err.Error(), `table s.t: column "Name" holds a value that is not valid UTF-8`) {
 		t.Errorf("WriteStatements of a value that is not UTF-8 = %v", err)
+	}
+	unknown := withOnInsert(table, config.InsertValue{Column: "gone", Value: "x"})
+	if err := s.WriteStatements(t.Context(), &strings.Builder{}, script.Step{Kind: script.Insert, Table: unknown}); err == nil ||
+		err.Error() != `table s.t has no column "gone", which on_insert names` {
+		t.Errorf("WriteStatements with a column of on_insert that the table lacks = %v", err)
 	}
 	missing := table
 	missing.Name = declaration.TableName{Schema: "s", Name: "gone"}
