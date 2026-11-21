@@ -16,7 +16,7 @@
 | `make check-all` | 速いチェックと遅いチェック。CI が実行する。 |
 | `make build` | `bin/kortopi` をビルドする。 |
 
-- 作業中は範囲を絞れる。`CHECK_SCOPE=changed make check` か `CHECK_FILES=<path> make check` を使う。最後は絞らずに `make check` を実行する。
+- 作業中は範囲を絞れる。`CHECK_SCOPE=changed make check` か `CHECK_FILES=<paths> make check` を使う。`CHECK_FILES` のパスは改行で区切る。最後は絞らずに `make check` を実行する。
 - チェックが失敗すると `file:line: [rule] message` の形で出る。原因を直す。ルールを無効にしない。無視するコメントを足さない。ファイルを対象から外さない。
 - ルールが今回の場合に合わないと考えたら、作業を止めてそう伝える。決定を変えるには決定の記録が要る（スキル `write-adr`）。
 
@@ -45,4 +45,4 @@
 - **GitHub Actions。** ワークフローのステップは、チェックアウトと mise の準備のあとは `make` だけを呼ぶ。Action はコミット SHA で固定する。（ADR-0004、ADR-0005）
 - **禁止。** `.env` を読まない。force push をしない。`main` に push しない。
 
-<!-- i18n-source: AGENTS.md sha256:6fa68d414fa8742de32c4547e3741acfbdcb1954587ca24b354e0d05b24c405d -->
+<!-- i18n-source: AGENTS.md sha256:376b7df5005d98d3990f4841329f0a036a88e3d706133463513b9a440e2a7b94 -->

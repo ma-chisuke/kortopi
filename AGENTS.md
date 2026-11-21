@@ -16,7 +16,7 @@ The reason for a rule is in the decision record that the rule cites ([docs/adr/]
 | `make check-all` | Fast and slow checks. CI runs this. |
 | `make build` | Build `bin/kortopi`. |
 
-- Narrow a run while you work: `CHECK_SCOPE=changed make check` or `CHECK_FILES=<path> make check`. Run the full `make check` at the end.
+- Narrow a run while you work: `CHECK_SCOPE=changed make check` or `CHECK_FILES=<paths> make check`, with the paths separated by newlines. Run the full `make check` at the end.
 - A failed check prints `file:line: [rule] message`. Fix the cause. Do not turn the rule off, add an ignore comment, or exclude the file.
 - If a rule is wrong for your case, stop and say so. Changing a decision needs a decision record (skill `write-adr`).
 
