@@ -372,7 +372,7 @@ kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood:
 ### A value of on_insert that is not a string
 
 ```text
-kortopi: data/kortopi.toml: table "facility.rooms": on_insert gives column "sort_order" an integer, not a string: write the value as a string, which PostgreSQL reads by the type of the column, as in sort_order = "0"
+kortopi: data/kortopi.toml: table "facility.rooms": on_insert gives column "sort_order" an integer, not a string: write the value as a string, which the database reads by the type of the column, as in sort_order = "0"
 ```
 
 ### A file without the columns of the key

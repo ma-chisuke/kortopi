@@ -10,7 +10,7 @@ UPDATE geo.regions SET 1 columns WHERE (1);
 
 -- geo.cities: 2 to insert, 1 to update
 -- on insert: created_at="now"  note="line\nbreak"
--- PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
+-- The database reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
 INSERT INTO geo.cities (10, n10);
 INSERT INTO geo.cities (11, n11);
 UPDATE geo.cities SET 1 columns WHERE (12);

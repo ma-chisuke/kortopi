@@ -454,7 +454,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
   ```sql
   -- facility.rooms: 2 to insert, 1 to update
   -- on insert: created_at="now"  created_by="kortopi"  note=""  sort_order="0"
-  -- PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
+  -- The database reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
   INSERT INTO "facility"."rooms" ("name", "capacity", "created_at", "created_by", "note", "sort_order") VALUES
     ('annex', '10', 'now', 'kortopi', '', '0'),
     ('hall', '80', 'now', 'kortopi', '', '0');
@@ -602,4 +602,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:e213030a69d03d6100713ea36fc2e7f9340342e021d2314fc3878b8879213373 -->
+<!-- i18n-source: plan.md sha256:c044b970cb739c20e1bed979cd46af81d81dd2e8cc36cfba6f73ae7257eb9aa8 -->

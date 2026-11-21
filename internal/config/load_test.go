@@ -366,55 +366,55 @@ func TestLoadErrors(t *testing.T) {
 			name: "on_insert with an integer",
 			src:  "[tables.\"a.b\"]\non_insert = { sort_order = 0 }\n",
 			want: []string{`: table "a.b": on_insert gives column "sort_order" an integer, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in sort_order = "0"`},
+				`write the value as a string, which the database reads by the type of the column, as in sort_order = "0"`},
 		},
 		{
 			name: "on_insert with a float",
 			src:  "[tables.\"a.b\"]\non_insert = { rate = 1.5 }\n",
 			want: []string{`: table "a.b": on_insert gives column "rate" a float, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in rate = "1.5"`},
+				`write the value as a string, which the database reads by the type of the column, as in rate = "1.5"`},
 		},
 		{
 			name: "on_insert with a boolean",
 			src:  "[tables.\"a.b\"]\non_insert = { \"Is Active\" = true }\n",
 			want: []string{`: table "a.b": on_insert gives column "Is Active" a boolean, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in "Is Active" = "true"`},
+				`write the value as a string, which the database reads by the type of the column, as in "Is Active" = "true"`},
 		},
 		{
 			name: "on_insert with a date of TOML",
 			src:  "[tables.\"a.b\"]\non_insert = { day = 2026-11-21 }\n",
 			want: []string{`: table "a.b": on_insert gives column "day" a date or a time of TOML, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in day = "2026-11-21"`},
+				`write the value as a string, which the database reads by the type of the column, as in day = "2026-11-21"`},
 		},
 		{
 			name: "on_insert with a time of TOML",
 			src:  "[tables.\"a.b\"]\non_insert = { at = 09:30:00 }\n",
 			want: []string{`: table "a.b": on_insert gives column "at" a date or a time of TOML, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in at = "09:30:00"`},
+				`write the value as a string, which the database reads by the type of the column, as in at = "09:30:00"`},
 		},
 		{
 			name: "on_insert with a local date and time of TOML",
 			src:  "[tables.\"a.b\"]\non_insert = { at = 2026-11-21T09:30:00 }\n",
 			want: []string{`: table "a.b": on_insert gives column "at" a date or a time of TOML, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in at = "2026-11-21T09:30:00"`},
+				`write the value as a string, which the database reads by the type of the column, as in at = "2026-11-21T09:30:00"`},
 		},
 		{
 			name: "on_insert with an instant of TOML",
 			src:  "[tables.\"a.b\"]\non_insert = { at = 2026-11-21T09:30:00+09:00 }\n",
 			want: []string{`: table "a.b": on_insert gives column "at" a date or a time of TOML, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column, as in at = "2026-11-21T09:30:00+09:00"`},
+				`write the value as a string, which the database reads by the type of the column, as in at = "2026-11-21T09:30:00+09:00"`},
 		},
 		{
 			name: "on_insert with an array",
 			src:  "[tables.\"a.b\"]\non_insert = { tags = [\"a\"] }\n",
 			want: []string{`: table "a.b": on_insert gives column "tags" an array, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column`},
+				`write the value as a string, which the database reads by the type of the column`},
 		},
 		{
 			name: "on_insert with a table",
 			src:  "[tables.\"a.b\".on_insert.created]\nat = \"now\"\n",
 			want: []string{`: table "a.b": on_insert gives column "created" a table, not a string: ` +
-				`write the value as a string, which PostgreSQL reads by the type of the column`},
+				`write the value as a string, which the database reads by the type of the column`},
 		},
 		{
 			name: "on_insert with an empty column name",

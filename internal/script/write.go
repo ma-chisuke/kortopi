@@ -161,7 +161,7 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 // onInsertNote follows the values of on_insert before the INSERT of a table
 // (ADR-0035). The INSERT writes them as the settings do, and PostgreSQL reads
 // them when the script runs, where an apply reads them in its own session.
-const onInsertNote = "PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: " +
+const onInsertNote = "The database reads the values of on_insert when the script runs, in the settings of its session: " +
 	"a value such as now is the time of the transaction that runs the script."
 
 // writeHeader writes the header comment: where the plan comes from, its

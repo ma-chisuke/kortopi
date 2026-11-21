@@ -373,7 +373,7 @@ kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood:
 ### 文字列でない on_insert の値
 
 ```text
-kortopi: data/kortopi.toml: table "facility.rooms": on_insert gives column "sort_order" an integer, not a string: write the value as a string, which PostgreSQL reads by the type of the column, as in sort_order = "0"
+kortopi: data/kortopi.toml: table "facility.rooms": on_insert gives column "sort_order" an integer, not a string: write the value as a string, which the database reads by the type of the column, as in sort_order = "0"
 ```
 
 ### キーの列のないファイル
@@ -481,4 +481,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:83b56e39aab62fbc4a5ea0e8f1f681f5321198ce145b1ae597b53589e3e34a22 -->
+<!-- i18n-source: declaration.md sha256:4ddc171d2f075ed1d1808e2a53be8deae4f1b8e278be81f3eda9674e0c3b7d0e -->

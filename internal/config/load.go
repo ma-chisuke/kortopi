@@ -180,7 +180,7 @@ func parseOnInsert(raw any) ([]InsertValue, error) {
 		}
 		value, ok := columns[column].(string)
 		if !ok {
-			return nil, fmt.Errorf("on_insert gives column %q %s, not a string: write the value as a string, which PostgreSQL reads by the type of the column%s",
+			return nil, fmt.Errorf("on_insert gives column %q %s, not a string: write the value as a string, which the database reads by the type of the column%s",
 				column, tomlKind(columns[column]), stringExample(column, columns[column]))
 		}
 		values = append(values, InsertValue{Column: column, Value: value})

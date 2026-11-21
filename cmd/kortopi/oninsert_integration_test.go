@@ -366,7 +366,7 @@ func TestOnInsertScriptAndExport(t *testing.T) {
 			want := lines(
 				"-- facility.rooms: 2 to insert, 1 to update",
 				`-- on insert: created_at="now"  created_by="kortopi"  note=""  sort_order="0"`,
-				"-- PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: "+
+				"-- The database reads the values of on_insert when the script runs, in the settings of its session: "+
 					"a value such as now is the time of the transaction that runs the script.",
 				`INSERT INTO "facility"."rooms" ("name", "capacity", "created_at", "created_by", "note", "sort_order") VALUES`,
 				`  ('annex', '10', 'now', 'kortopi', '', '0'),`,
