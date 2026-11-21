@@ -52,6 +52,7 @@ func TestIntervalKeys(t *testing.T) {
 				"k/plans.csv":       "code,span\na,1 mon\n",
 				"k/sets.csv":        "spans,label\n\"{\"\"1 mon\"\"}\",x\n",
 				"k/many.csv":        manySplits(12),
+				"k/one_group.csv":   oneGroup(12),
 				"k/stored_only.csv": "span,label\n1 mon,month\n",
 			})
 			s := db.session(t, dir)
@@ -67,36 +68,58 @@ func TestIntervalKeys(t *testing.T) {
 			req.Table = terms("same")
 			checkDiff(t, s, req, `+ "1 year" | "year"`, `~ "30 days" | label: "month" -> "thirty days"`)
 
-			// A month against 30 days, in every mode.
-			req.Table = terms("stored_only")
-			for _, mode := range []struct {
-				name             string
-				updates, deletes bool
-			}{{"insert", false, false}, {"upsert", true, false}, {"sync", true, true}} {
-				req.Updates, req.Deletes = mode.updates, mode.deletes
-				err := diffError(t, s, req)
-				if want := filepath.Join(dir, "k", "stored_only.csv") + ": " + storedSplit + "(span)=(1 mon) matches the stored (span)=(30 days)" + storedSplitAdvice; err.Error() != want {
-					t.Errorf("%s: Diff: %v\nwant %s", mode.name, err, want)
+			// A month against a stored 30 days, and two declared keys that the
+			// unique index takes for one, in every mode, from CSV and SQL.
+			sqlTerms := func(values string) declaration.Table {
+				return sqlTable(t, "k", "terms", []string{"span", "label"},
+					sqlStatement{sql: "INSERT INTO k.terms (span, label) VALUES " + values, table: "k.terms", rows: 2})
+			}
+			splitPairs := "(span)=(1 day) and (span)=(24:00:00), (span)=(1 mon) and (span)=(30 days), (span)=(1 mon) and (span)=(720:00:00)"
+			for _, c := range []struct {
+				name  string
+				table declaration.Table
+				want  string
+			}{
+				{"stored, csv", terms("stored_only"),
+					filepath.Join(dir, "k", "stored_only.csv") + ": " + storedSplit + "(span)=(1 mon) matches the stored (span)=(30 days)" + storedSplitAdvice},
+				{"stored, sql", sqlTerms("('1 mon', 'month'), ('1 day', 'day')"),
+					filepath.Join(dir, "data.sql") + ": " + storedSplit + "(span)=(1 mon) matches the stored (span)=(30 days)" + storedSplitAdvice},
+				{"declared, csv", terms("split"),
+					filepath.Join(dir, "k", "split.csv") + ": " + declaredSplit + splitPairs + ": declare each key once"},
+				{"declared, sql", sqlTerms("('30 days', 'a'), ('1 mon', 'b')"),
+					filepath.Join(dir, "data.sql") + ": " + declaredSplit + "(span)=(1 mon) and (span)=(30 days): declare each key once"},
+			} {
+				for _, mode := range []struct {
+					name             string
+					updates, deletes bool
+				}{{"insert", false, false}, {"upsert", true, false}, {"sync", true, true}} {
+					req := upsert
+					req.Table, req.Updates, req.Deletes = c.table, mode.updates, mode.deletes
+					if err := diffError(t, s, req); err.Error() != c.want {
+						t.Errorf("%s, %s: Diff: %v\nwant %s", c.name, mode.name, err, c.want)
+					}
 				}
 			}
 			req = upsert
 			req.Table = terms("terms")
 			wantError(t, diffError(t, s, req), "(span)=(720:00:00) matches the stored (span)=(30 days)")
 
-			// Two declared keys that the unique index takes for one; a key
-			// written twice in one way is repeated, as for any type.
-			req.Table = terms("split")
-			err := diffError(t, s, req)
-			if want := filepath.Join(dir, "k", "split.csv") + ": " + declaredSplit +
-				"(span)=(1 day) and (span)=(24:00:00), (span)=(1 mon) and (span)=(30 days), (span)=(1 mon) and (span)=(720:00:00): declare each key once"; err.Error() != want {
-				t.Errorf("Diff: %v\nwant %s", err, want)
-			}
+			// A key written twice in one way is repeated, as for any type.
 			req.Table = terms("repeated")
 			wantError(t, diffError(t, s, req), "declared rows repeat a key", "(span)=(1 day) 2 times")
+
+			// At most ten pairs, from many groups or from one.
 			req.Table = terms("many")
-			err = diffError(t, s, req)
+			err := diffError(t, s, req)
 			wantError(t, err, "(span)=(1 day) and (span)=(24:00:00), ", "(span)=(10 days) and (span)=(240:00:00), and more: declare each key once")
 			if strings.Contains(err.Error(), "(span)=(11 days)") {
+				t.Errorf("error %q lists more than %d pairs", err, maxDuplicates)
+			}
+			req.Table = terms("one_group")
+			err = diffError(t, s, req)
+			wantError(t, err, "(span)=(1 mon) and (span)=(19 days 264:00:00), ",
+				"(span)=(1 mon) and (span)=(28 days 48:00:00), and more: declare each key once")
+			if strings.Contains(err.Error(), "29 days") {
 				t.Errorf("error %q lists more than %d pairs", err, maxDuplicates)
 			}
 
@@ -107,12 +130,6 @@ func TestIntervalKeys(t *testing.T) {
 			sets := csvTable("k", "sets", "spans", "label")
 			wantError(t, diffError(t, s, plan.DiffRequest{Table: sets, Key: []string{"spans"}, Compare: []string{"label"}, Updates: true}),
 				filepath.Join(dir, "k", "sets.csv")+": "+storedSplit+`(spans)=({"1 mon"}) matches the stored (spans)=({"30 days"})`)
-
-			// A SQL file.
-			sqlReq := upsert
-			sqlReq.Table = sqlTable(t, "k", "terms", []string{"span", "label"},
-				sqlStatement{sql: "INSERT INTO k.terms (span, label) VALUES ('1 mon', 'month'), ('1 day', 'day')", table: "k.terms", rows: 2})
-			wantError(t, diffError(t, s, sqlReq), filepath.Join(dir, "data.sql")+": "+storedSplit+"(span)=(1 mon) matches the stored (span)=(30 days)")
 
 			// An apply stops on it too, and changes nothing.
 			before := dump(t, db, "k.terms")
@@ -136,6 +153,22 @@ func manySplits(n int) string {
 	b.WriteString("span,label\n")
 	for i := 1; i <= n; i++ {
 		fmt.Fprintf(&b, "%d days,a\n%d:00:00,b\n", i, 24*i)
+	}
+	return b.String()
+}
+
+// oneGroup returns a CSV file of k.terms with a month and n other ways to
+// write it that the unique index takes for one: 30 days, 29 days and 24
+// hours, and so on, down to 30-n+1 days.
+func oneGroup(n int) string {
+	var b strings.Builder
+	b.WriteString("span,label\n1 mon,a\n")
+	for d := 30 - n + 1; d <= 30; d++ {
+		if d == 30 {
+			b.WriteString("30 days,a\n")
+			continue
+		}
+		fmt.Fprintf(&b, "%d days %d:00:00,a\n", d, 24*(30-d))
 	}
 	return b.String()
 }

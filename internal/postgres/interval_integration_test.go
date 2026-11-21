@@ -47,6 +47,11 @@ const infiniteIntervals = `UNION ALL VALUES
 	(2147483647, 2147483647, 9223372036854775807, false, 'infinity'::pg_catalog.interval),
 	(-2147483648, -2147483648, -9223372036854775808, false, '-infinity'::pg_catalog.interval)`
 
+// minCoarsePairs is the least number of pairs of the intervals of
+// intervalPartsSQL that the equality of interval takes for equal although
+// their parts differ. The values give 5588 such pairs.
+const minCoarsePairs = 5000
+
 // The text of an interval, in the settings that a session pins, is equal to
 // the text of another exactly when their months, their days, and their time
 // are equal: negative parts, mixed signs, fractions of a second, many hours,
@@ -84,8 +89,10 @@ func TestIntervalTextTellsItsPartsApart(t *testing.T) {
 			if pairs != want*want {
 				t.Errorf("%d pairs, want %d", pairs, want*want)
 			}
-			if coarse == 0 {
-				t.Error("no pair of intervals is equal by the type with other parts")
+			// The values above give thousands of such pairs, which the
+			// comparison of texts must tell apart.
+			if coarse < minCoarsePairs {
+				t.Errorf("%d pairs of intervals are equal by the type with other parts, want at least %d", coarse, minCoarsePairs)
 			}
 			if wrongText != 0 {
 				t.Errorf("%d pairs of intervals have equal texts with other parts, or other texts with equal parts", wrongText)
