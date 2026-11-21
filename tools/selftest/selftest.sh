@@ -553,10 +553,11 @@ EOF
   passes
 }
 
-# The boundary of the dialects (ADR-0019, ADR-0036): a shared package and the
-# package of another dialect import neither the dialect of PostgreSQL nor its
-# driver. The dialect itself, and the file of the command that registers it,
-# do.
+# The boundary of the dialects (ADR-0019, ADR-0036): a shared package, its
+# tests, the package of another dialect, and any other file of the command
+# import neither the dialect of PostgreSQL, nor its test servers, nor its
+# driver. The dialect itself, the file of the command that returns it, and the
+# integration tests of the command do.
 case_lint_go__dialects() {
   good_go
   put_go internal/postgres/postgres.go << 'EOF'
@@ -602,13 +603,66 @@ func Quote(name string) string {
     return pgx.Identifier{name}.Sanitize()
 }
 EOF
+  put_go internal/postgres/pgtest/pgtest.go << 'EOF'
+// Package pgtest is a fixture of the self-test: the test servers of the dialect.
+package pgtest
+
+// Name returns the name of a test server.
+func Name() string {
+    return "postgres-18"
+}
+EOF
+  put_go internal/plan/plan_test.go << 'EOF'
+package plan
+
+import (
+    "testing"
+
+    "github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
+)
+
+func TestServer(t *testing.T) {
+    if pgtest.Name() == "" {
+        t.Fatal("no test server")
+    }
+}
+EOF
+  put_go cmd/kortopi/wiring.go << 'EOF'
+package main
+
+import "github.com/ma-chisuke/kortopi/internal/postgres"
+
+var _ = postgres.Quote("rooms")
+EOF
+  put_go cmd/kortopi/server_integration_test.go << 'EOF'
+//go:build integration
+
+package main
+
+import (
+    "testing"
+
+    "github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
+)
+
+func TestServer(t *testing.T) {
+    if pgtest.Name() == "" {
+        t.Fatal("no test server")
+    }
+}
+EOF
   fails "internal/plan/plan.go:4:8: import 'github.com/ma-chisuke/kortopi/internal/postgres' is not allowed from list 'postgres': code specific to a database goes in the package of its dialect"
   prints 'ADR-0019'
   prints "internal/other/other.go:4:8: import 'github.com/jackc/pgx/v5' is not allowed from list 'postgres'"
+  prints "internal/plan/plan_test.go:6:2: import 'github.com/ma-chisuke/kortopi/internal/postgres/pgtest' is not allowed from list 'postgres'"
+  prints "cmd/kortopi/wiring.go:3:8: import 'github.com/ma-chisuke/kortopi/internal/postgres' is not allowed from list 'postgres'"
   omits 'internal/postgres/postgres.go'
+  omits 'internal/postgres/pgtest/pgtest.go'
   omits 'cmd/kortopi/dialect_postgres.go'
+  omits 'cmd/kortopi/server_integration_test.go'
   drop internal/plan
   drop internal/other
+  drop cmd/kortopi/wiring.go
   passes
 }
 

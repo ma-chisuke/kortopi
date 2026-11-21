@@ -85,7 +85,7 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 
 ### 確認の方法
 
-- `make check` は `lint-go` を実行し、そのルール `postgres` が境界を守らせる。自己テストの `lint-go (dialects)` は、共有のパッケージが DB ごとの部品を import するときと、ほかの部品のパッケージがドライバーを import するときに、`lint-go` が失敗することを示す。部品自身と `cmd/kortopi/dialect_postgres.go` では、`lint-go` は通る。
+- `make check` は `lint-go` を実行し、そのルール `postgres` が境界を守らせる。自己テストの `lint-go (dialects)` は、`lint-go` が失敗する場合を4つ示す。1つ目は共有のパッケージが DB ごとの部品を import するとき、2つ目は共有のパッケージのテストがその部品のテスト用のサーバーを import するときである。3つ目はほかの部品のパッケージがドライバーを import するとき、4つ目は `cmd/kortopi/dialect_postgres.go` 以外のコマンドのファイルがその部品を import するときである。部品自身、`cmd/kortopi/dialect_postgres.go`、テスト用のサーバーを import するコマンドの結合テストでは、`lint-go` は通ることも示す。
 - `internal/dialect` の単体テスト（`TestChoose`・`TestChooseNoDialect`・`TestNewRegistryTwice`）は、部品がないとき、1つのとき、2つ以上のときの選択を確かめる。同じ名前の部品が2つあるときのエラーも確かめる。`cmd/kortopi` の `TestNewRegistry` は、タグなしのビルドが PostgreSQL を含み、それだけを含むことを確かめる。`cmd/kortopi` の `TestNoDialect` は、部品がないときに `plan`・`apply`・`export` が1つのエラーで失敗し、バージョンとヘルプは出力されることを確かめる。`internal/postgres` の `TestDialectOpen` は、オプションがセッションに届くことを確かめる。
 - `make check-all` の結合テスト `TestBuildWithoutPostgres` は、`kortopi_no_postgres` を付けてコマンドをビルドし、動かす。そのビルドが部品もドライバーもパーサも含まないこと、バージョンを出力すること、計画を部品のないビルドのエラーで止めることを確かめる。
 - コマンドの結合テストはタグなしのビルドのレジストリを通して動くので、そのビルドに PostgreSQL がなければ失敗する。`make test-release` は、これまでどおりリリースをビルドする。
@@ -115,4 +115,4 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 - 接点は `internal/dialect/dialect.go` で、ルールは `.golangci.yml` の `postgres` である。
 - コマンドの中の PostgreSQL のファイルは、`cmd/kortopi/dialect_postgres.go` と `dialect_postgres_off.go` である。レジストリは、`cmd/kortopi/main.go` の `newRegistry` が作る。
 
-<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:36dd0b64a7878632ed3d24c183c4af68a4feb845b261ce005250c9ee77935a69 -->
+<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:82ef5cd4c30c1b36aa102c8c3cd4ceedb4d7f755be69df90759c551b1a766956 -->
