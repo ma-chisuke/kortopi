@@ -38,6 +38,8 @@ kortopi は、ファイルのテキストをデータベースと比べること
 | `xmloption` | `content` | `xml` の値は、`pg_dump` が書くのと同じく、文書全体ではなく内容として読む。 |
 | `lc_monetary` | `C` | `money` の値は、C ロケールの形で読み、表示する。どの環境でも同じである。 |
 | `row_security` | `off` | 行単位セキュリティのポリシーが絞り込む問い合わせは、少ない行を返さずに失敗する（[kortopi plan](plan.ja.md#セッションに要るもの)）。 |
+| `array_nulls` | `on` | 配列の `{NULL}` は、テキスト `NULL` ではなく NULL の要素である。 |
+| `timezone_abbreviations` | `Default` | 値の中のタイムゾーンの略称、たとえば `EST` は、PostgreSQL の略称の組 `Default` で読む。そこでは `EST` は UTC より5時間遅れている。 |
 
 apply も、これらの設定で読み、比べる。ただし、行は kortopi が固定する前にセッションが持っていた設定で書く。そのため、テーブルの既定値とトリガーは、アプリケーションの設定を見る（[kortopi apply](apply.ja.md#書き込みの設定)）。
 [kortopi export](export.ja.md) も、これらの設定で値を書く。そのため、計画はそのファイルを同じ値として読み戻す。
@@ -123,4 +125,4 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 
 これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:a705e055eb08a75f6cb973a2d184508428ffcd22bdac5bf1c22a7f8b225ea852 -->
+<!-- i18n-source: comparison.md sha256:da5469ba0b6409e0852bf68285305997fffca4b238443d9b5209fe3eb1a1ca23 -->

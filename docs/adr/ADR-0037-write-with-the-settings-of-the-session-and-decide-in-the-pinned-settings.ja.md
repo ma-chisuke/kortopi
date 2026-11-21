@@ -49,7 +49,8 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
 
 戻す設定とその値：
 
-- 書き込みは、ADR-0023 が固定する設定のうち `client_encoding` を除くすべてを戻す。戻すのは `search_path`・`TimeZone`・`DateStyle`・`IntervalStyle`・`standard_conforming_strings` である。さらに `extra_float_digits`・`bytea_output`・`xmloption`・`lc_monetary`・`row_security` も戻す。`client_encoding` は固定したままにする。これは kortopi とサーバーの間のバイトについての設定であり、書き込みは一時テーブルから、すでにデータベースの型になった行を取るからである。
+- この記録は、ADR-0023 が読むために固定する設定を2つ増やす。どちらも、宣言した値の読み方を変えるからである。`array_nulls` は `on` にする。そうすれば、配列の `{NULL}` は、テキスト `NULL` ではなく NULL の要素になる。`timezone_abbreviations` は `Default` にする。そうすれば、値の中のタイムゾーンの略称は、どこでも同じタイムゾーンを意味する。`EST` は、略称の組 `Default` では UTC より5時間遅れたアメリカの東部標準時であり、組 `Australia` では10時間進んだオーストラリアの東部標準時である。
+- 書き込みは、ADR-0023 とこの記録が固定する設定のうち `client_encoding` を除くすべてを戻す。戻すのは `search_path`・`TimeZone`・`DateStyle`・`IntervalStyle`・`standard_conforming_strings` である。さらに `extra_float_digits`・`bytea_output`・`xmloption`・`lc_monetary`・`row_security` と、`array_nulls`・`timezone_abbreviations` も戻す。`client_encoding` は固定したままにする。これは kortopi とサーバーの間のバイトについての設定であり、書き込みは一時テーブルから、すでにデータベースの型になった行を取るからである。
 - それぞれの値は、apply のトランザクションが始まる前にセッションが持っている値である。サーバーの設定・`ALTER DATABASE ... SET`・`ALTER ROLE ... SET`・`PGOPTIONS` などの接続のオプションが設定したものである。kortopi は接続した直後に、1つの問い合わせでそれらを読む。計画と書き出しは何も読まない。
 - `lock_timeout` のように kortopi が固定しない設定は、これまでどおり、最後までセッションの値のままである。
 
@@ -95,7 +96,7 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
 - 計画と書き出しはテーブルの行を書かず、すべての設定を固定したままにする。出力は変わらない。
 - SQL として出力した計画（ADR-0029）は、それを実行する人のセッションで、スクリプトが固定する3つを除き、そのセッションの設定で動く。そのため、その文が発火させる既定値とトリガーは、そのセッションの設定を見る。apply の書き込みも、いまは自分のセッションで同じようにする。両者は一致する。
 
-これは ADR-0023 を細かくする。固定した設定は読むことと比べることのためのものであり、apply の書き込みは `client_encoding` を除いてセッションの設定で動く。ADR-0026 も細かくする。apply のトランザクションは、書き込みとコミットを除いて固定した設定で動く。そして各文は、その前の文が計画の条件で選んだ行を書く。ADR-0026 は、条件を文そのものに置いていた。
+これは ADR-0023 を細かくする。`array_nulls` と `timezone_abbreviations` も固定し、固定した設定は読むことと比べることのためのものとする。apply の書き込みは `client_encoding` を除いてセッションの設定で動く。ADR-0026 も細かくする。apply のトランザクションは、書き込みとコミットを除いて固定した設定で動く。そして各文は、その前の文が計画の条件で選んだ行を書く。ADR-0026 は、条件を文そのものに置いていた。
 
 ### 結果
 
@@ -122,6 +123,7 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
   - `TestSettingsAroundTheWrites`：各書き込みのあと設定が再び固定されること、トリガーがセッションの設定を見たこと、そしてコミットのあと接続が apply の前と同じセッションの設定を持つことを確かめる。
   - `TestUpdateDecidesInThePinnedSettings`：テキストで比べる列も、固定した設定で違うと決めて更新することを確かめる。
   - `TestWritesInTheSearchPathOfTheRole`：ロールの検索パスで `pg_catalog` の前にあるスキーマのオブジェクトが呼ばれないことを確かめる。
+  - `TestSettingsThatChangeHowValuesRead`：ロールは `array_nulls` を off に、`timezone_abbreviations` を `Australia` にしている。それでも計画と apply は、`{NULL}` と `EST` を固定した値のとおりに読む。挿入のトリガーはロール自身の値を見る。
   - `TestCommitWithTheSettingsOfTheSession`：遅らせた制約トリガーは、コミットのときに動く。それがセッションの `TimeZone` と `search_path` を見ることを確かめる。失敗したトランザクションのコミットが、何も変わらなかったと告げることも確かめる。
   - `TestApplyWhenRowLevelSecurityComesToApply` は、選ぶ文のエラーの形も確かめる。
   - `TestApplyWithSelectOnTheDeclaredColumns`：ロールは、宣言した列にだけ `SELECT` と `INSERT` を、比べる列に `UPDATE` を、そして `DELETE` を持つ。このロールが挿入・更新・削除を適用できることを確かめる。
@@ -166,4 +168,4 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
   - [docs/reference/apply.ja.md](../reference/apply.ja.md#書き込みの設定)
   - [docs/reference/comparison.ja.md](../reference/comparison.ja.md#セッションの設定)
 
-<!-- i18n-source: ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md sha256:9a6b8a899950b613c6b71f712dc9017bbc42691d91a81a1945b2675151ec45a2 -->
+<!-- i18n-source: ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md sha256:65a0aa566fd2c68e0d0744b450962f159979f0988bce92e411338e9ccde2e2b1 -->

@@ -315,13 +315,13 @@ func TestSettingsAroundTheWrites(t *testing.T) {
 			if got := read(s.conn); !slices.Equal(got, own) {
 				t.Errorf("the settings after the commit = %v, want those of the session %v", got, own)
 			}
-			// The triggers saw the session's own settings, but the pinned
-			// client_encoding, which is UTF8 in the plain connection too.
+			// The triggers saw the session's own settings, those that the
+			// trigger see records, and the pinned client_encoding last, which
+			// is UTF8 in the plain connection too.
 			var parts []string
-			for i, setting := range settings {
-				if setting[0] != "client_encoding" {
-					parts = append(parts, own[i])
-				}
+			for _, name := range []string{"search_path", "TimeZone", "DateStyle", "IntervalStyle", "standard_conforming_strings",
+				"extra_float_digits", "bytea_output", "xmloption", "lc_monetary", "row_security"} {
+				parts = append(parts, own[slices.IndexFunc(settings[:], func(s [2]string) bool { return s[0] == name })])
 			}
 			seen := db.Query(t, `SELECT DISTINCT settings FROM public.seen`)
 			if want := strings.Join(parts, " | ") + " | UTF8"; len(seen) != 1 || seen[0][0] != want {
@@ -363,6 +363,60 @@ func TestUpdateDecidesInThePinnedSettings(t *testing.T) {
 			rows := db.Query(t, `SELECT at[0] = 0.1::float8 AND at[1] = 0.30000000000000004::float8, note FROM app.shapes`)
 			if len(rows) != 1 || rows[0][0] != "t" || rows[0][1] != "new" {
 				t.Errorf("the row after the apply = %v, want the declared point and note", rows)
+			}
+		})
+	}
+}
+
+// array_nulls and timezone_abbreviations change how a declared value reads:
+// with array_nulls off, {NULL} is an array of the text NULL, and the set of
+// abbreviations Australia reads EST as ten hours ahead of UTC, where the set
+// Default reads it as five hours behind. A plan and an apply read the
+// declared values with both pinned, as on and Default, whatever the role
+// sets, and the writes run with the role's own values, as a trigger sees.
+func TestSettingsThatChangeHowValuesRead(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.events (id integer PRIMARY KEY, tags text[], at timestamptz);
+				INSERT INTO app.events VALUES (1, '{NULL}', '2026-11-21 14:00:00+00');
+				CREATE TABLE public.seen_values (seen text NOT NULL);
+				CREATE FUNCTION public.see_values() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					INSERT INTO public.seen_values VALUES (current_setting('array_nulls') || ' | ' || current_setting('timezone_abbreviations'));
+					RETURN NULL;
+				END $$;
+				CREATE TRIGGER events_see AFTER INSERT ON app.events FOR EACH ROW EXECUTE FUNCTION public.see_values();
+			`)
+			cfg := db.Role(t, "reader")
+			role := quoteIdent(cfg.User)
+			db.Exec(t, `
+				GRANT USAGE ON SCHEMA app TO `+role+`;
+				GRANT SELECT, INSERT, UPDATE ON app.events TO `+role+`;
+				GRANT INSERT ON public.seen_values TO `+role+`;
+				ALTER ROLE `+role+` SET array_nulls = off;
+				ALTER ROLE `+role+` SET timezone_abbreviations = 'Australia';
+			`)
+			dir := writeFiles(t, map[string]string{"app/events.csv": "id,tags,at\n1,{NULL},2026-11-21 09:00:00 EST\n2,{NULL},2026-11-21 09:00:00 EST\n"})
+			table := csvTable("app", "events", "id", "tags", "at")
+
+			s := db.sessionWith(t, cfg, dir)
+			req := request(t, s, table, nil, config.ModeUpsert)
+			checkDiff(t, s, req, `+ "2" | "{NULL}" "2026-11-21 14:00:00+00"`)
+
+			a := db.applySession(t, cfg, dir)
+			req = request(t, a, table, nil, config.ModeUpsert)
+			if got, err := applyAll(t.Context(), a, []plan.DiffRequest{req}, false); err != nil || got.inserted != 1 || got.updated != 0 {
+				t.Fatalf("apply = %+v, %v", got, err)
+			}
+			rows := db.Query(t, "SELECT id, tags[1] IS NULL, at = '2026-11-21 14:00:00+00' FROM app.events ORDER BY id")
+			if want := [][]string{{"1", "t", "t"}, {"2", "t", "t"}}; !slices.EqualFunc(rows, want, slices.Equal) {
+				t.Errorf("rows after the apply = %v, want %v", rows, want)
+			}
+			if seen := db.Query(t, "SELECT seen FROM public.seen_values"); !slices.EqualFunc(seen, [][]string{{"off | Australia"}}, slices.Equal) {
+				t.Errorf("the trigger of the insert saw %v, want the role's own settings", seen)
 			}
 		})
 	}

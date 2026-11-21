@@ -38,6 +38,8 @@ They decide how PostgreSQL reads the values of your files and how a plan prints 
 | `xmloption` | `content` | An `xml` value is read as content, as `pg_dump` writes it, not as a whole document. |
 | `lc_monetary` | `C` | A `money` value reads and prints in the form of the C locale, the same in every environment. |
 | `row_security` | `off` | A query that a policy of row-level security would filter fails instead of returning fewer rows ([kortopi plan](plan.md#what-the-session-needs)). |
+| `array_nulls` | `on` | `{NULL}` in an array is a NULL element, not the text `NULL`. |
+| `timezone_abbreviations` | `Default` | An abbreviation of a time zone in a value, such as `EST`, reads with the set `Default` of PostgreSQL, where `EST` is five hours behind UTC. |
 
 An apply reads and compares in these settings too, but it writes the rows with the settings that the session had before kortopi pinned them, so the defaults and the triggers of your tables see the settings of your application ([kortopi apply](apply.md#the-settings-of-the-writes)).
 [kortopi export](export.md) writes values in these settings too, so a plan reads its files back as the same values.

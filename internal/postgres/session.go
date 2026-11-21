@@ -66,6 +66,11 @@ var settings = [...][2]string{
 	{"xmloption", "content"},
 	{"lc_monetary", "C"},
 	{"row_security", "off"},
+	// array_nulls off would read {NULL} as an array of the text NULL, and
+	// another set of abbreviations would read EST or CST as another zone
+	// (ADR-0037).
+	{"array_nulls", "on"},
+	{"timezone_abbreviations", "Default"},
 }
 
 // applicationName names kortopi to the server, unless the environment names

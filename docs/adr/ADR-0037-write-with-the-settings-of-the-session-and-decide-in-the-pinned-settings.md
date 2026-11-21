@@ -49,7 +49,8 @@ The rules are as follows.
 
 Which settings, and which values:
 
-- A write restores every setting that ADR-0023 pins but `client_encoding`: `search_path`, `TimeZone`, `DateStyle`, `IntervalStyle`, `standard_conforming_strings`, `extra_float_digits`, `bytea_output`, `xmloption`, `lc_monetary`, and `row_security`. `client_encoding` stays pinned: it is about the bytes between kortopi and the server, and a write takes its rows from temporary tables, in the types of the database already.
+- This record adds two settings to those that ADR-0023 pins for reading, because each changes how a declared value reads. `array_nulls` is `on`, so `{NULL}` in an array is a NULL element, not the text `NULL`. `timezone_abbreviations` is `Default`, so an abbreviation of a zone in a value means the same zone everywhere: `EST` is the Eastern Standard Time of America, five hours behind UTC, in the set `Default`, and the Australian one, ten hours ahead, in the set `Australia`.
+- A write restores every setting that ADR-0023 and this record pin but `client_encoding`: `search_path`, `TimeZone`, `DateStyle`, `IntervalStyle`, `standard_conforming_strings`, `extra_float_digits`, `bytea_output`, `xmloption`, `lc_monetary`, `row_security`, `array_nulls`, and `timezone_abbreviations`. `client_encoding` stays pinned: it is about the bytes between kortopi and the server, and a write takes its rows from temporary tables, in the types of the database already.
 - The value of each is the one that the session has before the transaction of the apply begins: what the configuration of the server, `ALTER DATABASE ... SET`, `ALTER ROLE ... SET`, and the options of the connection, such as `PGOPTIONS`, set. kortopi reads them in one query just after it connects. A plan and an export read none.
 - The settings that kortopi does not pin, such as `lock_timeout`, keep the values of the session throughout, as before.
 
@@ -95,7 +96,7 @@ What stays as it is:
 - A plan and an export write no row of a table, and keep every setting pinned: their output does not change.
 - The plan as SQL (ADR-0029) runs in the session of whoever runs it, with the settings of that session but the three that the script pins, so the defaults and triggers that its statements fire see those settings. The writes of an apply now do the same in their own session, and the two agree.
 
-This refines ADR-0023: the pinned settings are for reading and comparing, and the writes of an apply run with the settings of the session but `client_encoding`. It refines ADR-0026: its transaction runs with the pinned settings but for the writes and the commit, and each statement writes the rows that a statement before it picked with the conditions of the plan, where ADR-0026 put the conditions in the statement itself.
+This refines ADR-0023: it pins `array_nulls` and `timezone_abbreviations` too, the pinned settings are for reading and comparing, and the writes of an apply run with the settings of the session but `client_encoding`. It refines ADR-0026: its transaction runs with the pinned settings but for the writes and the commit, and each statement writes the rows that a statement before it picked with the conditions of the plan, where ADR-0026 put the conditions in the statement itself.
 
 ### Consequences
 
@@ -118,6 +119,7 @@ This refines ADR-0023: the pinned settings are for reading and comparing, and th
   - `TestSettingsAroundTheWrites`: the settings are pinned again after each write, the triggers saw the settings of the session, and after the commit the connection has the settings of the session as before the apply.
   - `TestUpdateDecidesInThePinnedSettings`: a column that compares by its text is found to differ in the pinned settings, and updated.
   - `TestWritesInTheSearchPathOfTheRole`: the objects of a schema before `pg_catalog` in the role's search path are not called.
+  - `TestSettingsThatChangeHowValuesRead`: with a role that sets `array_nulls` off and `timezone_abbreviations` to `Australia`, a plan and an apply read `{NULL}` and `EST` as with the pinned values, and the trigger of an insert sees the role's own.
   - `TestCommitWithTheSettingsOfTheSession`: a constraint trigger that is `DEFERRABLE INITIALLY DEFERRED` sees the `TimeZone` and the `search_path` of the session at the commit, and the commit of a transaction that has failed says that nothing was changed.
   - `TestApplyWhenRowLevelSecurityComesToApply` also shows the form of the error of a pick.
   - `TestApplyWithSelectOnTheDeclaredColumns`: a role with `SELECT` and `INSERT` on the declared columns alone, `UPDATE` on the compared columns, and `DELETE` applies inserts, updates, and deletions.
