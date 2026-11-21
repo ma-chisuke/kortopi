@@ -35,10 +35,9 @@ const maxFlaggedRows = 5
 // Values are text as PostgreSQL prints them.
 //
 // The work of one table runs inside a savepoint, so that an error leaves the
-// session usable. In a plan, the savepoint is rolled back at the end, so the
-// temporary table goes away at once. In an apply, it is released, and the
-// declared rows stay loaded until the session ends, for Insert, Update, and
-// Delete.
+// session usable. The savepoint is released, and the declared rows stay
+// loaded until the session ends: Effects reads them for every table, and in
+// an apply, Insert, Update, and Delete write from them.
 //
 // When the table has rows to delete, Diff also counts the rows of other
 // tables that reference them (ADR-0018).
@@ -69,7 +68,10 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 
 	var diff plan.TableDiff
 	var keys []foreignKey
-	err = s.savepoint(ctx, s.apply, func(tx pgx.Tx) error {
+	// The declared rows stay loaded until the session ends, also in a plan:
+	// Effects reads the declared rows of every table (ADR-0039), and an apply
+	// writes from them.
+	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
 		// The words for relative times are checked before the typed load
 		// turns them into dates.
 		if err := s.checkRelativeTimes(ctx, tx, table, c, dateTimeColumns(meta, table)); err != nil {
@@ -114,16 +116,16 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 	if err != nil {
 		return plan.TableDiff{}, err
 	}
+	lt := &loadedTable{
+		meta: meta, c: c, inserts: len(diff.Inserts), updates: len(diff.Updates), deletes: len(diff.Deletes),
+		updating: req.Updates, sync: req.Deletes, refs: diff.References, keys: keys,
+	}
 	if s.apply {
-		lt := &loadedTable{
-			meta: meta, c: c, inserts: len(diff.Inserts), updates: len(diff.Updates), deletes: len(diff.Deletes),
-			refs: diff.References, keys: keys,
-		}
 		if err := s.checkWrites(lt, table); err != nil {
 			return plan.TableDiff{}, err
 		}
-		s.loaded[table.Name] = lt
 	}
+	s.loaded[table.Name] = lt
 	return diff, nil
 }
 
@@ -586,12 +588,9 @@ func (s *Session) checkRelativeTimes(ctx context.Context, tx pgx.Tx, table decla
 	if err != nil {
 		return fmt.Errorf("check the dates and times of the declared rows of table %s: %w", table.Name, err)
 	}
-	if s.apply {
-		// The savepoint of an apply keeps what it made; this table is no
-		// longer needed.
-		if _, err := tx.Exec(ctx, "DROP TABLE "+temp); err != nil {
-			return fmt.Errorf("drop the text of the declared rows of table %s: %w", table.Name, err)
-		}
+	// The savepoint keeps what it made; this table is no longer needed.
+	if _, err := tx.Exec(ctx, "DROP TABLE "+temp); err != nil {
+		return fmt.Errorf("drop the text of the declared rows of table %s: %w", table.Name, err)
 	}
 	errs := make([]error, 0, len(found))
 	for _, f := range found {

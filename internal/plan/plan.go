@@ -243,6 +243,10 @@ type Table struct {
 	// (ADR-0035). They are not compared.
 	OnInsert []config.InsertValue
 	Diff     TableDiff
+	// Effect is what the rows to delete of the table do to other rows
+	// through foreign keys, at every depth (ADR-0039). It is empty for a
+	// table without rows to delete.
+	Effect Effect
 }
 
 // Plan is the difference between a declaration and a database.

@@ -18,9 +18,9 @@ import (
 
 var _ apply.Database = (*Session)(nil)
 
-// loadedTable is a declared table that Diff loaded in a session of an apply,
-// and what the plan found in it. Insert, Update, and Delete write from it,
-// and check that they changed as many rows as the plan showed.
+// loadedTable is a declared table that Diff loaded, and what the plan found
+// in it. Effects reads it, and in an apply, Insert, Update, and Delete write
+// from it and check that they changed as many rows as the plan showed.
 type loadedTable struct {
 	meta *tableMeta
 	c    *comparison
@@ -29,6 +29,10 @@ type loadedTable struct {
 	inserts int
 	updates int
 	deletes int
+	// updating and sync say whether the mode of the table updates rows and
+	// deletes them (ADR-0013).
+	updating bool
+	sync     bool
 	// refs are the references to the rows to delete that the plan showed,
 	// and keys the foreign keys that point at the table.
 	refs []plan.Reference

@@ -81,7 +81,8 @@ type Session struct {
 	tx   pgx.Tx
 	dir  string
 	// apply is true for a session of an apply. loaded holds the declared
-	// rows that Diff loaded for it, and committed is true after Commit.
+	// rows that Diff loaded, in a plan too, and committed is true after
+	// Commit.
 	apply  bool
 	loaded map[declaration.TableName]*loadedTable
 	// export is true for a session of an export, which only reads.
@@ -90,6 +91,9 @@ type Session struct {
 	// deletesChecked is true after the privileges of the deletions were
 	// checked.
 	deletesChecked bool
+	// effect is the temporary table of the rows that the deletions reach,
+	// which Effects made last (ADR-0039).
+	effect string
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.
