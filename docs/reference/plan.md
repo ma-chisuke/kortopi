@@ -175,8 +175,9 @@ Row-level security is an error because a plan would see only the rows that the p
 The rows that they hide would look missing: the plan would show them as rows to insert, and never as rows to update or to delete.
 The session also pins `row_security` off, so a query that a policy would filter fails instead of returning fewer rows.
 
-To count the rows that reference rows to delete, a plan also reads the referencing tables ([Rows that reference rows to delete](#rows-that-reference-rows-to-delete)).
-Where the role lacks `USAGE` on their schema or `SELECT` on the columns of the foreign key, or where row-level security applies, the plan says that it could not count them, and goes on.
+To count what the deletions do to other rows, a plan also reads the tables that reference the rows to delete, and the tables that reference the rows that a cascade deletes, at every depth ([What the deletions also do](#what-the-deletions-also-do)).
+Where the role lacks `USAGE` on the schema of such a table or `SELECT` on the table, or where row-level security applies to it, the plan says that it could not count what the deletions do there, and goes on.
+`SELECT` on the columns of the foreign key alone is not enough, because the plan reads the identities of the rows, which no privilege on columns covers.
 
 In the database, a plan does the following and nothing else:
 
@@ -184,7 +185,8 @@ In the database, a plan does the following and nothing else:
 - It runs everything in one transaction at the isolation level `REPEATABLE READ`, so all tables are compared against one snapshot, and rolls the transaction back at the end.
 - It pins the settings that change how values are read ([How values are compared](comparison.md#the-settings-of-the-session)).
 - For each value of `on_insert` of a table that exists, before it loads any row, it creates a temporary table of that column alone inside a savepoint, inserts the value into it, and rolls the savepoint back ([Values that only an insert sets](#values-that-only-an-insert-sets)).
-- For each declared table, it creates a temporary table inside a savepoint, loads the declared rows into it, compares them with the real table, and rolls the savepoint back, so the temporary table is gone before the next table.
+- For each declared table, it creates a temporary table inside a savepoint, loads the declared rows into it, and compares them with the real table. The temporary tables stay until the plan ends, because the effect of the deletions reads the declared rows of every table.
+- When rows are to be deleted, it follows the foreign keys that reference them with queries, and keeps the rows that it reaches, by their identities, in one more temporary table. It deletes no row.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
 
 Press Ctrl-C to stop a plan.
@@ -338,40 +340,62 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - A column of `on_insert` that the table lacks waits for the schema change, as a declared column does, and its line says where the name comes from: `column floor of on_insert in kortopi.toml: known after the schema is applied`.
 - The plan reads every value of a table that exists by the type of its column before it loads any row, also when no row is to insert. The values of a table that waits for the schema change are checked once the table exists. For each value, inside a savepoint of its own that it rolls back, it makes a temporary table of that column alone, which takes its type from the column of the table, and inserts the value into it. So no other column gets a value or a default, and the role needs `SELECT` on these columns, to read their types, as on the declared columns ([What the session needs](#what-the-session-needs)).
 
-### Rows that reference rows to delete
+### What the deletions also do
 
-Under the rows to delete of a table, a plan shows every foreign key that points at them, once per table:
+A table whose rows to delete are referenced by other rows gets a block after its counts, apart from its rows, that says what the deletions also do through foreign keys:
 
 ```text
-geo.regions (sync, key: code)
-  - code=north
-    referenced by 1 row of geo.prefectures (region), prefectures_region_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it
-    referenced by 1 row of geo.stations (region), stations_region_fkey: ON DELETE CASCADE, so the deletion deletes this row too
+m.plan (sync, key: code)
+  - code=legacy
   0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of t.orders (plan_id) references it through orders_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      50000 rows of t.order_line (order_id) reference that row of t.orders through order_line_order_id_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+        2000 rows of t.line_note (line_id) reference those rows of t.order_line through line_note_line_id_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+
+m.plan_feature (sync, key: id)
+  - id=2
+  - id=3
+  0 to insert, 0 to update, 2 to delete
+
+Plan: 0 to insert, 0 to update, 3 to delete in 2 tables.
+Through foreign keys, the deletions also delete 52001 rows.
 ```
 
-Each line names the referencing table, its columns, and the constraint, counts the rows that reference a row to delete, and says what PostgreSQL does while they still do, by the action `ON DELETE` of the key:
+Each line of the block names the referencing table, its columns, and the foreign key, counts the rows that reference the rows that go, and says what PostgreSQL does to them, by the action `ON DELETE` of the key:
 
 | Action | The line says |
 |---|---|
-| `NO ACTION`, `RESTRICT` | the deletion fails while these rows reference them |
 | `CASCADE` | the deletion deletes these rows too |
-| `SET NULL` | the deletion sets the reference of these rows to NULL |
-| `SET DEFAULT` | the deletion sets the reference of these rows to the default |
+| `SET NULL` | the deletion sets the columns of these rows to NULL |
+| `SET DEFAULT` | the deletion sets the columns of these rows to their defaults |
+| `NO ACTION`, `RESTRICT` | the deletion fails while these rows reference them |
 
-- Every foreign key counts: from any table, declared or not, in any schema, from the table itself, and a key that points at one partition of the table.
-- A count joins on the columns of the foreign key, not on the match key.
-- For a key from the table to itself, only rows that stay are counted.
-- A key with no referencing row is left out.
-- When the role may not read the referencing table, the line says so instead of a count, and the plan goes on:
+- The rows that a cascade deletes are followed in turn: the foreign keys that reference them get lines two spaces further in, under the line of the cascade, at every depth, through a table that references itself and through cycles.
+- `SET NULL` and `SET DEFAULT` name the columns that they set, also the columns of a column list of PostgreSQL 15 and later. A changed row is not followed further.
+- Every foreign key counts: from any table, declared or not, in any schema, from the table itself, to one of its partitions, or to a partitioned table above it. A count joins on the columns of the foreign key, with its own operators and collations, not on the match key.
+- A row that the plan deletes itself is not counted, and neither is a row that the plan points at another row before the deletions, because an apply inserts and updates before it deletes. Above, the rows of `m.plan_feature` reference the row `legacy` with `ON DELETE CASCADE`, but the plan deletes them itself, so they count once, as rows to delete.
+- Each row is counted once: a row that a cascade deletes is neither changed nor in the way, and a row that two foreign keys reach counts under the first of them, at the lowest level. A row that the deletions of two tables reach counts for the table that comes first.
+- A foreign key whose rows nothing references is left out.
+- When the role may not read a table, the line says so instead of a count, and the walk goes no further there:
 
   ```text
-  maybe referenced by rows of reservation.audit (room_type_id), audit_room_type_fkey: the role may not read the table to count them; ON DELETE NO ACTION, so the deletion fails while such rows reference them
+  Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not read the table, so what the deletion does to them is not known.
   ```
 
-An apply may change or delete the referencing rows before it deletes, so a line says what happens in the state that the plan read, not that it will happen.
-Only the first level of a cascade is shown, and an update of a referenced column shows no count.
-[kortopi apply](apply.md#the-guards-on-deletions) uses these counts for its limit on deletions.
+- When `SET NULL` or `SET DEFAULT` changes a column that another foreign key references, the line says that what the action `ON UPDATE` of that key does is not known.
+
+After the line `Plan:`, one line for each fact sums up all tables: the rows that the deletions also delete and change, the rows that make them fail, and the foreign keys whose effect is not known:
+
+```text
+Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
+Through foreign keys, the deletions also delete 126 rows and change 8 rows.
+Through foreign keys ON DELETE NO ACTION or RESTRICT, 15 rows make the deletions fail.
+What the deletions do through 3 foreign keys is not known.
+```
+
+A declared row that the deletions would delete, or whose declared column they would set, is a mistake, not a line of the block: the plan fails, and names the row and the file that declares it ([kortopi apply](apply.md#declared-rows-in-the-way)).
+[kortopi apply](apply.md#the-guards-on-deletions) uses these counts for its limit on deletions, and an update of a referenced column shows no count.
 
 ### Values and names
 
@@ -443,7 +467,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### Read the script
 
-- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan. After the header come the tables and the columns that wait for a schema change, one comment line each.
+- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan, with the lines that sum up what the deletions also do through foreign keys. After the header come the tables and the columns that wait for a schema change, one comment line each.
 - After a comment, three `SET LOCAL` statements pin, until the end of the transaction, the settings that change how a literal of the script reads ([Values in the script](#values-in-the-script)). When the script holds values of `on_insert`, the comment says that the settings make the values mean what they meant to the plan "but those of on_insert", which the session reads in its own settings.
 - When an apply would defer foreign keys of a cycle, a `SET CONSTRAINTS ... DEFERRED` follows ([kortopi apply](apply.md#foreign-keys-and-cycles)). When another table of the schema has a constraint of the same name that is not deferrable, the plan fails with the error of an apply ([kortopi apply](apply.md#a-constraint-of-the-same-name)).
 - The tables follow in the order of an apply, from referenced tables to referencing ones, each under a comment line with its counts. A table gets one `INSERT` for its rows to insert, each row on a line of its own, and one `UPDATE` for each row to update, which sets only the columns that differ.
@@ -504,8 +528,8 @@ After the script, `kortopi plan --exit-code` shows the deletions that stayed com
 
 The deletions are comments: every line of their statements starts with the comment mark `--`.
 An apply deletes these rows only with `--allow-delete` ([kortopi apply](apply.md#the-guards-on-deletions)), so the script deletes them only when you remove the marks.
-The reference lines of the plan stand before the deletions of each table, as comments.
-Read them before you remove the marks: nothing in the script applies `--max-delete`, or counts the references again.
+The block of what the deletions of a table also do ([What the deletions also do](#what-the-deletions-also-do)) stands before the deletions of the table, as comments.
+Read it before you remove the marks: nothing in the script applies `--max-delete`, or counts the rows again.
 
 ### Values in the script
 
@@ -552,7 +576,7 @@ The script makes the changes of an apply, in its order, but it does not do what 
 
 - It takes no lock, so it does not wait for an apply that runs at the same time.
 - It does not check that each statement changed as many rows as the plan shows. Against a database whose rows differ from the plan, an update or a deletion that finds no row changes nothing, without an error, and an insert can fail on a key. A trigger or a rule that changes what a statement does goes unnoticed.
-- It does not apply `--max-delete`, and it does not count the references again before the deletions.
+- It does not apply `--max-delete`, it does not count the references again before the deletions, and it does not check what the deletions did.
 - An update sets only the columns that differ, so it needs `UPDATE` on those columns alone, and fires `UPDATE OF` triggers for those columns alone.
 - The order and the deferrals count the deletions, as for an apply with `--allow-delete`, so the script stays in order when you uncomment them.
 - A cycle of foreign keys that an apply refuses is no error. Its tables stand in the order of their names, under a comment that says which foreign keys may make statements fail, and to declare one of them `DEFERRABLE`. When only the deletions make an apply refuse the cycle, the comment says that an apply with `--allow-delete` refuses it and one without it does not.
@@ -570,7 +594,8 @@ kortopi checks in this order:
 2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. With `--no-pending`, it also checks that the database has every declared table and column. It checks the columns of `on_insert` too, and lets PostgreSQL read their values. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that neither the declaration nor `on_insert` names is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
-5. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
+5. When rows are to be deleted, it follows the foreign keys that reference them. A declared row that the deletions would delete, or whose declared column they would set to NULL or to its default, is a mistake, reported with those of step 4 ([kortopi apply](apply.md#declared-rows-in-the-way)).
+6. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
 
 [Declaration files](declaration.md#common-mistakes) lists the common mistakes and their messages.
 

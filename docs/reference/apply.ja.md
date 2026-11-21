@@ -25,9 +25,10 @@ flags:
                     more schemas
   --allow-delete    delete the rows that the declaration lacks, in tables
                     of mode sync
-  --max-delete <n>  with --allow-delete: change nothing when the apply would
-                    delete more than n rows, counting the rows that a foreign
-                    key ON DELETE CASCADE deletes with them (default: 100)
+  --max-delete <n>  with --allow-delete: change nothing when the deletions
+                    would delete or change more than n rows, counting the
+                    rows that foreign keys delete or change with them, at
+                    every depth (default: 100)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -70,6 +71,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 
 `session_replication_role` が `origin` でないセッションは、apply が拒む。そのときは、外部キーのトリガーが発火しないからである。
 
+削除がほかのテーブルにすることを数えるため、apply は計画と同じように、それらのテーブルを読む（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。`--allow-delete` があるとき、削除がロールの読めないテーブルの行を消すか変えるなら、apply は止まる（[削除の安全策](#削除の安全策)）。
+
 ## apply がすること
 
 1. 計画と同じように、ファイルと設定を読み、接続する。ファイルの誤りは、接続する前に報告する。
@@ -80,7 +83,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 6. 削除の安全策と、外部キーの循環を検査する。
 7. 参照されるテーブルから参照するテーブルへの順に、各テーブルの足りない行を挿入し、それから違う行を更新する。
 8. `--allow-delete` があれば、参照するテーブルから参照されるテーブルへの順に、宣言にない行を削除する。
-9. コミットし、書いたものを出力する。
+9. 計画が数えたほかのテーブルの行を削除が消し、変えたことを確かめる。そして、コミットし、書いたものを出力する。
 
 どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガーかルールが文のすることを変えたので、apply は止まる。
 計画と書き込みは1つのスナップショットから来るので、出力した計画が、apply の書き込むものである。
@@ -106,11 +109,17 @@ kortopi はシーケンスを読みも動かしもしない。
 
 1. テーブルのモードが、`kortopi.toml` で `sync` である。
 2. apply を `--allow-delete` 付きで実行する。
-3. 実行全体の削除する行と、外部キー `ON DELETE CASCADE` がそれと一緒に消す行の合計が、`--max-delete`（既定は 100）以下である。
+3. 実行全体の削除が消すか変える行が、`--max-delete`（既定は 100）以下である。数えるのは、すべてのテーブルの削除する行、外部キー `ON DELETE CASCADE` がそれと一緒にすべての段で消す行、`ON DELETE SET NULL` と `SET DEFAULT` が変える行で、どの行も1回だけ数える。
 
-カスケードは1段目だけを数える。
-ロールの読めないテーブルへ削除がカスケードするときは、その行を数えられないので、apply は止まる。
-削除の直前に、apply は参照をもう一度数える。apply の書いた行が、apply の削除する行を参照していれば、宣言は自己矛盾しているので、apply は止まる。
+計画は、apply が何かを書く前に、これらの行を数える（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。
+`--allow-delete` があるときは、次の場合にも、apply はどの書き込みよりも前に止まる。
+
+- 削除が、ロールの読めないテーブルの行を消すか変える。どの段のものであれ、その行は数えられない。
+- `SET NULL` か `SET DEFAULT` が、別の外部キーの参照する列を変える。kortopi は、その外部キーの `ON UPDATE` の動作をたどらない。
+
+削除が消す宣言した行や、宣言した列を NULL か既定値にする宣言した行は、宣言の誤りである。計画も apply も、`--allow-delete` の有無にかかわらず、どの書き込みよりも前にそれを報告する（[削除とぶつかる宣言した行](#削除とぶつかる宣言した行)）。
+最初の削除の直前に、apply は参照をもう一度数える。apply の書いた行が、apply の削除する行を参照していれば、apply は止まる（[apply の書いた行が削除する行を参照する](#apply-の書いた行が削除する行を参照する)）。
+削除のあとで、計画が数えた行を削除が消し、変えたことを確かめる。その間に別のトランザクションがそれらの行を変えていれば、止まる（[削除の間にほかのトランザクションが変えた行](#削除の間にほかのトランザクションが変えた行)）。
 
 ### 例
 
@@ -125,8 +134,9 @@ catalog.plans (sync, key: code)
   + code=team  name=Team  price=40.00
   ~ code=pro  name: Pro -> "Pro Plan"  price: 20.00 -> 25.00
   - code=legacy
-    referenced by 1 row of billing.subscriptions (plan_id), subscriptions_plan_id_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it
   1 to insert, 1 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.subscriptions (plan_id) references it through subscriptions_plan_id_fkey, ON DELETE NO ACTION, so the deletion fails while this row references it.
 
 facility.room_types (upsert, key: code)
   + code=suite  name="Suite Room"  capacity=4
@@ -138,13 +148,14 @@ facility.rooms (upsert, key: id)
   1 to insert, 0 to update
 
 Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
+Through foreign keys ON DELETE NO ACTION or RESTRICT, 1 row makes the deletion fail.
 
 Applied: 3 inserted, 2 updated, 0 deleted.
 Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.
 ```
 
 終了コードは 0 であり、`kortopi plan --exit-code` は、残った違いとして行 `legacy` を示す。
-参照の行は、契約がプランを参照している間は削除が失敗すると伝えている。
+テーブルの件数の行のあとのまとまりが、契約がプランを参照している間は削除が失敗すると伝えている。
 `--allow-delete` を付けると、削除はその外部キーで失敗し、何も変わらない。
 
 外部キーがかわりに `ON DELETE CASCADE` なら、契約はプランと一緒に削除されるので、上限に数える。
@@ -153,14 +164,18 @@ Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.
 $ kortopi apply --dir data --allow-delete --max-delete 1
 catalog.plans (sync, key: code)
   - code=legacy
-    referenced by 1 row of billing.subscriptions (plan_id), subscriptions_plan_id_fkey: ON DELETE CASCADE, so the deletion deletes this row too
   0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.subscriptions (plan_id) references it through subscriptions_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
 
 Plan: 0 to insert, 0 to update, 1 to delete in 3 tables.
+Through foreign keys, the deletion also deletes 1 row.
 2 tables without changes are not shown.
-kortopi: the apply would delete 2 rows, more than the limit of 1 (1 row of catalog.plans, and 1 row of billing.subscriptions that ON DELETE CASCADE deletes with them): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 2
+kortopi: the apply would delete 2 rows, more than the limit of 1: 1 row of catalog.plans to delete, and 1 row that ON DELETE CASCADE deletes with them (1 row of billing.subscriptions): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 2
 kortopi: nothing was changed
 ```
+
+上限は、計画が示すとおりに、カスケードのすべての段と、`SET NULL` と `SET DEFAULT` が変える行を数える。注文の明細が 50,000 行あり、その明細に 2,000 件のメモが付いたプランを削除するなら、それらの行をすべて数えるので、既定の上限で止まる。
 
 計画は標準出力に、エラーは標準エラー出力に出るので、端末ではこの順に行が並ぶ。
 契約がもうプランを参照していなければ、apply はプランを削除する。
@@ -181,7 +196,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
 
 - 最初に、`kortopi plan` と同じ形の計画を標準出力に出す。計画は最初の書き込みより前に出すので、そのあと apply が失敗しても残る。計画ができる前の失敗では、標準出力には何も出ない。ファイル・設定・接続・テーブルの誤り、スキーマの変更を待つテーブル、挿入する行が値を得られない列である。
 - コミットのあとに、空行と `Applied: <n> inserted, <n> updated, <n> deleted.` が続く。
-- 削除を見送ったときは、`Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` が続く。
+- 削除が外部キーを通じて行を消すか変えたときは、計画が数えたその行数を、もう1行が伝える。
+
+  ```text
+  Applied: 0 inserted, 0 updated, 1 deleted.
+  Through foreign keys, the deletion also changed 30 rows.
+  ```
+
+- 削除を見送ったときは、`Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` が続く。見送った削除が外部キーを通じて行を消すか変えるはずなら、その行はフラグの前でそれを伝える。`Through foreign keys, their deletion would also delete 2 rows and change 1 row.` のようになる。
 - 違いが削除だけなら、apply は何も書き込まずコミットもしない。そのときは `Not deleted` の行だけを出し、そのことを伝える。
 
   ```text
@@ -251,8 +273,9 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 ## 分かっている制限
 
 - 照合キーの値の変更は、削除と挿入になる（ADR-0012）。行は新しい ID を得て、外部キーなしで古い ID を持つ行は何も指さないまま残り、モード `upsert` では古い行が新しい行と並んで残る（[kortopi export](export.ja.md#生成される-id-の代わりの自然キー)）。そして、挿入は削除より先に動く。古い行が持つ別の一意キーの値を新しい行も持つと、挿入はそのキーで失敗する。古い行を前の apply で削除する。古い行を宣言から外して `--allow-delete` 付きで適用し、それから新しい行を宣言すればよい。または、行をその別のキーで照合する。
-- ほかのテーブルが参照する宣言した列を更新すると、それらの外部キーの `ON UPDATE` の動作が働く。計画が参照の件数を示すのは、削除についてだけである。
-- `ON DELETE CASCADE` は、1段目だけを数えて示す。
+- ほかのテーブルが参照する宣言した列を更新すると、それらの外部キーの `ON UPDATE` の動作が働く。計画が外部キーのすることを示すのは、削除についてだけである。削除の `SET NULL` や `SET DEFAULT` が働かせる `ON UPDATE` の動作もたどらず、`--allow-delete` 付きの apply はそこで止まる。
+- トリガーはたどらない。削除やカスケードが発火させるトリガーは、計画が示さない行を変えうる。
+- 削除がテーブルにすることを数えるには、ロールに、外部キーの列だけでなくテーブル全体に対する `SELECT` が要る。
 - kortopi はシーケンスを動かさない。`serial` や識別列に明示の値を挿入する apply のあと、そのシーケンスの次の値が、すでに使われていることがある。
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。
@@ -282,15 +305,37 @@ kortopi: nothing was changed
 ### 上限を超える削除
 
 ```text
-kortopi: the apply would delete 1 row, more than the limit of 0 (1 row of catalog.plans): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 1
+kortopi: the apply would delete 1 row, more than the limit of 0: 1 row of catalog.plans to delete: check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 1
 kortopi: nothing was changed
 ```
 
-### ロールの読めないテーブルへのカスケード
+削除が外部キーを通じて行を消すか変えるときは、種類ごとにテーブルを添えて1回ずつ数える。
 
 ```text
-kortopi: the deletion of rows of z.parent cascades through foreign key "orders_parent" to rows of b.orders, which the role may not read, so the rows that it would delete with them cannot be counted for the limit on deletions: grant the role SELECT on b.orders, or remove those rows first
+kortopi: the apply would delete or change 31 rows, more than the limit of 1: 1 row of m.kind to delete, and 30 rows that ON DELETE SET NULL or SET DEFAULT changes (30 rows of b.facts): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 31
+kortopi: nothing was changed
 ```
+
+### ロールの読めないテーブルに及ぶ削除
+
+```text
+kortopi: the deletion of rows of m.kind reaches rows of b.facts through foreign key "facts_kind_fkey", ON DELETE SET NULL, and the role may not read b.facts, so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on b.facts, or remove those rows first
+kortopi: nothing was changed
+```
+
+1段目より深いときは、カスケードが行を消し、外部キーが参照するテーブルも、エラーが挙げる。`ON DELETE CASCADE, from rows of b.orders that ON DELETE CASCADE deletes, and the role may not read b.lines` のようになる。
+
+### 削除とぶつかる宣言した行
+
+```text
+kortopi: data/m/plan_feature.csv: declared rows of table m.plan_feature reference rows that the deletions remove, through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: remove these rows from the declaration too, or point them at rows that stay
+kortopi: nothing was changed
+```
+
+宣言は、自分の宣言した行がまだ必要とする行を削除している。そのため、どの apply もデータベースを宣言どおりにできない。
+それらの行も宣言から外すか、残る行を指すようにする。
+計画も同じ誤りを報告し、`--allow-delete` のない apply も報告する。
+`SET NULL` と `SET DEFAULT` では、削除が設定する宣言した列をエラーが挙げる。`so ON DELETE SET NULL would set its declared column "t_code" to NULL` のようになる。
 
 ### `--allow-delete` のない `--max-delete`
 
@@ -319,7 +364,7 @@ kortopi: insert into table app.child: insert or update on table "child" violates
 kortopi: delete from table app.parent: update or delete on table "parent" violates foreign key constraint "child_parent_fkey" on table "child" (detail: Key (id)=(1) is still referenced from table "child".) (constraint: child_parent_fkey): the row is still referenced by other rows: change or remove those rows first, or keep the row in the declaration
 ```
 
-計画は、apply を実行する前に、そうした参照を削除する行の下に示す。
+計画は、apply を実行する前に、そうした参照をテーブルの件数の行のあとに示す。
 
 ### 別の一意キーの値
 
@@ -374,11 +419,23 @@ kortopi: update table app.t: could not serialize access due to concurrent update
 kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops
 ```
 
-### 自己矛盾する宣言
+### apply の書いた行が削除する行を参照する
 
 ```text
-kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of table f.rooms (room_type) now has 1 row that refers to a row to delete, and the plan counted 0: rows that this apply wrote refer to a row that it deletes, so the declaration contradicts itself: declare the referencing rows and the deletion consistently
+kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of table f.rooms (room_type) has 1 row that this apply wrote and that refers to a row to delete, so the deletion would fail on it, or delete or change it beyond what the plan shows: the declaration contradicts itself, or a trigger or a default of a column wrote it: declare the referencing rows and the deletion consistently
 ```
+
+apply は、最初の削除の直前にこれを数える。
+削除が消すか変える宣言した行は、どの書き込みよりも前に報告する（[削除とぶつかる宣言した行](#削除とぶつかる宣言した行)）。このエラーが扱うのは、`ON DELETE NO ACTION` か `RESTRICT` で削除する行を参照する宣言した行と、トリガー・ルール・列の既定値が書いた行である。
+
+### 削除の間にほかのトランザクションが変えた行
+
+```text
+kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction changed the rows while the apply ran, so nothing was written: run the apply again
+```
+
+apply がデータベースを読んだあとで、削除が及ぶはずの行を、別のトランザクションが削除したか、別の行を指すように変えた。
+その間に別のトランザクションが参照する行を挿入したときは、かわりに、削除が同時の変更のエラーで失敗する。
 
 ### `session_replication_role`
 
@@ -386,6 +443,6 @@ kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of t
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:27b89f7d07c4d81fbafe88e29aa8a37ac35accda729989a7762a41295ca4b843 -->
+<!-- i18n-source: apply.md sha256:7ea5f4251418e73e92fe9ddaa1d87f3bbd8572afa7a54905d2b65db9511152c4 -->

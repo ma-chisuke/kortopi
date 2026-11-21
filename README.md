@@ -161,7 +161,7 @@ The apply wrote both changes in one transaction, as a role with `INSERT` and `UP
 - **Only the columns that you declare are managed.** Other columns are neither compared nor updated, and get their default in a new row, or a value that `kortopi.toml` gives them in `on_insert`, such as the time of the insert.
 - **Rows match by the primary key, or by a unique key that you choose for a table**, such as `code`. A declaration then needs no generated IDs.
 - **Each table has a mode.** `insert` adds missing rows. `upsert`, the default, also updates rows. `sync` also deletes the rows that the declaration lacks.
-- **Deletions are guarded.** Only `sync` tables lose rows, an apply deletes nothing without `--allow-delete`, `--max-delete` (100 rows by default, cascades included) stops a large deletion, and the plan shows how many rows of other tables reference a row before it goes.
+- **Deletions are guarded.** Only `sync` tables lose rows, an apply deletes nothing without `--allow-delete`, `--max-delete` (100 rows by default) stops a large deletion, counting every row that the deletions delete or change through foreign keys at every depth, and the plan shows what the deletions do to other rows before they go.
 - **The database stays clean.** kortopi creates no table of its own: no history and no state.
 
 kortopi supports PostgreSQL 15 to 18, and its tests run against each of them.

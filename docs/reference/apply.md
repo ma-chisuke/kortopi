@@ -25,9 +25,10 @@ flags:
                     more schemas
   --allow-delete    delete the rows that the declaration lacks, in tables
                     of mode sync
-  --max-delete <n>  with --allow-delete: change nothing when the apply would
-                    delete more than n rows, counting the rows that a foreign
-                    key ON DELETE CASCADE deletes with them (default: 100)
+  --max-delete <n>  with --allow-delete: change nothing when the deletions
+                    would delete or change more than n rows, counting the
+                    rows that foreign keys delete or change with them, at
+                    every depth (default: 100)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -70,6 +71,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 
 An apply refuses a session whose `session_replication_role` is not `origin`, because the triggers of foreign keys do not fire then.
 
+To count what the deletions do to other tables, an apply reads those tables as a plan does ([kortopi plan](plan.md#what-the-deletions-also-do)). With `--allow-delete`, a table that the role may not read stops the apply when the deletions would delete or change its rows ([The guards on deletions](#the-guards-on-deletions)).
+
 ## What an apply does
 
 1. It reads the files and the settings, and connects, as a plan does. A mistake in a file is reported before it connects.
@@ -80,7 +83,7 @@ An apply refuses a session whose `session_replication_role` is not `origin`, bec
 6. It checks the guards on deletions and the cycles of the foreign keys.
 7. From referenced tables to referencing ones, it inserts the missing rows of each table and then updates the rows that differ.
 8. With `--allow-delete`, from referencing tables to referenced ones, it deletes the rows that the declaration lacks.
-9. It commits, and prints what it wrote.
+9. It checks that the deletions deleted and changed in other tables the rows that the plan counted, commits, and prints what it wrote.
 
 Each statement must change as many rows as the plan shows; otherwise a trigger or a rule changed what it did, and the apply stops.
 Because the plan and the writes come from one snapshot, the printed plan is what the apply writes.
@@ -106,11 +109,17 @@ Rows are deleted only when all of these hold:
 
 1. The table has the mode `sync` in `kortopi.toml`.
 2. The apply runs with `--allow-delete`.
-3. The rows to delete of the whole run, with the rows that a foreign key `ON DELETE CASCADE` deletes with them, are no more than `--max-delete`, 100 by default.
+3. The rows that the deletions of the whole run delete or change are no more than `--max-delete`, 100 by default: the rows to delete of every table, the rows that foreign keys `ON DELETE CASCADE` delete with them at every depth, and the rows that `ON DELETE SET NULL` and `SET DEFAULT` change, each row once.
 
-Only the first level of a cascade is counted.
-When a deletion would cascade into a table that the role may not read, the apply stops, because those rows cannot be counted.
-Just before it deletes, the apply counts the references again: when a row that it wrote refers to a row that it deletes, the declaration contradicts itself, and the apply stops.
+The plan counts these rows before the apply writes anything ([kortopi plan](plan.md#what-the-deletions-also-do)).
+With `--allow-delete`, the apply also stops before any write in these cases:
+
+- The deletions would delete or change rows of a table that the role may not read, at any depth, so those rows cannot be counted.
+- `SET NULL` or `SET DEFAULT` would change a column that another foreign key references, whose action `ON UPDATE` kortopi does not follow.
+
+A declared row that the deletions would delete, or whose declared column they would set to NULL or to its default, is a mistake of the declaration: a plan and an apply, with or without `--allow-delete`, report it before any write ([Declared rows in the way](#declared-rows-in-the-way)).
+Just before the first deletion, the apply counts the references again: when a row that it wrote refers to a row that it deletes, it stops ([A row that the apply wrote refers to a row to delete](#a-row-that-the-apply-wrote-refers-to-a-row-to-delete)).
+After the deletions, it checks that they deleted and changed the rows that the plan counted, and stops when another transaction changed those rows in the meantime ([Rows that another transaction changed during the deletions](#rows-that-another-transaction-changed-during-the-deletions)).
 
 ### An example
 
@@ -125,8 +134,9 @@ catalog.plans (sync, key: code)
   + code=team  name=Team  price=40.00
   ~ code=pro  name: Pro -> "Pro Plan"  price: 20.00 -> 25.00
   - code=legacy
-    referenced by 1 row of billing.subscriptions (plan_id), subscriptions_plan_id_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it
   1 to insert, 1 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.subscriptions (plan_id) references it through subscriptions_plan_id_fkey, ON DELETE NO ACTION, so the deletion fails while this row references it.
 
 facility.room_types (upsert, key: code)
   + code=suite  name="Suite Room"  capacity=4
@@ -138,13 +148,14 @@ facility.rooms (upsert, key: id)
   1 to insert, 0 to update
 
 Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
+Through foreign keys ON DELETE NO ACTION or RESTRICT, 1 row makes the deletion fail.
 
 Applied: 3 inserted, 2 updated, 0 deleted.
 Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.
 ```
 
 The exit status is 0, and `kortopi plan --exit-code` now shows the row `legacy` as the remaining difference.
-The reference line says that the deletion would fail while the subscription refers to the plan.
+The block after the counts of the table says that the deletion would fail while the subscription refers to the plan.
 With `--allow-delete`, the deletion fails on that foreign key, and nothing is changed.
 
 When the foreign key is `ON DELETE CASCADE` instead, the subscription would be deleted with the plan, and it counts toward the limit:
@@ -153,14 +164,18 @@ When the foreign key is `ON DELETE CASCADE` instead, the subscription would be d
 $ kortopi apply --dir data --allow-delete --max-delete 1
 catalog.plans (sync, key: code)
   - code=legacy
-    referenced by 1 row of billing.subscriptions (plan_id), subscriptions_plan_id_fkey: ON DELETE CASCADE, so the deletion deletes this row too
   0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.subscriptions (plan_id) references it through subscriptions_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
 
 Plan: 0 to insert, 0 to update, 1 to delete in 3 tables.
+Through foreign keys, the deletion also deletes 1 row.
 2 tables without changes are not shown.
-kortopi: the apply would delete 2 rows, more than the limit of 1 (1 row of catalog.plans, and 1 row of billing.subscriptions that ON DELETE CASCADE deletes with them): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 2
+kortopi: the apply would delete 2 rows, more than the limit of 1: 1 row of catalog.plans to delete, and 1 row that ON DELETE CASCADE deletes with them (1 row of billing.subscriptions): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 2
 kortopi: nothing was changed
 ```
+
+The limit counts every level of a cascade, and the rows that `SET NULL` and `SET DEFAULT` change, as the plan shows them: a deletion of a plan whose order has 50,000 lines, with 2,000 notes on them, counts each of those rows, and stops at the default limit.
 
 The plan goes to standard output and the errors to standard error, so the lines come in this order on a terminal.
 When the subscription no longer refers to the plan, the apply deletes it:
@@ -181,7 +196,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
 
 - The plan comes first, on standard output, as `kortopi plan` prints it. It is printed before the first write, also when the apply then fails. A failure before the plan exists, in a file, in the settings, in the connection, in a table, a table that waits for a schema change, or a column that rows to insert would lack, prints nothing on standard output.
 - After a commit, a blank line and `Applied: <n> inserted, <n> updated, <n> deleted.` follow.
-- When deletions were left out, `Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` follows.
+- When the deletions also deleted or changed rows through foreign keys, a line says how many, as the plan counted them:
+
+  ```text
+  Applied: 0 inserted, 0 updated, 1 deleted.
+  Through foreign keys, the deletion also changed 30 rows.
+  ```
+
+- When deletions were left out, `Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` follows. When those deletions would also delete or change rows through foreign keys, the line says so before the flag: `Through foreign keys, their deletion would also delete 2 rows and change 1 row.`
 - When the only differences are deletions, the apply writes and commits nothing, and the `Not deleted` line stands alone and says so:
 
   ```text
@@ -251,8 +273,9 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 ## Known limits
 
 - A changed value of the match key is a deletion and an insertion (ADR-0012): the row gets a new ID, a row that holds the old ID without a foreign key is left pointing at nothing, and in mode `upsert` the old row stays next to the new one ([kortopi export](export.md#a-natural-key-in-place-of-a-generated-id)). Inserts run before deletions. When the old row holds a value of another unique key that the new row also has, the insert fails on that key. Delete the old row in an earlier apply: remove it from the declaration and apply with `--allow-delete`, then declare the new row. Or match the rows by that other key.
-- An update of a declared column that other tables reference fires those foreign keys' `ON UPDATE` actions. A plan shows reference counts only for deletions.
-- Only the first level of `ON DELETE CASCADE` is counted and shown.
+- An update of a declared column that other tables reference fires those foreign keys' `ON UPDATE` actions. A plan shows what foreign keys do only for deletions, and does not follow an action `ON UPDATE` that a `SET NULL` or `SET DEFAULT` of a deletion fires: an apply with `--allow-delete` stops on it.
+- Triggers are not followed: a trigger that a deletion or a cascade fires can change rows that the plan does not show.
+- To count what the deletions do to a table, the role needs `SELECT` on the whole table, not only on the columns of the foreign key.
 - kortopi does not move sequences. After an apply that inserts explicit values into a `serial` or identity column, the next value of its sequence may already be taken.
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
 - An apply keeps the declared rows loaded and the changed rows locked until it commits.
@@ -282,15 +305,37 @@ kortopi: nothing was changed
 ### More deletions than the limit
 
 ```text
-kortopi: the apply would delete 1 row, more than the limit of 0 (1 row of catalog.plans): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 1
+kortopi: the apply would delete 1 row, more than the limit of 0: 1 row of catalog.plans to delete: check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 1
 kortopi: nothing was changed
 ```
 
-### A cascade into a table that the role may not read
+When the deletions also delete or change rows through foreign keys, each kind counts once, with its tables:
 
 ```text
-kortopi: the deletion of rows of z.parent cascades through foreign key "orders_parent" to rows of b.orders, which the role may not read, so the rows that it would delete with them cannot be counted for the limit on deletions: grant the role SELECT on b.orders, or remove those rows first
+kortopi: the apply would delete or change 31 rows, more than the limit of 1: 1 row of m.kind to delete, and 30 rows that ON DELETE SET NULL or SET DEFAULT changes (30 rows of b.facts): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 31
+kortopi: nothing was changed
 ```
+
+### Deletions that reach a table that the role may not read
+
+```text
+kortopi: the deletion of rows of m.kind reaches rows of b.facts through foreign key "facts_kind_fkey", ON DELETE SET NULL, and the role may not read b.facts, so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on b.facts, or remove those rows first
+kortopi: nothing was changed
+```
+
+Beyond the first level, the error also names the table whose rows a cascade deletes and the foreign key references, as in `ON DELETE CASCADE, from rows of b.orders that ON DELETE CASCADE deletes, and the role may not read b.lines`.
+
+### Declared rows in the way
+
+```text
+kortopi: data/m/plan_feature.csv: declared rows of table m.plan_feature reference rows that the deletions remove, through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: remove these rows from the declaration too, or point them at rows that stay
+kortopi: nothing was changed
+```
+
+The declaration deletes a row that rows of its own still need, so no apply could bring the database to it.
+Remove those rows from the declaration too, or point them at a row that stays.
+A plan reports the same mistake, and so does an apply without `--allow-delete`.
+For `SET NULL` and `SET DEFAULT`, the error names the declared columns that the deletion would set, as in `so ON DELETE SET NULL would set its declared column "t_code" to NULL`.
 
 ### `--max-delete` without `--allow-delete`
 
@@ -319,7 +364,7 @@ kortopi: insert into table app.child: insert or update on table "child" violates
 kortopi: delete from table app.parent: update or delete on table "parent" violates foreign key constraint "child_parent_fkey" on table "child" (detail: Key (id)=(1) is still referenced from table "child".) (constraint: child_parent_fkey): the row is still referenced by other rows: change or remove those rows first, or keep the row in the declaration
 ```
 
-The plan shows such references under the row to delete, before the apply runs.
+The plan shows such references after the counts of the table, before the apply runs.
 
 ### A value of another unique key
 
@@ -374,11 +419,23 @@ kortopi: update table app.t: could not serialize access due to concurrent update
 kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops
 ```
 
-### A declaration that contradicts itself
+### A row that the apply wrote refers to a row to delete
 
 ```text
-kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of table f.rooms (room_type) now has 1 row that refers to a row to delete, and the plan counted 0: rows that this apply wrote refer to a row that it deletes, so the declaration contradicts itself: declare the referencing rows and the deletion consistently
+kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of table f.rooms (room_type) has 1 row that this apply wrote and that refers to a row to delete, so the deletion would fail on it, or delete or change it beyond what the plan shows: the declaration contradicts itself, or a trigger or a default of a column wrote it: declare the referencing rows and the deletion consistently
 ```
+
+The apply counts this just before its first deletion.
+A declared row that the deletions would delete or change is reported before any write ([Declared rows in the way](#declared-rows-in-the-way)). This error covers a declared row that references a row to delete through `ON DELETE NO ACTION` or `RESTRICT`, and a row that a trigger, a rule, or a default of a column wrote.
+
+### Rows that another transaction changed during the deletions
+
+```text
+kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction changed the rows while the apply ran, so nothing was written: run the apply again
+```
+
+Another transaction deleted a row that the deletions would reach, or pointed it at another row, after the apply read the database.
+A referencing row that another transaction inserted in the meantime makes the deletion fail with the error of a concurrent change instead.
 
 ### `session_replication_role`
 
@@ -386,4 +443,4 @@ kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of t
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), and [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), and [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md).
