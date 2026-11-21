@@ -158,6 +158,9 @@ GRANT SELECT ON facility.room_types, facility.rooms TO planner;
 GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 ```
 
+The declared columns are enough for a table that has no rows to delete, or whose rows to delete nothing references.
+A table that references rows to delete, a declared table among them and a table that references itself, needs `SELECT` on the whole table, as [What the deletions also do](#what-the-deletions-also-do) says.
+
 Each check that fails stops the plan with its own error, which names what is missing and what to grant:
 
 ```text
@@ -371,27 +374,29 @@ Each line of the block names the referencing table, its columns, and the foreign
 | `SET DEFAULT` | the deletion sets the columns of these rows to their defaults |
 | `NO ACTION`, `RESTRICT` | the deletion fails while these rows reference them |
 
-- The rows that a cascade deletes are followed in turn: the foreign keys that reference them get lines two spaces further in, under the line of the cascade, at every depth, through a table that references itself and through cycles.
+- The rows that a cascade deletes are followed in turn, at every depth, through a table that references itself and through cycles. A line of level n+1 stands two spaces further in, under the first line of level n that deletes rows of the table that it references, and counts the rows that reference any of those rows, also rows that another line of level n deleted.
 - `SET NULL` and `SET DEFAULT` name the columns that they set, also the columns of a column list of PostgreSQL 15 and later. A changed row is not followed further.
-- Every foreign key counts: from any table, declared or not, in any schema, from the table itself, to one of its partitions, or to a partitioned table above it. A count joins on the columns of the foreign key, with its own operators and collations, not on the match key.
+- Every foreign key counts: from any table, declared or not, in any schema, from the table itself, to one of its partitions, or to a partitioned table above it. A count joins on the columns of the foreign key, with its own operators and collations, not on the match key. A declared table holds the rows of a referencing table that are its rows: the table itself, a partition of it, or a partitioned table above it, so a foreign key defined on a partitioned table and a declared partition, or the reverse, count the declared rows as declared.
 - A row that the plan deletes itself is not counted, and neither is a row that the plan points at another row before the deletions, because an apply inserts and updates before it deletes. Above, the rows of `m.plan_feature` reference the row `legacy` with `ON DELETE CASCADE`, but the plan deletes them itself, so they count once, as rows to delete.
 - Each row is counted once: a row that a cascade deletes is neither changed nor in the way, and a row that two foreign keys reach counts under the first of them, at the lowest level. A row that the deletions of two tables reach counts for the table that comes first.
-- A foreign key whose rows nothing references is left out.
-- When the role may not read a table, the line says so instead of a count, and the walk goes no further there:
+- A foreign key is left out when it adds no row to the count: when nothing references through it, when the plan deletes the referencing rows itself or points them elsewhere, and when an earlier line counted all the rows that reference through it. So a foreign key through which rows reference the rows that go can be missing from the block.
+- When the rows of a table cannot be counted, the line says why instead of a count, and the walk goes no further there:
 
   ```text
-  Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not read the table, so what the deletion does to them is not known.
+  Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not use schema b, so what the deletion does to them is not known.
   ```
+
+  The reasons are that the role may not use the schema of the table, may not read the table as a whole, may not read the referenced columns, that row-level security applies to the table, and that the triggers of the foreign key are disabled, so that PostgreSQL would neither run its action nor check it.
 
 - When `SET NULL` or `SET DEFAULT` changes a column that another foreign key references, the line says that what the action `ON UPDATE` of that key does is not known.
 
-After the line `Plan:`, one line for each fact sums up all tables: the rows that the deletions also delete and change, the rows that make them fail, and the foreign keys whose effect is not known:
+After the line `Plan:`, one line for each fact sums up all tables: the rows that the deletions also delete and change, the rows that make them fail, and the foreign keys whose effect is not known, each key once:
 
 ```text
 Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
 Through foreign keys, the deletions also delete 126 rows and change 8 rows.
 Through foreign keys ON DELETE NO ACTION or RESTRICT, 15 rows make the deletions fail.
-What the deletions do through 3 foreign keys is not known.
+What the deletions do through 6 foreign keys is not known.
 ```
 
 A declared row that the deletions would delete, or whose declared column they would set, is a mistake, not a line of the block: the plan fails, and names the row and the file that declares it ([kortopi apply](apply.md#declared-rows-in-the-way)).

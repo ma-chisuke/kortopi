@@ -463,6 +463,14 @@ kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is 
 
 Declare the column with a value for every row, give it a value with `on_insert` in `kortopi.toml` ([kortopi.toml](#kortopitoml)), or give it a default with the tool that changes your schema.
 
+### A declared row that the deletions would delete or change
+
+```text
+kortopi: data/m/plan_feature.csv: declared rows of table m.plan_feature reference rows that the deletions remove, through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: remove these rows from the declaration too, or point them at rows that stay
+```
+
+The declaration deletes a row that rows of its own still need, through a foreign key whose action would delete them or set their declared columns ([kortopi apply](apply.md#declared-rows-in-the-way)).
+
 ### A word for the current time in a CSV file
 
 ```text
@@ -475,8 +483,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last eleven mistakes need the database, so kortopi reports them after it connects:
+The last twelve mistakes need the database, so kortopi reports them after it connects:
 
 - A file without the columns of the key, a name in another case, a misspelled name with `--no-pending`, a partition and its partitioned table, a key that cannot match rows, and a value of `on_insert`, are reported for every table at once, before any row is loaded.
 - A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
-- A column that the rows to insert would lack is reported for every table at once, after the tables are compared.
+- A column that the rows to insert would lack, and a declared row that the deletions would delete or change, are reported for every table at once, after the tables are compared.

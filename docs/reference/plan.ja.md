@@ -158,6 +158,9 @@ GRANT SELECT ON facility.room_types, facility.rooms TO planner;
 GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 ```
 
+宣言した列だけで足りるのは、削除する行のないテーブルと、削除する行をどの行も参照しないテーブルである。
+削除する行を参照するテーブルには、テーブル全体に対する `SELECT` が要る。宣言したテーブルも、自分自身を参照するテーブルも同じである（[削除がほかの行にすること](#削除がほかの行にすること)）。
+
 どの検査も、失敗すればそれぞれのエラーで計画を止める。エラーは、何が足りないかと、何を与えればよいかを示す。
 
 ```text
@@ -371,30 +374,32 @@ Through foreign keys, the deletions also delete 52001 rows.
 | `SET DEFAULT` | the deletion sets the columns of these rows to their defaults |
 | `NO ACTION`、`RESTRICT` | the deletion fails while these rows reference them |
 
-- カスケードが消す行も、続けてたどる。それを参照する外部キーの行は、カスケードの行の下に2文字ずつ深く字下げして置く。これはすべての段で続き、自分自身を参照するテーブルや循環もたどる。
+- カスケードが消す行も、続けてたどる。これはすべての段で続き、自分自身を参照するテーブルや循環もたどる。n+1 段目の行は、それが参照するテーブルの行を消す最初の n 段目の行の下に、2文字深く字下げして置く。そして、それらの行のどれかを参照する行を数える。n 段目の別の行が消した行を参照する行も含む。
 - `SET NULL` と `SET DEFAULT` の行は、設定する列を挙げる。PostgreSQL 15 以降の列の一覧が挙げる列も同じである。変わる行から先はたどらない。
-- どの外部キーもたどる。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでもたどる。テーブルの1つのパーティションを指すキーも、テーブルの上にあるパーティションテーブルを指すキーも同じである。件数は、照合キーではなく、外部キーの列で、そのキー自身の演算子と照合順序を使って結び付ける。
+- どの外部キーもたどる。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでもたどる。テーブルの1つのパーティションを指すキーも、テーブルの上にあるパーティションテーブルを指すキーも同じである。件数は、照合キーではなく、外部キーの列で、そのキー自身の演算子と照合順序を使って結び付ける。参照しているテーブルが宣言したテーブル自身・そのパーティション・その上にあるパーティションテーブルのどれかなら、その行のうち宣言したテーブルに属する行を、宣言したテーブルの行とみなす。そのため、外部キーをパーティションテーブルに定義してそのパーティションを宣言したときも、その逆のときも、宣言した行を宣言した行として数える。
 - 計画が自分で削除する行は数えない。計画が削除の前に別の行を指すように変える行も数えない。apply は削除より先に挿入と更新をするからである。上の例では、`m.plan_feature` の行が `ON DELETE CASCADE` で行 `legacy` を参照しているが、計画がそれらを自分で削除するので、削除する行として1回だけ数える。
 - どの行も1回だけ数える。カスケードが消す行は、変わる行にも、削除を妨げる行にも数えない。2つの外部キーがたどり着く行は、最も浅い段の、最初の外部キーのもとで数える。2つのテーブルの削除がたどり着く行は、先に来るテーブルのものとして数える。
-- 参照している行のない外部キーは除く。
-- ロールがテーブルを読めないときは、件数のかわりにそのことを示し、その先はたどらない。
+- 件数に行を足さない外部キーは除く。それを通じて参照する行がないとき、参照している行を計画が自分で削除するか別の行を指すように変えるとき、それを通じて参照する行をすべて前の行が数えたときである。そのため、消える行を参照する行があっても、その外部キーがまとまりにないことがある。
+- テーブルの行を数えられないときは、件数のかわりにその理由を示し、その先はたどらない。
 
   ```text
-  Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not read the table, so what the deletion does to them is not known.
+  Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not use schema b, so what the deletion does to them is not known.
   ```
+
+  理由は、ロールがテーブルのスキーマを使えないこと、テーブル全体を読めないこと、参照される列を読めないことである。テーブルに行単位セキュリティがかかるときと、外部キーのトリガーが無効なときも同じである。トリガーが無効なら、PostgreSQL はその動作も検査も働かせない。
 
 - `SET NULL` か `SET DEFAULT` が、別の外部キーの参照する列を変えるときは、その外部キーの `ON UPDATE` の動作がすることは分からないと、行が示す。
 
-`Plan:` の行のあとには、すべてのテーブルをまとめた行を、事実ごとに1行ずつ置く。削除がさらに消し、変える行、削除を失敗させる行、そして波及が分からない外部キーである。
+`Plan:` の行のあとには、すべてのテーブルをまとめた行を、事実ごとに1行ずつ置く。削除がさらに消し、変える行、削除を失敗させる行、そして波及が分からない外部キーであり、どのキーも1回だけ数える。
 
 ```text
 Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
 Through foreign keys, the deletions also delete 126 rows and change 8 rows.
 Through foreign keys ON DELETE NO ACTION or RESTRICT, 15 rows make the deletions fail.
-What the deletions do through 3 foreign keys is not known.
+What the deletions do through 6 foreign keys is not known.
 ```
 
-削除が消す宣言した行や、宣言した列を設定する宣言した行は、まとまりの行ではなく誤りである。計画は失敗し、その行と、それを宣言したファイルを挙げる（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
+削除が消す宣言した行や、削除が宣言した列を設定する宣言した行は、まとまりの行ではなく誤りである。計画は失敗し、その行と、それを宣言したファイルを挙げる（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
 [kortopi apply](apply.ja.md#削除の安全策) は、削除の上限にこの件数を使う。参照される列の更新には件数を示さない。
 
 ### 値と名前
@@ -594,7 +599,7 @@ kortopi は、次の順に検査する。
 2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言も `on_insert` も挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
-5. 削除する行があるときは、それを参照する外部キーをたどる。削除が消す宣言した行や、宣言した列を NULL か既定値にする宣言した行は誤りであり、手順 4 の誤りと一緒に報告する（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
+5. 削除する行があるときは、それを参照する外部キーをたどる。削除が消す宣言した行や、削除が宣言した列を NULL か既定値にする宣言した行は誤りであり、手順 4 の誤りと一緒に報告する（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
 6. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
 
 よくある誤りとそのメッセージは、[宣言のファイル](declaration.ja.md#よくある誤り)にある。
@@ -628,4 +633,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:4a8656150b542d2b38bce825b265045c7cfa50ce3df51735beb8a62050ac3848 -->
+<!-- i18n-source: plan.md sha256:1148e3b0efaba5df36ae01d1c9eb024bcf13b4185ede5d5ad64c8a469479ff22 -->
