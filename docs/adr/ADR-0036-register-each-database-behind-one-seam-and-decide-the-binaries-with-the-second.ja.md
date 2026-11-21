@@ -56,14 +56,14 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 - パッケージ `internal/dialect` は、コマンドがデータベースに求めるものだけを定める。`Dialect` は、名前（`postgres` など）、SQL の宣言のパーサ、`Options` からセッションを開く `Open` を持つ。`Options` は、コマンドが集めたままの接続のフラグ、データのディレクトリ、セッションの用途を持つ。`Session` は、コマンドが使うものの集まりである。`plan.Database`・`apply.Database`・`script.Database`・`export.Database` のメソッド、SQL としての計画の冒頭のコメントに書くデータベースの名前、`Close` からなる。
 - `Registry` は、ビルドが含む DB ごとの部品を持つ。`Choose` は、コマンドが使う部品を返す。部品が1つなら、フラグも設定もなしにその部品を返す。1つもなければ、`kortopi plan`・`kortopi apply`・`kortopi export` は1つのエラーで失敗する。エラーは、そのビルドがどのデータベースにも対応していないことと、ビルドし直す方法を告げる。このときも `kortopi version` とヘルプは動く。2つ以上あれば、利用者の選び方をあとの記録が決めるまで、`Choose` は失敗する。
 - DB ごとの部品は、それぞれ1つのパッケージであり、`Dialect` の値を1つ提供する。PostgreSQL では `postgres.Dialect` である。このパッケージは、ほかの DB ごとの部品を import しない。
-- コマンドは、DB ごとの部品をそれぞれ専用のファイル `cmd/kortopi/dialect_<name>.go` で登録する。このファイルにはビルド制約 `//go:build !kortopi_no_<name>` を付ける。PostgreSQL では、ファイルは `dialect_postgres.go`、ビルドタグは `kortopi_no_postgres` である。コマンドのコードのうち、その部品を名指しするのはこのファイルだけである。ヘルプは、これまでどおり PostgreSQL と libpq を挙げる。
-- 登録は、プログラムの開始時に、ブランク識別子 `_` に代入するパッケージ変数の初期化式の中で行う。リンターが init 関数を禁じている（`gochecknoinits`）からである。レジストリを変えるのは、この登録だけである。コマンドのテストは、偽物の DB ごとの部品を入れた自分用のレジストリを作る。
+- DB ごとの部品には、それぞれコマンドの中に2つのファイルがあり、その部品のビルドタグがどちらか一方を選ぶ。ビルド制約 `//go:build !kortopi_no_<name>` を付けた `cmd/kortopi/dialect_<name>.go` は、その部品を返す関数を持つ。`//go:build kortopi_no_<name>` を付けた `cmd/kortopi/dialect_<name>_off.go` は、同じ名前の関数を持ち、その関数は何も返さない。PostgreSQL では、ファイルは `dialect_postgres.go` と `dialect_postgres_off.go`、関数は `postgresDialects`、ビルドタグは `kortopi_no_postgres` である。コマンドのコードのうち、その部品を名指しするのは1つ目のファイルだけであり、2つ目のファイルはその部品の何も import しない。ヘルプは、これまでどおり PostgreSQL と libpq を挙げる。
+- `main` は、プログラムの開始時に1度だけ、1つの関数 `newRegistry` の中でレジストリを作り、それをコマンドに渡す。`newRegistry` は、各部品の関数を呼ぶ。2つ目の部品は、そこに自分の呼び出しを足す。レジストリを持つパッケージ変数はなく、作ったあとのレジストリを変えるものもない。同じ名前の部品が2つあれば、開始時のエラーになる。これはビルドの誤りである。コマンドのテストは、偽物の DB ごとの部品を入れた自分用のレジストリを作る。
 - 接続のフラグ（`--host`・`--port`・`--user`・`--dbname`）と libpq の環境変数は、最初の DB ごとの部品に属する。コマンドは、フラグをそのまま部品に渡す。これらをどう一般化するかは、2つ目の DB ごとの部品とともに決める。
 
 境界は次の決まりに従う。
 
-- `.golangci.yml` の depguard のルール `postgres` は、`internal/postgres` とドライバー（`github.com/jackc/pgx`）の import を禁じる。SQL のパーサ（`github.com/pganalyze/pg_query_go` と `github.com/wasilibs/go-pgquery`）の import も禁じる。PostgreSQL のテスト用のサーバーを起動するモジュール（`github.com/testcontainers/testcontainers-go/modules/postgres`）も同じである。禁止の対象から外れるのは、`internal/postgres` のファイル、登録のファイル、コマンドを PostgreSQL に対して動かす結合テストだけである。そのため、共有のパッケージも、接点も、ほかの DB ごとの部品のパッケージも、これらを import できない。ルールのメッセージは、データベースのコードの置き場所を告げ、ADR-0019 を挙げる。
-- 2つ目の DB ごとの部品には、`postgres` と同じ形の専用のルールを足す。対象はその部品のパッケージとライブラリで、そのパッケージ、登録のファイル、その部品に対するコマンドのテストを除くすべての場所で禁じる。2つ目の部品のパッケージは、すでにルール `postgres` の対象なので、PostgreSQL を import できない。
+- `.golangci.yml` の depguard のルール `postgres` は、`internal/postgres` とドライバー（`github.com/jackc/pgx`）の import を禁じる。SQL のパーサ（`github.com/pganalyze/pg_query_go` と `github.com/wasilibs/go-pgquery`）の import も禁じる。PostgreSQL のテスト用のサーバーを起動するモジュール（`github.com/testcontainers/testcontainers-go/modules/postgres`）も同じである。禁止の対象から外れるのは、`internal/postgres` のファイル、`cmd/kortopi/dialect_postgres.go`、コマンドを PostgreSQL に対して動かす結合テストだけである。`dialect_postgres_off.go` は PostgreSQL の何も import しないので、例外は要らない。そのため、共有のパッケージも、接点も、ほかの DB ごとの部品のパッケージも、これらを import できない。ルールのメッセージは、データベースのコードの置き場所を告げ、ADR-0019 を挙げる。
+- 2つ目の DB ごとの部品には、`postgres` と同じ形の専用のルールを足す。対象はその部品のパッケージとライブラリで、そのパッケージ、その部品を返すコマンドのファイル、その部品に対するコマンドのテストを除くすべての場所で禁じる。2つ目の部品のパッケージは、すでにルール `postgres` の対象なので、PostgreSQL を import できない。
 - これは ADR-0019 を細かくする。境界には、コマンドの中に名前の付いた接点ができ、リンターがその境界を守らせる。これで、ADR-0019 の「確認の方法」に残っていた未決の点が片づく。
 
 リリースは次の決まりに従う。
@@ -73,23 +73,22 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 
 ### 結果
 
-- 良い点：データベースを足すには、そのパッケージ、登録のファイル1つ、depguard のルール1つがあればよい。共有のパッケージ（`internal/plan`・`apply`・`export`・`script`・`config`・`declaration`・`dialect`）とコマンドのコードは変わらない。
+- 良い点：データベースを足すには、そのパッケージ、コマンドの中の2つのファイル、`newRegistry` の中の呼び出し1つ、depguard のルール1つがあればよい。共有のパッケージ（`internal/plan`・`apply`・`export`・`script`・`config`・`declaration`・`dialect`）とコマンドのコードは変わらない。
 - 良い点：どちらのリリースも選べるまま残る。1つのバイナリはタグなしのビルドであり、データベースごとのバイナリは、同じビルドにほかのデータベースのタグを付けたものである。
 - 良い点：境界をまたぐ import を、レビューだけでは見落としうるところで `make check` が見つける。そのメッセージはコードの置き場所を告げる。
 - 良い点：コマンドのテストは、バイナリと同じ接点を通して偽物のデータベースを使う。
-- 悪い点：登録は、初期化式に副作用のある変数であり、名前の違う init 関数として働く。ほかの場所に同じような変数ができても、止めるチェックはない。それを登録のファイルにとどめるのはレビューである。
+- 悪い点：DB ごとの部品はそれぞれ、同じ関数を定めなければならない2つのファイルをコマンドの中に必要とする。
 - 悪い点：インターフェースは、まだ1つのデータベースに合わせた形である。遅らせられる制約（`apply.Database.Defer`）、適用が待つトランザクションのロック（`Options.Wait`）、スキーマ付きの名前（`declaration.TableName`）がその例である。ADR-0019 が見込むとおり、これらは2つ目の部品とともに変わる。
 - 悪い点：`Options` には PostgreSQL のフラグがあり、コマンドのヘルプは libpq とその環境変数を挙げる。2つ目の部品では、両方を作り直す必要がある。
-- 悪い点：ビルドタグによって、速いチェックがコンパイルも lint もしないビルドが1つ増える。そのビルドを作るのは、`make check-all` の結合テスト1つだけである。
+- 悪い点：ビルドタグによって、速いチェックがコンパイルも lint もしないビルドが1つ増える。各部品の `_off` のファイルも、そのビルドに含まれる。そのビルドを作って動かすのは、`make check-all` の結合テスト1つだけである。
 - 悪い点：depguard のルールは PostgreSQL のライブラリを1つずつ挙げる。そのため、部品が新しいライブラリを使うときは、手でルールに加える必要がある。
 
 ### 確認の方法
 
-- `make check` は `lint-go` を実行し、そのルール `postgres` が境界を守らせる。自己テストの `lint-go (dialects)` は、共有のパッケージが DB ごとの部品を import するときと、ほかの部品のパッケージがドライバーを import するときに、`lint-go` が失敗することを示す。部品自身と登録のファイルでは、`lint-go` は通る。
-- `internal/dialect` の単体テスト（`TestChoose`・`TestChooseNoDialect`・`TestRegisterTwice`）は、部品がないとき、1つのとき、2つ以上のときの選択を確かめる。`cmd/kortopi` の `TestNoDialect` は、部品がないときに `plan`・`apply`・`export` が1つのエラーで失敗し、バージョンとヘルプは出力されることを確かめる。`internal/postgres` の `TestDialectOpen` は、オプションがセッションに届くことを確かめる。
-- `make check-all` の結合テスト `TestBuildWithoutPostgres` は、`kortopi_no_postgres` を付けてコマンドをビルドし、そのビルドが部品もドライバーもパーサも含まないことを確かめる。
+- `make check` は `lint-go` を実行し、そのルール `postgres` が境界を守らせる。自己テストの `lint-go (dialects)` は、共有のパッケージが DB ごとの部品を import するときと、ほかの部品のパッケージがドライバーを import するときに、`lint-go` が失敗することを示す。部品自身と `cmd/kortopi/dialect_postgres.go` では、`lint-go` は通る。
+- `internal/dialect` の単体テスト（`TestChoose`・`TestChooseNoDialect`・`TestNewRegistryTwice`）は、部品がないとき、1つのとき、2つ以上のときの選択を確かめる。同じ名前の部品が2つあるときのエラーも確かめる。`cmd/kortopi` の `TestNewRegistry` は、タグなしのビルドが PostgreSQL を含み、それだけを含むことを確かめる。`cmd/kortopi` の `TestNoDialect` は、部品がないときに `plan`・`apply`・`export` が1つのエラーで失敗し、バージョンとヘルプは出力されることを確かめる。`internal/postgres` の `TestDialectOpen` は、オプションがセッションに届くことを確かめる。
+- `make check-all` の結合テスト `TestBuildWithoutPostgres` は、`kortopi_no_postgres` を付けてコマンドをビルドし、動かす。そのビルドが部品もドライバーもパーサも含まないこと、バージョンを出力すること、計画を部品のないビルドのエラーで止めることを確かめる。
 - コマンドの結合テストはタグなしのビルドのレジストリを通して動くので、そのビルドに PostgreSQL がなければ失敗する。`make test-release` は、これまでどおりリリースをビルドする。
-- 登録の変数をファイル `cmd/kortopi/dialect_<name>.go` にとどめるのは、レビューで確かめる。
 
 ## 選択肢の長所と短所
 
@@ -113,6 +112,7 @@ kortopi の大半は、PostgreSQL のパーサとドライバーが占める。
 ## 補足
 
 - go コマンドの[ビルド制約](https://pkg.go.dev/cmd/go#hdr-Build_constraints)と、golangci-lint の [depguard](https://golangci-lint.run/docs/linters/configuration/#depguard)
-- 接点は `internal/dialect/dialect.go`、PostgreSQL の登録は `cmd/kortopi/dialect_postgres.go`、ルールは `.golangci.yml` の `postgres` である。
+- 接点は `internal/dialect/dialect.go` で、ルールは `.golangci.yml` の `postgres` である。
+- コマンドの中の PostgreSQL のファイルは、`cmd/kortopi/dialect_postgres.go` と `dialect_postgres_off.go` である。レジストリは、`cmd/kortopi/main.go` の `newRegistry` が作る。
 
-<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:d551781e10111d49bebd6362947455f84f21cf926f93fb530c85025f65346d40 -->
+<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:434c65f0587663efcfc25f43d29c03f1e48cc7994bc835ed2476dd6dcc3f6547 -->

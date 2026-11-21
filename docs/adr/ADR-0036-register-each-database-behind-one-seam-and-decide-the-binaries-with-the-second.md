@@ -56,14 +56,14 @@ The seam follows these rules.
 - The package `internal/dialect` defines what a command needs from a database, and nothing more. A `Dialect` has a name, such as `postgres`, a parser of SQL declarations, and `Open`, which opens a session from `Options`. `Options` holds the flags of the connection as the command collected them, the data directory, and what the session is for. A `Session` is what the commands use: the methods of `plan.Database`, `apply.Database`, `script.Database`, and `export.Database`, the name of the database for the header of a plan as SQL, and `Close`.
 - A `Registry` holds the dialects of a build. `Choose` returns the dialect that a command uses. With one dialect, it returns that dialect, with no flag and no setting. With none, plan, apply, and export fail with one error that says that the build supports no database and how to build it again, while `kortopi version` and the help still work. With several, `Choose` fails until a later record decides how a user chooses.
 - Each dialect is one package that offers a value of `Dialect`: `postgres.Dialect` for PostgreSQL. The package does not import another dialect.
-- The command registers each dialect in a file of its own, `cmd/kortopi/dialect_<name>.go`, under the build constraint `//go:build !kortopi_no_<name>`. For PostgreSQL, the file is `dialect_postgres.go` and the tag is `kortopi_no_postgres`. This file is the only code of the command that names the dialect. The help still names PostgreSQL and libpq, as before.
-- The registration runs when the program starts, in the initializer of a blank variable of the package, because the linter forbids init functions (`gochecknoinits`). It is the only change of the registry. The tests of the command build registries of their own, with a fake dialect.
+- Each dialect has two files in the command, and its build tag chooses one of them. `cmd/kortopi/dialect_<name>.go`, under the build constraint `//go:build !kortopi_no_<name>`, holds a function that returns the dialect. `cmd/kortopi/dialect_<name>_off.go`, under `//go:build kortopi_no_<name>`, holds the same function, which returns none. For PostgreSQL, the files are `dialect_postgres.go` and `dialect_postgres_off.go`, the function is `postgresDialects`, and the tag is `kortopi_no_postgres`. The first file is the only code of the command that names the dialect, and the second imports nothing of it. The help still names PostgreSQL and libpq, as before.
+- `main` builds the registry once, when the program starts, in one function, `newRegistry`, which calls the function of each dialect, and it passes the registry to the commands. A second dialect adds its call there. No variable of the package holds the registry, and nothing changes it after it is built. Two dialects of one name are an error at start-up, a mistake of the build. The tests of the command build registries of their own, with a fake dialect.
 - The flags of the connection, `--host`, `--port`, `--user`, and `--dbname`, and the variables of libpq belong to the first dialect. The command passes the flags to the dialect as they are. How they generalize is decided with the second dialect.
 
 The boundary follows these rules.
 
-- A rule of depguard in `.golangci.yml`, `postgres`, denies `internal/postgres`, the driver (`github.com/jackc/pgx`), the SQL parser (`github.com/pganalyze/pg_query_go` and `github.com/wasilibs/go-pgquery`), and the module that starts the test servers of PostgreSQL (`github.com/testcontainers/testcontainers-go/modules/postgres`) to every file but those of `internal/postgres`, the registration file, and the integration tests of the command, which run it against PostgreSQL. So no shared package, not the seam, and not the package of another dialect can import them. The message of the rule says where the code of a database goes, and names ADR-0019.
-- A second dialect gets a rule of its own, like `postgres`: its package and its libraries, denied everywhere but in its package, its registration file, and the tests of the command against it. The rule `postgres` already covers the package of the second dialect, so that package cannot import PostgreSQL.
+- A rule of depguard in `.golangci.yml`, `postgres`, denies `internal/postgres`, the driver (`github.com/jackc/pgx`), the SQL parser (`github.com/pganalyze/pg_query_go` and `github.com/wasilibs/go-pgquery`), and the module that starts the test servers of PostgreSQL (`github.com/testcontainers/testcontainers-go/modules/postgres`) to every file but those of `internal/postgres`, `cmd/kortopi/dialect_postgres.go`, and the integration tests of the command, which run it against PostgreSQL. `dialect_postgres_off.go` needs no exception, because it imports nothing of PostgreSQL. So no shared package, not the seam, and not the package of another dialect can import them. The message of the rule says where the code of a database goes, and names ADR-0019.
+- A second dialect gets a rule of its own, like `postgres`: its package and its libraries, denied everywhere but in its package, the file of the command that returns it, and the tests of the command against it. The rule `postgres` already covers the package of the second dialect, so that package cannot import PostgreSQL.
 - This refines ADR-0019: the boundary now has a named seam in the command, and the linter enforces it, which closes the open point of its Confirmation.
 
 The release follows these rules.
@@ -73,23 +73,22 @@ The release follows these rules.
 
 ### Consequences
 
-- Good, because adding a database means its package, one registration file, and one rule of depguard. The shared packages (`internal/plan`, `apply`, `export`, `script`, `config`, `declaration`, and `dialect`) and the code of the commands do not change.
+- Good, because adding a database means its package, two files in the command, one call in `newRegistry`, and one rule of depguard. The shared packages (`internal/plan`, `apply`, `export`, `script`, `config`, `declaration`, and `dialect`) and the code of the commands do not change.
 - Good, because both releases remain possible: one binary is the build with no tags, and a binary for each database is the same build with the tags of the other databases.
 - Good, because `make check` catches an import that crosses the boundary, with a message that says where the code goes, where review alone could miss it.
 - Good, because the tests of the command reach their fake database through the same seam as the binary.
-- Bad, because the registration is a variable whose initializer has an effect, which works like an init function under another name, and no check stops a second such variable elsewhere. Review keeps them to the registration files.
+- Bad, because each dialect needs two files in the command, which must define the same function.
 - Bad, because the interfaces are still shaped by one database: deferrable constraints (`apply.Database.Defer`), the lock of a transaction that an apply waits for (`Options.Wait`), and names with a schema (`declaration.TableName`). They will change with the second dialect, as ADR-0019 expects.
 - Bad, because `Options` carries the flags of PostgreSQL, and the help of the command names libpq and its variables. A second dialect has to rework both.
-- Bad, because a build tag adds a build that the fast checks neither compile nor lint. Only an integration test builds it, in `make check-all`.
+- Bad, because a build tag adds a build that the fast checks neither compile nor lint, with the file `_off` of each dialect in it. Only an integration test builds and runs it, in `make check-all`.
 - Bad, because the rule of depguard names the libraries of PostgreSQL one by one, so a new library of the dialect has to be added to it by hand.
 
 ### Confirmation
 
-- `make check` runs `lint-go`, whose rule `postgres` enforces the boundary. The self-test case `lint-go (dialects)` shows that it fails when a shared package imports the dialect and when the package of another dialect imports the driver, and that it passes for the dialect and its registration file.
-- Unit tests of `internal/dialect` (`TestChoose`, `TestChooseNoDialect`, `TestRegisterTwice`) confirm the choice with no dialect, one, and several. `TestNoDialect` in `cmd/kortopi` confirms that, without a dialect, plan, apply, and export fail with the one error, and that the version and the help still print. `TestDialectOpen` in `internal/postgres` confirms that the options reach the session.
-- `TestBuildWithoutPostgres`, an integration test in `make check-all`, builds the command with `kortopi_no_postgres`, and confirms that the build holds neither the dialect nor its driver nor its parser.
+- `make check` runs `lint-go`, whose rule `postgres` enforces the boundary. The self-test case `lint-go (dialects)` shows that it fails when a shared package imports the dialect and when the package of another dialect imports the driver, and that it passes for the dialect and `cmd/kortopi/dialect_postgres.go`.
+- Unit tests of `internal/dialect` (`TestChoose`, `TestChooseNoDialect`, `TestNewRegistryTwice`) confirm the choice with no dialect, one, and several, and the error of two dialects of one name. `TestNewRegistry` in `cmd/kortopi` confirms that the build with no tags holds PostgreSQL and only it. `TestNoDialect` in `cmd/kortopi` confirms that, without a dialect, plan, apply, and export fail with the one error, and that the version and the help still print. `TestDialectOpen` in `internal/postgres` confirms that the options reach the session.
+- `TestBuildWithoutPostgres`, an integration test in `make check-all`, builds and runs the command with `kortopi_no_postgres`. It confirms that the build holds neither the dialect nor its driver nor its parser, prints its version, and stops a plan with the error of a build without a dialect.
 - The integration tests of the command run through the registry of the build with no tags, so they fail when that build lacks PostgreSQL. `make test-release` builds the release as before.
-- Review keeps the registration variables in the files `cmd/kortopi/dialect_<name>.go`.
 
 ## Pros and Cons of the Options
 
@@ -113,4 +112,5 @@ The release follows these rules.
 ## More Information
 
 - [Build constraints](https://pkg.go.dev/cmd/go#hdr-Build_constraints) of the go command, and [depguard](https://golangci-lint.run/docs/linters/configuration/#depguard) in golangci-lint
-- The seam is `internal/dialect/dialect.go`, the registration of PostgreSQL is `cmd/kortopi/dialect_postgres.go`, and the rule is `postgres` in `.golangci.yml`.
+- The seam is `internal/dialect/dialect.go`, and the rule is `postgres` in `.golangci.yml`.
+- The files of PostgreSQL in the command are `cmd/kortopi/dialect_postgres.go` and `dialect_postgres_off.go`, and `newRegistry` in `cmd/kortopi/main.go` builds the registry.
