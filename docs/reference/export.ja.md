@@ -436,6 +436,12 @@ kortopi: geo.city_names is a view, not a table: kortopi declares the rows of tab
 kortopi: data/kortopi.toml: key of table billing.plans names column "kode", which the table does not have: correct the key
 ```
 
+`kortopi.toml` の `on_insert` が挙げる照合キーの列。新しいファイルにはその列がなくなり、計画はそこで止まる。
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to column "name", which is a column of the match key: each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert
+```
+
 SQL で書き出そうとした、行のないテーブル。
 
 ```text
@@ -463,4 +469,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:6b3eb2b3ae58ad79193a87a94c05155a74dd8ea8fddddd1a0a3e980f3a55a0ac -->
+<!-- i18n-source: export.md sha256:2d75d70a8ec57b301a41d98a32e3b9ab47d6eed20583ee51b2b0e664e4cc3293 -->

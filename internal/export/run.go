@@ -371,6 +371,14 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 				filepath.Join(decl.Dir, config.FileName), name, c))
 		}
 	}
+	// A key column that on_insert names would be left out of a new file,
+	// and a plan of any file stops on it: the export stops first, with the
+	// error of the plan.
+	for _, v := range settings.Table(name).OnInsert {
+		if slices.Contains(key, v.Column) {
+			errs = append(errs, plan.OnInsertKeyError(filepath.Join(decl.Dir, config.FileName), name, v.Column))
+		}
+	}
 	var note string
 	if len(key) == 0 {
 		key = j.req.Columns

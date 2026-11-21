@@ -436,6 +436,12 @@ A key in `kortopi.toml` that names a column that the table does not have:
 kortopi: data/kortopi.toml: key of table billing.plans names column "kode", which the table does not have: correct the key
 ```
 
+A column of the match key that `on_insert` in `kortopi.toml` names, which a new file would lack, and on which a plan stops:
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to column "name", which is a column of the match key: each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert
+```
+
 A table without rows, exported as SQL:
 
 ```text

@@ -462,6 +462,19 @@ func TestRunErrors(t *testing.T) {
 			want:     `DIR/kortopi.toml: key of table billing.plans names column "kode", which the table does not have: correct the key`,
 		},
 		{
+			// The file would lack its key, and a plan of it would stop.
+			name: "a key column that on_insert names, of the primary key and of the settings",
+			settings: config.New(map[declaration.TableName]config.Table{
+				tn("facility.rooms"): {OnInsert: []config.InsertValue{{Column: "id", Value: "1"}}},
+				tn("billing.plans"):  {Key: []string{"code"}, OnInsert: []config.InsertValue{{Column: "code", Value: "x"}, {Column: "name", Value: "y"}}},
+			}),
+			opts: Options{Tables: []declaration.TableName{tn("facility.rooms"), tn("billing.plans")}, Format: csv},
+			want: `DIR/kortopi.toml: on_insert of table billing.plans gives a value to column "code", which is a column of the match key: ` +
+				"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert\n" +
+				`DIR/kortopi.toml: on_insert of table facility.rooms gives a value to column "id", which is a column of the match key: ` +
+				"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert",
+		},
+		{
 			name: "a table of generated columns only",
 			opts: Options{Tables: []declaration.TableName{tn("misc.only_generated")}, Format: csv},
 			want: "table misc.only_generated has no column that a declaration can set",
