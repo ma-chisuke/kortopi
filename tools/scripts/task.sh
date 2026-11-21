@@ -5,13 +5,29 @@
 # Usage: task.sh <name> <shell command>
 #
 # The command runs with `bash -euo pipefail -c`. Its output is kept in
-# $CHECK_STATE_DIR/<name>.log, and its result in <name>.status.
+# <name>.log, and its result in <name>.status, in the directory of the run
+# (CHECK_STATE_DIR) that tools/scripts/check.sh made, counts, and removes. A
+# target that runs on its own (`make <target>`) is part of no such run: it
+# keeps both in a directory of its own, and removes it at the end.
 set -uo pipefail
 
 name="$1"
 command="$2"
-state_dir="${CHECK_STATE_DIR:-.cache/check}"
-mkdir -p "$state_dir"
+# Checks run in parallel. A lock keeps the report of one check from being
+# mixed with the report of another: one lock for each run of check.sh, and
+# one for the targets that run on their own.
+if [ -n "${CHECK_STATE_DIR:-}" ]; then
+  state_dir=$CHECK_STATE_DIR
+  lock="$state_dir/.print.lock"
+else
+  mkdir -p .cache/check
+  state_dir=$(mktemp -d "$PWD/.cache/check/run.XXXXXX") || exit 2
+  trap 'rm -rf "$state_dir"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  lock=.cache/check/.print.lock
+fi
 log="$state_dir/$name.log"
 
 start=$(date +%s)
@@ -25,9 +41,6 @@ fi
 elapsed=$(($(date +%s) - start))
 printf '%s %s\n' "$status" "$elapsed" > "$state_dir/$name.status"
 
-# Checks run in parallel. Take a lock so that the report of one check is never
-# mixed with the report of another.
-lock="$state_dir/.print.lock"
 tries=0
 until mkdir "$lock" 2> /dev/null; do
   tries=$((tries + 1))
