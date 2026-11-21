@@ -39,3 +39,4 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0031](ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md) | Stop on rows that a partition declares twice and on names that differ from the database only in white space or case, and claim no match for values that mode insert skips | accepted | 2026-11-21 |
 | [ADR-0032](ADR-0032-require-the-name-of-the-database.md) | Require the name of the database, and do not fall back to the name of the user | accepted | 2026-11-21 |
 | [ADR-0033](ADR-0033-check-titles-of-the-dependency-bot-for-their-form-not-their-length.md) | Check the titles of the dependency bot for their form, not their length, by the author that GitHub reports | accepted | 2026-11-21 |
+| [ADR-0034](ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md) | Let a plan stop on every name that the database lacks, with `--no-pending` | accepted | 2026-11-21 |
