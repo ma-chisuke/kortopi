@@ -164,7 +164,7 @@ apply は、テーブルに対する `INSERT` と `UPDATE` を持つロールで
 - **削除には安全策がある。** 行が消えるのは `sync` のテーブルだけである。`--allow-delete` がなければ、適用では何も消さない。`--max-delete`（既定は 100 行で、カスケードも含む）が、大きな削除を止める。計画は、消える行がほかのテーブルから何件参照されているかを示す。
 - **データベースを汚さない。** kortopi は自分用のテーブルを作らない。履歴も状態も持たない。
 
-最初の版は、PostgreSQL 15〜18 と Aurora PostgreSQL に対応する。
+kortopi は PostgreSQL 15〜18 に対応し、テストはそのすべてに対して実行する。
 
 ## スキーマの道具と一緒に使う
 
@@ -202,4 +202,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:7c13914a652df9a85abce7373440c4c6548a74773e8e3e8cfb3d4d8160152c3a -->
+<!-- i18n-source: README.md sha256:dcca53b30414e18167c3bfd2b6e0f3ace19b5510b15a19ff0dfd8bd2f958285b -->

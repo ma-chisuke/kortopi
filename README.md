@@ -164,7 +164,7 @@ The apply wrote both changes in one transaction, as a role with `INSERT` and `UP
 - **Deletions are guarded.** Only `sync` tables lose rows, an apply deletes nothing without `--allow-delete`, `--max-delete` (100 rows by default, cascades included) stops a large deletion, and the plan shows how many rows of other tables reference a row before it goes.
 - **The database stays clean.** kortopi creates no table of its own: no history and no state.
 
-The first version supports PostgreSQL 15 to 18 and Aurora PostgreSQL.
+kortopi supports PostgreSQL 15 to 18, and its tests run against each of them.
 
 ## Use it with a schema tool
 
