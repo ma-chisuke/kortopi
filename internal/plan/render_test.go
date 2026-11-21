@@ -71,9 +71,9 @@ func step(level int, table declaration.TableName, constraint string, references 
 	return s
 }
 
-// unreadable returns s as a step whose table the role may not read.
-func unreadable(s Step) Step {
-	s.Unknown = Unreadable
+// notKnown returns s as a step whose rows were not counted, for reason.
+func notKnown(s Step, reason Unknown) Step {
+	s.Unknown = reason
 	return s
 }
 
@@ -310,7 +310,8 @@ func TestRender(t *testing.T) {
 					Effect: Effect{Steps: []Step{
 						step(1, name("facility", "room_types"), "room_types_replaced_by_fkey", name("facility", "room_types"), "SET NULL", 1, "replaced_by"),
 						step(1, name("facility", "rooms"), "rooms_room_type_fkey", name("facility", "room_types"), "CASCADE", 3, "room_type"),
-						unreadable(step(1, name("reservation", "audit"), "audit_room_type_fkey", name("facility", "room_types"), "NO ACTION", 0, "room_type_id")),
+						notKnown(step(1, name("reservation", "audit"), "audit_room_type_fkey", name("facility", "room_types"), "NO ACTION", 0, "room_type_id"), NoTableSelect),
+						notKnown(step(1, name("reservation", "blocks"), "blocks_room_type_fkey", name("facility", "room_types"), "CASCADE", 0, "room_type_id"), RowSecurity),
 						step(1, name("reservation", "bookings"), "fk_bookings_room_type", name("facility", "room_types"), "NO ACTION", 12, "room_type_id"),
 						step(1, name("reservation", "holds"), "holds fk", name("facility", "room_types"), "RESTRICT", 2, "room_type", "hotel"),
 						withSet(step(1, name("reservation", "quotes"), "quotes_room_type_fkey", name("facility", "room_types"), "SET DEFAULT", 4, "room_type", "hotel"), "room_type"),
@@ -319,7 +320,9 @@ func TestRender(t *testing.T) {
 						// referenced in turn.
 						step(2, name("facility", "desks"), "desks_room_fkey", name("facility", "rooms"), "CASCADE", 40, "room"),
 						step(2, name("facility", "lamps"), "lamps_room_fkey", name("facility", "rooms"), "SET NULL", 1, "room"),
-						unreadable(step(2, name("secret", "keys"), "keys_room_fkey", name("facility", "rooms"), "SET NULL", 0, "room")),
+						notKnown(step(2, name("secret", "keys"), "keys_room_fkey", name("facility", "rooms"), "SET NULL", 0, "room"), NoSchemaUsage),
+						notKnown(step(2, name("facility", "locks"), "locks_room_fkey", name("facility", "rooms"), "CASCADE", 0, "room"), ReferencedUnreadable),
+						notKnown(step(2, name("facility", "signs"), "signs_room_fkey", name("facility", "rooms"), "CASCADE", 0, "room"), TriggersDisabled),
 						step(3, name("facility", "drawers"), "drawers_desk_fkey", name("facility", "desks"), "CASCADE", 80, "desk"),
 						onUpdate(step(3, name("facility", "screws"), "screws_desk_fkey", name("facility", "desks"), "SET NULL", 2, "desk"),
 							"parts_desk_fkey", name("facility", "parts")),

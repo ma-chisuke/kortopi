@@ -128,6 +128,10 @@ func (s *fakeSession) Delete(_ context.Context, req plan.DiffRequest) (int, erro
 	return len(s.diffs[req.Table.Name].Deletes), s.record("Delete " + req.Table.Name.String())
 }
 
+func (s *fakeSession) CheckEffect(context.Context) error {
+	return s.record("CheckEffect")
+}
+
 func (s *fakeSession) Commit(context.Context) error {
 	return s.record("Commit")
 }

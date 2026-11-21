@@ -89,8 +89,11 @@ type Session struct {
 	export    bool
 	committed bool
 	// deletesChecked is true after the privileges of the deletions were
-	// checked.
+	// checked, and writtenBefore holds the counters of the rows that the
+	// transaction had deleted and updated then, by the partitioned table at
+	// the top of each relation.
 	deletesChecked bool
+	writtenBefore  map[uint32]written
 	// effect is the temporary table of the rows that the deletions reach,
 	// which Effects made last (ADR-0039).
 	effect string

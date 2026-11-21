@@ -17,10 +17,16 @@ import (
 // Database is what an apply needs from the target database. Each supported
 // database implements it in its own package (ADR-0019).
 //
-// The methods of plan.Database compute the difference. Unlike in a plan, the
-// declared rows that Diff loads stay loaded until the session ends, because
-// Insert, Update, and Delete write from them. Everything happens in one
-// transaction, which only Commit makes lasting.
+// The methods of plan.Database compute the difference. The declared rows
+// that Diff loads stay loaded until the session ends, in a plan too, because
+// Effects reads them (ADR-0039), and Insert, Update, and Delete write from
+// them. Everything happens in one transaction, which only Commit makes
+// lasting.
+//
+// An apply that deletes calls the methods in this order: Diff for every
+// table; Effects, through plan.Build; Insert and Update; Effects again, after
+// the inserts and updates, whose result the apply compares with the first;
+// Delete for every table with rows to delete; CheckEffect; and Commit.
 type Database interface {
 	plan.Database
 
@@ -42,8 +48,18 @@ type Database interface {
 	Update(ctx context.Context, req plan.DiffRequest) (int, error)
 
 	// Delete removes the rows that the declaration lacks, and returns their
-	// number.
+	// number. Effects must have computed the effect of the deletions after
+	// the inserts and updates, before the first Delete.
 	Delete(ctx context.Context, req plan.DiffRequest) (int, error)
+
+	// CheckEffect checks, after the deletions and before the commit, that
+	// they did what the last call of Effects counted: every row that it
+	// counted as deleted or changed through a foreign key is gone or changed,
+	// and no table lost or changed other rows, as a foreign key or a
+	// partition that another transaction added during the apply, a trigger,
+	// or a rule could make them do. An error stops the apply, which then
+	// rolls back.
+	CheckEffect(ctx context.Context) error
 
 	// Commit makes the changes lasting. Without it, closing the session
 	// leaves the database as it was. When the database rejects the commit,

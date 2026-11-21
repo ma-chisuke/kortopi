@@ -110,6 +110,9 @@ func effectAndApply(t *testing.T, db testDB, s *Session, reqs []plan.DiffRequest
 			t.Fatalf("Delete(%s): %v", req.Table.Name, err)
 		}
 	}
+	if err := s.CheckEffect(t.Context()); err != nil {
+		t.Fatalf("CheckEffect: %v", err)
+	}
 	if err := s.Commit(t.Context()); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -137,8 +140,16 @@ func formatStep(root declaration.TableName, st plan.Step) string {
 		line += " set " + strings.Join(st.Set, ",")
 	}
 	switch st.Unknown {
-	case plan.Unreadable:
-		return line + ": unreadable"
+	case plan.NoSchemaUsage:
+		return line + ": no usage"
+	case plan.NoTableSelect:
+		return line + ": no select"
+	case plan.RowSecurity:
+		return line + ": row security"
+	case plan.ReferencedUnreadable:
+		return line + ": referenced unreadable"
+	case plan.TriggersDisabled:
+		return line + ": triggers disabled"
 	case plan.FollowsOnUpdate:
 		line += fmt.Sprintf(" then ON UPDATE of %s.%s", st.OnUpdateTable, st.OnUpdate)
 	case plan.Known:
@@ -247,10 +258,10 @@ func TestEffectsOfEveryAction(t *testing.T) {
 				}},
 				{"role that may not read some tables", deployer, []string{
 					"m.plan 1 CASCADE t.orders.orders_plan_id_fkey(plan_id) -> m.plan: 1",
-					"m.plan 2 SET NULL secret.order_audit.order_audit_order_id_fkey(order_id) -> t.orders set order_id: unreadable",
+					"m.plan 2 SET NULL secret.order_audit.order_audit_order_id_fkey(order_id) -> t.orders set order_id: no usage",
 					"m.plan 2 CASCADE t.order_line.order_line_order_id_fkey(order_id) -> t.orders: 50000",
 					"m.plan 3 CASCADE t.line_note.line_note_line_id_fkey(line_id) -> t.order_line: 2000",
-					"m.status 1 CASCADE secret.casc.casc_status_id_fkey(status_id) -> m.status: unreadable",
+					"m.status 1 CASCADE secret.casc.casc_status_id_fkey(status_id) -> m.status: no usage",
 					"m.status 1 CASCADE t.ca.ca_status_id_fkey(status_id) -> m.status: 3",
 					"m.status 1 NO ACTION t.na.na_status_id_fkey(status_id) -> m.status: 1",
 					"m.status 1 RESTRICT t.re.re_status_id_fkey(status_id) -> m.status: 1",

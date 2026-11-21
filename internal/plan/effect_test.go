@@ -10,6 +10,25 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
 
+// The summary counts a foreign key whose effect is not known once, also when
+// the deletions of two tables, or two levels, reach it.
+func TestTotalsCountUnknownKeysOnce(t *testing.T) {
+	t.Parallel()
+
+	audit := Step{Level: 1, Table: tableV, Constraint: "v_fk", OnDelete: "CASCADE", Unknown: NoTableSelect}
+	deeper := audit
+	deeper.Level = 2
+	other := audit
+	other.Constraint = "v_other"
+	p := &Plan{Tables: []Table{
+		{Name: tableT, Effect: Effect{Steps: []Step{audit, deeper}}},
+		{Name: tableU, Effect: Effect{Steps: []Step{audit, other}}},
+	}}
+	if got := p.Totals(); got.Unknown != 2 {
+		t.Errorf("Totals().Unknown = %d, want 2 foreign keys", got.Unknown)
+	}
+}
+
 // Build asks for the effect of the deletions once, with the tables that have
 // rows to delete in the order of the plan, and gives each table its effect.
 func TestBuildEffects(t *testing.T) {

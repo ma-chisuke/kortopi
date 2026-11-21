@@ -145,7 +145,7 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 		b.WriteString("\n")
 		comment(&b, "The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,")
 		comment(&b, `so they are comments here: remove the "-- " before every line of a statement to run it.`)
-		for _, name := range slices.Backward(o.Tables) {
+		for _, name := range apply.DeletionOrder(o.Tables, keys, o.Deferred, p) {
 			t := tables[name]
 			if len(t.Diff.Deletes) == 0 {
 				continue

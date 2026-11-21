@@ -216,7 +216,7 @@ func TestWrite(t *testing.T) {
 					plan.Step{Level: 1, Table: cities, Columns: []string{"region"}, Constraint: "cities_region", References: regions, OnDelete: "NO ACTION", Rows: 2},
 					plan.Step{Level: 1, Table: tn("geo", "lines"), Columns: []string{"region"}, Constraint: "lines_region", References: regions, OnDelete: "CASCADE", Rows: 3},
 					plan.Step{Level: 2, Table: tn("geo", "stops"), Columns: []string{"line"}, Constraint: "stops_line", References: tn("geo", "lines"), OnDelete: "SET NULL", Set: []string{"line"}, Rows: 7},
-					plan.Step{Level: 1, Table: tn("geo", "stations"), Columns: []string{"region"}, Constraint: "stations_region", References: regions, OnDelete: "CASCADE", Unknown: plan.Unreadable},
+					plan.Step{Level: 1, Table: tn("geo", "stations"), Columns: []string{"region"}, Constraint: "stations_region", References: regions, OnDelete: "CASCADE", Unknown: plan.NoTableSelect},
 				),
 			}},
 			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},

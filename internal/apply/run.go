@@ -26,6 +26,11 @@ import (
 // rows of each table from referenced tables to referencing ones, deletes
 // rows in the reverse order, and commits.
 //
+// Before the first deletion, Run asks the database for the effect of the
+// deletions again, after the inserts and updates, and stops when it differs
+// from the effect of the plan (ADR-0039). After the deletions, and before the
+// commit, it lets the database check that they did what the effect counted.
+//
 // Every statement must change as many rows as the plan shows. On any error
 // before the commit, Run returns without committing, so the transaction is
 // rolled back when the session closes, and the database is as it was. So it
@@ -101,14 +106,20 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 		r.Updated += updated
 	}
-	if opts.AllowDelete {
-		for i := len(sorted) - 1; i >= 0; i-- {
-			t, req := tables[sorted[i]], rec.requests[sorted[i]]
+	if deleting := plan.Deleting(p.Tables); opts.AllowDelete && len(deleting) > 0 {
+		if err := checkEffectAgain(ctx, decl, db, p, deleting); err != nil {
+			return nil, err
+		}
+		for _, name := range DeletionOrder(sorted, keys, deferred, p) {
+			t, req := tables[name], rec.requests[name]
 			n, err := write(ctx, db.Delete, req, "delete", len(t.Diff.Deletes))
 			if err != nil {
 				return nil, err
 			}
 			r.Deleted += n
+		}
+		if err := db.CheckEffect(ctx); err != nil {
+			return nil, err
 		}
 	}
 
@@ -269,9 +280,29 @@ func unknownEffect(table declaration.TableName, step *plan.Step) string {
 			"which kortopi does not count for the limit on deletions: change or remove the rows of %s that reference the rows to delete first",
 			table, step.Table, step.Constraint, step.OnDelete, from, step.OnUpdate, step.OnUpdateTable, step.Table)
 	}
-	return fmt.Sprintf("the deletion of rows of %s reaches rows of %s through foreign key %q, ON DELETE %s%s, and the role may not read %s, "+
-		"so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on %s, or remove those rows first",
-		table, step.Table, step.Constraint, step.OnDelete, from, step.Table, step.Table)
+	// why says what keeps the rows from being counted, and fix what makes
+	// them countable.
+	var why, fix string
+	switch step.Unknown {
+	case plan.NoSchemaUsage:
+		why = fmt.Sprintf("the role may not use schema %q", step.Table.Schema)
+		fix = fmt.Sprintf("grant the role USAGE on schema %q and SELECT on table %s", step.Table.Schema, step.Table)
+	case plan.RowSecurity:
+		why = "row-level security applies to " + step.Table.String() + " for the role"
+		fix = "apply as a role with BYPASSRLS, or as the owner of " + step.Table.String() + " if it does not force row-level security"
+	case plan.ReferencedUnreadable:
+		why = "the role may not read the referenced columns of " + step.References.String()
+		fix = "grant the role SELECT on " + step.References.String()
+	case plan.TriggersDisabled:
+		why = "the triggers that run the action of the foreign key are disabled"
+		fix = "enable the triggers of table " + step.References.String() + " and of its partitions"
+	case plan.Known, plan.NoTableSelect, plan.FollowsOnUpdate:
+		why = "the role may not read " + step.Table.String() + " as a whole"
+		fix = "grant the role SELECT on " + step.Table.String() + ", on the table and not only on its columns"
+	}
+	return fmt.Sprintf("the deletion of rows of %s reaches rows of %s through foreign key %q, ON DELETE %s%s, and %s, "+
+		"so what the deletion does to them cannot be counted for the limit on deletions: %s, or remove those rows first",
+		table, step.Table, step.Constraint, step.OnDelete, from, why, fix)
 }
 
 // rows returns n with the noun row or rows.

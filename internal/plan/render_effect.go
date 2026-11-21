@@ -100,7 +100,7 @@ func stepSentence(s *Step, deletes, parents int) string {
 	these, verb := "these rows", "reference"
 	subject := count(s.Rows, "row", "rows") + " of " + table
 	switch {
-	case s.Unknown == Unreadable:
+	case s.Unknown.Unread():
 		subject, verb, these = "Rows of "+table, "may reference", "them"
 	case s.Rows == 1:
 		verb, these = "references", "this row"
@@ -118,8 +118,8 @@ func stepSentence(s *Step, deletes, parents int) string {
 		}
 	}
 	sentence := subject + " " + verb + " " + target + " through " + FormatName(s.Constraint) + ", ON DELETE " + s.OnDelete
-	if s.Unknown == Unreadable {
-		return sentence + ", but the role may not read the table, so what " + deletion + " " + does + " to them is not known."
+	if s.Unknown.Unread() {
+		return sentence + ", but " + UnknownReason(s) + ", so what " + deletion + " " + does + " to them is not known."
 	}
 	switch {
 	case s.Deletes():
@@ -138,6 +138,25 @@ func stepSentence(s *Step, deletes, parents int) string {
 			" references a column that it sets, so what its ON UPDATE action does is not known"
 	}
 	return sentence + "."
+}
+
+// UnknownReason says why the rows of a step were not counted, as a clause:
+// "the role may not read the table".
+func UnknownReason(s *Step) string {
+	switch s.Unknown {
+	case NoSchemaUsage:
+		return "the role may not use schema " + FormatName(s.Table.Schema)
+	case NoTableSelect:
+		return "the role may not read the table"
+	case RowSecurity:
+		return "row-level security applies to the table"
+	case ReferencedUnreadable:
+		return "the role may not read the referenced columns of " + FormatTable(s.References)
+	case TriggersDisabled:
+		return "the triggers of the foreign key are disabled"
+	case Known, FollowsOnUpdate:
+	}
+	return "its rows were not counted"
 }
 
 // setTo returns what SET NULL or SET DEFAULT sets the columns of a step to.
@@ -225,6 +244,21 @@ func Reach(t Totals, deleteVerb, changeVerb string) string {
 // set (ADR-0039). file is the file that declares the rows, and key the
 // columns of their match key.
 func ConflictError(file string, key []string, c Conflict) error {
+	return conflictError(file, key, c, false)
+}
+
+// ConflictAfterWrites returns the mistake of a conflict that the walk finds
+// again after the inserts and updates of an apply, and that the plan did not
+// find: a row that the apply wrote got its reference from a default of a
+// column, a value of on_insert, a trigger, or a rule, which the plan could
+// not see.
+func ConflictAfterWrites(file string, key []string, c Conflict) error {
+	return conflictError(file, key, c, true)
+}
+
+// conflictError returns the mistake of a conflict, found by the plan or,
+// with afterWrites, by the walk after the inserts and updates of an apply.
+func conflictError(file string, key []string, c Conflict, afterWrites bool) error {
 	rows, them, they := "declared rows", "them", "these rows"
 	verb, what := "reference rows", "rows that stay"
 	if c.Total == 1 {
@@ -269,11 +303,23 @@ func ConflictError(file string, key []string, c Conflict) error {
 	if more := c.Total - len(c.Rows); more > 0 {
 		listed = append(listed, strconv.Itoa(more)+" more")
 	}
+	if afterWrites {
+		return fmt.Errorf("%s: after the inserts and updates of the apply, %s of table %s %s that the deletions remove, through foreign key %s (%s) to table %s, "+
+			"so %s, which the plan did not count: %s: the apply wrote the reference through %s, which the plan cannot see: "+
+			"declare the columns of the foreign key with %s, or delete the rows in a run of their own",
+			file, rows, c.Table, verb, strconv.Quote(c.Constraint), strings.Join(columns, ", "), c.References, effect,
+			joinWords(listed), WriterCauses, what)
+	}
 	return fmt.Errorf("%s: %s of table %s %s that the deletions remove, through foreign key %s (%s) to table %s, so %s, "+
 		"and the declaration contradicts itself: %s: remove %s from the declaration too, or point %s at %s",
 		file, rows, c.Table, verb, strconv.Quote(c.Constraint), strings.Join(columns, ", "), c.References, effect,
 		joinWords(listed), they, them, what)
 }
+
+// WriterCauses lists what can write a row, or a value of a row, that a
+// declaration does not show, for the messages that name them: one list,
+// everywhere.
+const WriterCauses = "a default of a column, a value of on_insert, a trigger, or a rule"
 
 // conflictRow says which declared row references which row that goes, as
 // in "id=2 references code=legacy".

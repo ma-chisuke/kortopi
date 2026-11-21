@@ -25,10 +25,16 @@ type Effects struct {
 // the first of them.
 type Effect struct {
 	// Steps are sorted by level, then by the referencing table, the name of
-	// the foreign key, and the referenced table. A step whose rows the
-	// deletions reach at no level is left out, unless they could not be
-	// counted.
+	// the foreign key, and the referenced table. A step that adds no row to
+	// the count is left out, unless its rows could not be counted: a foreign
+	// key whose rows an earlier step counted, or that references only rows
+	// that the plan deletes itself.
 	Steps []Step
+	// Reaches names the other tables with rows to delete whose rows to
+	// delete the walk from this table reaches. An apply deletes the rows of
+	// those tables first, so that a cascade from this table does not delete
+	// rows that their own statements count on.
+	Reaches []declaration.TableName
 }
 
 // Step is one foreign key along which the deletions of a table reach rows:
@@ -61,7 +67,7 @@ type Step struct {
 	// the rows that make the deletion fail for NO ACTION and RESTRICT.
 	Rows int
 	// Unknown says why what the step does could not be counted, or is
-	// Known. Rows is 0 when the role may not read Table.
+	// Known. Rows is 0 unless it is FollowsOnUpdate.
 	Unknown Unknown
 	// OnUpdate and OnUpdateTable name, for FollowsOnUpdate, a foreign key
 	// that references a column that the step sets, and its referencing
@@ -76,15 +82,33 @@ type Unknown int
 const (
 	// Known is a step whose rows were counted.
 	Known Unknown = iota
-	// Unreadable is a step whose referencing table the role may not read:
-	// it lacks USAGE on the schema or SELECT on the table, or row-level
-	// security applies to it. The walk goes no further along it.
-	Unreadable
+	// NoSchemaUsage is a step whose referencing table is in a schema that the
+	// role may not use. The walk goes no further along it, nor along the
+	// other steps that are not known but FollowsOnUpdate.
+	NoSchemaUsage
+	// NoTableSelect is a step whose referencing table the role may not read
+	// as a whole: the walk reads the identities of its rows, which a
+	// privilege on columns does not cover.
+	NoTableSelect
+	// RowSecurity is a step whose referencing table has row-level security
+	// that applies to the role.
+	RowSecurity
+	// ReferencedUnreadable is a step whose referenced relation, or its
+	// referenced columns, the role may not read.
+	ReferencedUnreadable
+	// TriggersDisabled is a step whose foreign key has disabled triggers of
+	// the deletion, so that PostgreSQL would not run its action.
+	TriggersDisabled
 	// FollowsOnUpdate is a step of SET NULL or SET DEFAULT whose rows were
 	// counted, but a column that it sets is referenced by another foreign
 	// key, whose action ON UPDATE follows and is not counted.
 	FollowsOnUpdate
 )
+
+// Unread reports whether the rows of the step were not counted at all.
+func (u Unknown) Unread() bool {
+	return u != Known && u != FollowsOnUpdate
+}
 
 // Deletes reports whether the step deletes the rows that it reaches.
 func (s *Step) Deletes() bool {
@@ -102,34 +126,15 @@ func (s *Step) Fails() bool {
 	return s.OnDelete == "NO ACTION" || s.OnDelete == "RESTRICT"
 }
 
-// Totals counts the rows of an effect, or of several, by what happens to
-// them.
+// Totals counts the rows of the effects of a plan by what happens to them.
 type Totals struct {
 	// Deleted and Changed count the rows that the deletions delete or
 	// change through foreign keys, Failing the rows that make them fail,
-	// and Unknown the steps whose effect is not known.
+	// and Unknown the foreign keys whose effect is not known, each key once.
 	Deleted int
 	Changed int
 	Failing int
 	Unknown int
-}
-
-// Add adds the steps of e to the totals.
-func (t *Totals) Add(e *Effect) {
-	for i := range e.Steps {
-		s := &e.Steps[i]
-		if s.Unknown != Known {
-			t.Unknown++
-		}
-		switch {
-		case s.Deletes():
-			t.Deleted += s.Rows
-		case s.Changes():
-			t.Changed += s.Rows
-		case s.Fails():
-			t.Failing += s.Rows
-		}
-	}
 }
 
 // Totals returns the totals of the effects of every table of the plan.
@@ -138,9 +143,24 @@ func (p *Plan) Totals() Totals {
 	if p == nil {
 		return t
 	}
+	unknown := make(map[string]bool)
 	for i := range p.Tables {
-		t.Add(&p.Tables[i].Effect)
+		for j := range p.Tables[i].Effect.Steps {
+			s := &p.Tables[i].Effect.Steps[j]
+			if s.Unknown != Known {
+				unknown[s.Table.String()+" "+s.Constraint] = true
+			}
+			switch {
+			case s.Deletes():
+				t.Deleted += s.Rows
+			case s.Changes():
+				t.Changed += s.Rows
+			case s.Fails():
+				t.Failing += s.Rows
+			}
+		}
 	}
+	t.Unknown = len(unknown)
 	return t
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ma-chisuke/kortopi/internal/config"
+	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
@@ -262,6 +263,9 @@ func TestEffectsOnLargeTables(t *testing.T) {
 			}
 			t.Logf("the deletion took %v", time.Since(start))
 			start = time.Now()
+			if err := s.CheckEffect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.Commit(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -304,7 +308,13 @@ func TestEffectsOfNoActionAndRestrict(t *testing.T) {
 						"m.node 1 " + strings.TrimSuffix(action, " DEFERRABLE INITIALLY DEFERRED") + " m.node.node_parent_id_fkey(parent_id) -> m.node: 1",
 					})
 					checkLines(t, "conflicts", conflicts, nil)
+					if _, err := s.Effects(t.Context(), []declaration.TableName{req.Table.Name}); err != nil {
+						t.Fatal(err)
+					}
 					_, err := s.Delete(t.Context(), req)
+					if err == nil {
+						err = s.CheckEffect(t.Context())
+					}
 					if err == nil {
 						err = s.Commit(t.Context())
 					}

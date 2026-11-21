@@ -146,14 +146,7 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 // that the deletions would delete or change, so that the declaration
 // contradicts itself. err is an error of the database.
 func effects(ctx context.Context, db Database, decl *declaration.Declaration, tables []Table) (mistakes []error, err error) {
-	var names []declaration.TableName
-	var index []int
-	for i := range tables {
-		if len(tables[i].Diff.Deletes) > 0 {
-			names = append(names, tables[i].Name)
-			index = append(index, i)
-		}
-	}
+	names := Deleting(tables)
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -164,15 +157,41 @@ func effects(ctx context.Context, db Database, decl *declaration.Declaration, ta
 	if len(e.Tables) != len(names) {
 		return nil, fmt.Errorf("the database reported the effect of the deletions of %d tables, not of %d", len(e.Tables), len(names))
 	}
-	for j, i := range index {
-		tables[i].Effect = e.Tables[j]
+	for j, name := range names {
+		tables[slices.IndexFunc(tables, func(t Table) bool { return t.Name == name })].Effect = e.Tables[j]
 	}
-	for _, c := range e.Conflicts {
+	return ConflictMistakes(decl, tables, e.Conflicts, false)
+}
+
+// Deleting returns the names of the tables with rows to delete, in the order
+// of tables: the tables whose effect Database.Effects computes.
+func Deleting(tables []Table) []declaration.TableName {
+	var names []declaration.TableName
+	for i := range tables {
+		if len(tables[i].Diff.Deletes) > 0 {
+			names = append(names, tables[i].Name)
+		}
+	}
+	return names
+}
+
+// ConflictMistakes returns a mistake for each conflict, with the file that
+// declares its rows and the match key of its table. afterWrites marks
+// conflicts that the walk found again after the inserts and updates of an
+// apply. err is an error of the database: a conflict in a table that the plan
+// does not compare.
+func ConflictMistakes(decl *declaration.Declaration, tables []Table, conflicts []Conflict, afterWrites bool) (mistakes []error, err error) {
+	for _, c := range conflicts {
 		k := slices.IndexFunc(tables, func(t Table) bool { return t.Name == c.Table })
 		if k < 0 {
 			return nil, fmt.Errorf("the database reported a conflict in table %s, which the plan does not compare", c.Table)
 		}
-		mistakes = append(mistakes, ConflictError(decl.Tables[k].Path(decl.Dir), tables[k].Key, c))
+		file := decl.Tables[k].Path(decl.Dir)
+		if afterWrites {
+			mistakes = append(mistakes, ConflictAfterWrites(file, tables[k].Key, c))
+		} else {
+			mistakes = append(mistakes, ConflictError(file, tables[k].Key, c))
+		}
 	}
 	return mistakes, nil
 }

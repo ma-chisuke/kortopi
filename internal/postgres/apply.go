@@ -33,10 +33,12 @@ type loadedTable struct {
 	// deletes them (ADR-0013).
 	updating bool
 	sync     bool
-	// keys are the foreign keys that reference the rows to delete of the
-	// table and that the role may read, as Effects found them, for the count
-	// before the deletions.
-	keys []foreignKey
+	// tree holds the table and its partitions at every depth, ancestors the
+	// partitioned tables above it, and top the partitioned table at the top,
+	// or the table itself, as Effects read them.
+	tree      []uint32
+	ancestors []uint32
+	top       uint32
 }
 
 // ErrConflict is the error of an apply whose rows another transaction
@@ -191,11 +193,11 @@ func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err 
 }
 
 // checkDeletes returns an error when the role may not delete from a loaded
-// table that has rows to delete, when Effects did not compute the effect of
-// the deletions, or when a row that this apply wrote references a row to
-// delete. It looks at every such table, so that the error comes before the
-// first row is deleted, and before a deletion changes a row through a
-// foreign key.
+// table that has rows to delete, or when Effects did not compute the effect
+// of the deletions. It looks at every such table, so that the error comes
+// before the first row is deleted. It then reads the counters of the rows
+// that the transaction deleted and updated so far, which CheckEffect
+// compares with the counters after the deletions.
 func (s *Session) checkDeletes(ctx context.Context) error {
 	names := sortedNames(s.loaded)
 	for _, name := range names {
@@ -207,13 +209,11 @@ func (s *Session) checkDeletes(ctx context.Context) error {
 	if s.effect == "" {
 		return errors.New("the effect of the deletions is not known: compute it with Effects before the first deletion")
 	}
-	for _, name := range names {
-		if lt := s.loaded[name]; lt.deletes > 0 {
-			if err := s.checkReferences(ctx, lt); err != nil {
-				return err
-			}
-		}
+	counts, err := s.writtenRows(ctx)
+	if err != nil {
+		return err
 	}
+	s.writtenBefore = counts
 	return nil
 }
 
@@ -230,19 +230,13 @@ func sortedNames(loaded map[declaration.TableName]*loadedTable) []declaration.Ta
 	return names
 }
 
-// Commit makes the changes of the apply lasting. When the apply deleted rows,
-// it first checks that the deletions deleted and changed through foreign
-// keys every row that Effects counted (ADR-0039); otherwise it commits
-// nothing.
+// Commit makes the changes of the apply lasting.
 func (s *Session) Commit(ctx context.Context) error {
 	switch {
 	case !s.apply:
 		return errNotApply
 	case s.closed || s.committed:
 		return errors.New("the session has ended: there is nothing to commit")
-	}
-	if err := s.checkEffect(ctx); err != nil {
-		return err
 	}
 	if err := s.tx.Commit(ctx); err != nil {
 		return commitError(err)
@@ -446,31 +440,4 @@ var onDeleteActions = map[string]string{
 	"c": "CASCADE",
 	"n": "SET NULL",
 	"d": "SET DEFAULT",
-}
-
-// checkReferences counts again, before the first deletion, inside the
-// transaction, the rows that this apply wrote and that refer to the rows to
-// delete of lt, through the foreign keys that Effects found. The plan counted
-// the rows as they would be after the inserts and updates, and a declared row
-// that the deletions would delete or change is a mistake of the plan; so a
-// row that this apply wrote and that still refers to a row that it deletes
-// is a declared row whose foreign key fails on delete, or a row that a
-// trigger, a rule, or a default of a column wrote. The deletion would fail
-// on it, or delete or change it beyond what the plan shows.
-func (s *Session) checkReferences(ctx context.Context, lt *loadedTable) error {
-	for _, fk := range lt.keys {
-		var now, written int64
-		if err := s.tx.QueryRow(ctx, lt.c.referencesSQL(fk, true)).Scan(&now, &written); err != nil {
-			return fmt.Errorf("count the rows of table %s that foreign key %q points at: %w", fk.table, fk.name, err)
-		}
-		if written == 0 {
-			continue
-		}
-		return fmt.Errorf("delete from table %s: foreign key %q of table %s (%s) has %d %s that this apply wrote and that %s to a row to delete, "+
-			"so the deletion would fail on %s, or delete or change %s beyond what the plan shows: "+
-			"the declaration contradicts itself, or a trigger or a default of a column wrote %s: declare the referencing rows and the deletion consistently",
-			lt.meta.name, fk.name, fk.table, strings.Join(fk.columns, ", "), written, plural(written, "row", "rows"),
-			plural(written, "refers", "refer"), plural(written, "it", "them"), plural(written, "it", "them"), plural(written, "it", "them"))
-	}
-	return nil
 }

@@ -16,8 +16,8 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
-// Aliases of the queries of the walk: r is a referencing row, rd the
-// declared row that matches it, s a referenced row, e and x rows of the
+// Aliases of the queries of the walk: r is a referencing row, rd1, rd2, ...
+// the declared rows that match it, s a referenced row, e and x rows of the
 // table of the effect.
 const (
 	walkRowAlias      = "r"
@@ -48,7 +48,12 @@ const (
 // updates of an apply, which come before its deletions: a declared row with
 // the declared values of its compared columns. A row that the plan deletes
 // itself is not an effect, and a declared row that the deletions would
-// delete or change is a conflict.
+// delete or change is a conflict. A declared table covers the rows of a
+// referencing relation that are its rows: the relation itself, a partition
+// of it, or a partitioned table above it.
+//
+// An apply calls Effects again after its inserts and updates, and the rows
+// that the last call reached are those that CheckEffect checks.
 func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_ plan.Effects, err error) {
 	defer s.explainWait(ctx, &err)
 	if s.export {
@@ -70,6 +75,9 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 	}
 	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
 		w := &walk{s: s, tx: tx, table: s.nextTemp()}
+		if err := w.partitionTrees(ctx); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, "CREATE TEMPORARY TABLE "+w.table+" (rel pg_catalog.oid NOT NULL, via pg_catalog.oid NOT NULL, "+
 			"tid pg_catalog.tid NOT NULL, root pg_catalog.int4 NOT NULL, level pg_catalog.int4 NOT NULL, kind pg_catalog.text NOT NULL, "+
 			"UNIQUE (rel, tid, kind)) ON COMMIT DROP"); err != nil {
@@ -80,7 +88,6 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 			if lt.deletes == 0 {
 				continue
 			}
-			lt.keys = nil
 			l, err := w.cascade(ctx, i, lt, &out.Tables[i])
 			if err != nil {
 				return err
@@ -94,6 +101,9 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 				}
 			}
 			sortSteps(out.Tables[i].Steps)
+			slices.SortFunc(out.Tables[i].Reaches, func(a, b declaration.TableName) int {
+				return cmp.Or(cmp.Compare(a.Schema, b.Schema), cmp.Compare(a.Name, b.Name))
+			})
 		}
 		out.Conflicts = w.conflicts
 		s.effect = w.table
@@ -137,11 +147,177 @@ type edge struct {
 	inTree bool
 	// set holds the columns that SET NULL or SET DEFAULT sets.
 	set []string
+	// schemaUsage, tableSelect, and rowSecurity say whether the role may use
+	// the schema of the referencing relation, may read the relation as a
+	// whole, with the identities of its rows, and whether row-level security
+	// applies to it.
+	schemaUsage bool
+	tableSelect bool
+	rowSecurity bool
 	// refColumns is true when the role may read the referenced columns, and
-	// refTable when it may read the referenced relation as a whole, with the
-	// identities of its rows.
+	// refTable when it may read the referenced relation as a whole.
 	refColumns bool
 	refTable   bool
+	// triggersDisabled is true when a trigger of the deletion of the foreign
+	// key, or of a key of a partition that it made, does not fire in a
+	// session whose session_replication_role is origin.
+	triggersDisabled bool
+}
+
+// cover is a declared table whose rows are among the rows of the
+// referencing relation of an edge: the relation itself, a partitioned table
+// above it, or a partition below it.
+type cover struct {
+	lt *loadedTable
+	// alias names its declared rows in the queries of the edge.
+	alias string
+	// only holds, for a partition below the referencing relation, the
+	// relations of its partition tree, whose rows alone are its rows. It is
+	// nil when every row of the referencing relation is a row of the table.
+	only []uint32
+}
+
+// refs is the referencing side of an edge: the relation, called r, and the
+// declared tables that cover its rows.
+type refs struct {
+	e      edge
+	covers []cover
+}
+
+// partitionTrees reads, for every declared table, the relations of its
+// partition tree and the partitioned tables above it, which tell the
+// declared tables that cover the rows of a relation.
+func (w *walk) partitionTrees(ctx context.Context) error {
+	oids := make([]uint32, 0, len(w.s.loaded))
+	byOID := make(map[uint32]*loadedTable, len(w.s.loaded))
+	for _, lt := range w.s.loaded {
+		oids = append(oids, lt.meta.oid)
+		byOID[lt.meta.oid] = lt
+	}
+	// pg_partition_tree and pg_partition_ancestors return nothing for a
+	// table that is neither partitioned nor a partition.
+	rows, err := w.tx.Query(ctx, `SELECT g.oid,
+			ARRAY(SELECT g.oid UNION SELECT p.relid::pg_catalog.oid FROM pg_catalog.pg_partition_tree(g.oid::pg_catalog.regclass) AS p),
+			ARRAY(SELECT a.relid::pg_catalog.oid FROM pg_catalog.pg_partition_ancestors(g.oid::pg_catalog.regclass) AS a
+				WHERE a.relid::pg_catalog.oid OPERATOR(pg_catalog.<>) g.oid),
+			COALESCE(pg_catalog.pg_partition_root(g.oid::pg_catalog.regclass)::pg_catalog.oid, g.oid)
+		FROM pg_catalog.unnest($1::pg_catalog.oid[]) AS g(oid)`, oids)
+	if err != nil {
+		return fmt.Errorf("read the partitions of the declared tables: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var oid, top uint32
+		var tree, ancestors []uint32
+		if err := rows.Scan(&oid, &tree, &ancestors, &top); err != nil {
+			return fmt.Errorf("read the partitions of the declared tables: %w", err)
+		}
+		byOID[oid].tree, byOID[oid].ancestors, byOID[oid].top = tree, ancestors, top
+	}
+	return rows.Err()
+}
+
+// refsOf returns the referencing side of e, with the declared tables that
+// cover its rows, sorted by name.
+func (w *walk) refsOf(e edge) refs {
+	r := refs{e: e}
+	for _, name := range sortedNames(w.s.loaded) {
+		lt := w.s.loaded[name]
+		var only []uint32
+		switch {
+		case lt.meta.oid == e.fromOID, slices.Contains(lt.tree, e.fromOID):
+			// The relation itself, or one of its partitions.
+		case slices.Contains(lt.ancestors, e.fromOID):
+			only = lt.tree
+		default:
+			continue
+		}
+		r.covers = append(r.covers, cover{lt: lt, alias: walkDeclaredAlias + strconv.Itoa(len(r.covers)+1), only: only})
+	}
+	return r
+}
+
+// in returns the condition that the row r is a row of the declared table.
+func (c cover) in() string {
+	if c.only == nil {
+		return "true"
+	}
+	oids := make([]string, len(c.only))
+	for i, o := range c.only {
+		oids[i] = strconv.FormatUint(uint64(o), 10)
+	}
+	return walkRowAlias + ".tableoid OPERATOR(pg_catalog.=) ANY ('{" + strings.Join(oids, ",") + "}'::pg_catalog.oid[])"
+}
+
+// matched returns the condition that a declared row of the table matches
+// the row r: the key of a declared row is never NULL.
+func (c cover) matched() string {
+	return c.alias + "." + quoteIdent(c.lt.c.key[0].name) + " IS NOT NULL"
+}
+
+// own reports whether the rows to insert of the declared table are rows of
+// the referencing relation: it is the relation or a partition below it.
+// Rows to insert of a partitioned table above the relation may go to
+// other partitions.
+func (c cover) own(e edge) bool {
+	return c.lt.meta.oid == e.fromOID || c.only != nil
+}
+
+// from returns the referencing rows, called r, with the declared rows that
+// match each, called rd1, rd2, ...
+func (r refs) from() string {
+	var b strings.Builder
+	b.WriteString(r.e.from + " AS " + walkRowAlias)
+	for _, c := range r.covers {
+		b.WriteString(" LEFT JOIN " + c.lt.c.declared + " AS " + c.alias + " ON ")
+		if c.only != nil {
+			b.WriteString(c.in() + " AND ")
+		}
+		b.WriteString(declaredMatch(c.lt.c, c.alias, walkRowAlias))
+	}
+	return b.String()
+}
+
+// anyMatched returns the condition that a declared row matches the row r.
+func (r refs) anyMatched() string {
+	parts := []string{"false"}
+	for _, c := range r.covers {
+		parts = append(parts, c.matched())
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
+}
+
+// planDeletes returns the condition that the plan deletes the row r itself:
+// a row of a declared table of mode sync that no declared row matches.
+func (r refs) planDeletes() string {
+	parts := []string{"false"}
+	for _, c := range r.covers {
+		if c.lt.sync {
+			parts = append(parts, "("+c.in()+" AND NOT ("+c.matched()+"))")
+		}
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
+}
+
+// after returns the values of the referencing columns as they will be after
+// the inserts and updates of an apply: a compared column of a declared row,
+// in a table whose mode updates, takes its declared value.
+func (r refs) after() []string {
+	values := make([]string, len(r.e.columns))
+	for i, col := range r.e.columns {
+		stored := walkRowAlias + "." + quoteIdent(col)
+		var whens []string
+		for _, c := range r.covers {
+			if c.lt.updating && slices.ContainsFunc(c.lt.c.compare, func(k column) bool { return k.name == col }) {
+				whens = append(whens, "WHEN "+c.matched()+" THEN "+c.alias+"."+quoteIdent(col))
+			}
+		}
+		values[i] = stored
+		if len(whens) > 0 {
+			values[i] = "CASE " + strings.Join(whens, " ") + " ELSE " + stored + " END"
+		}
+	}
+	return values
 }
 
 // cascade walks the foreign keys ON DELETE CASCADE from the rows to delete
@@ -156,40 +332,33 @@ func (w *walk) cascade(ctx context.Context, i int, root *loadedTable, effect *pl
 			return nil, err
 		}
 		levels[lv].edges = edges
-		if lv == 0 {
-			for _, e := range edges {
-				if e.inTree && w.readable(e, root, 0) {
-					root.keys = append(root.keys, e.foreignKey)
-				}
-			}
-		}
 		reached := false
 		for _, e := range edges {
 			if e.onDelete != "CASCADE" {
 				continue
 			}
 			step := w.step(e, lv)
-			if !w.readable(e, root, lv) {
-				step.Unknown = plan.Unreadable
+			if step.Unknown = w.unknown(e, root, lv); step.Unknown != plan.Known {
 				effect.Steps = append(effect.Steps, step)
 				continue
 			}
-			rlt := w.s.loadedRow(e)
-			if rlt != nil {
-				if err := w.conflict(ctx, e, rlt, root, i, lv, nil); err != nil {
+			r := w.refsOf(e)
+			if err := w.reaches(ctx, r, root, i, lv, effect); err != nil {
+				return nil, err
+			}
+			for _, c := range r.covers {
+				if err := w.conflict(ctx, r, c, root, i, lv, nil); err != nil {
 					return nil, err
 				}
 			}
-			if rlt == nil || !rlt.sync {
-				n, err := w.insert(ctx, e, rlt, root, i, lv, kindDeleted, rlt != nil)
-				if err != nil {
-					return nil, err
-				}
-				if n > 0 {
-					step.Rows = n
-					effect.Steps = append(effect.Steps, step)
-					reached = true
-				}
+			n, err := w.insert(ctx, r, root, i, lv, kindDeleted, "NOT "+r.anyMatched())
+			if err != nil {
+				return nil, err
+			}
+			if n > 0 {
+				step.Rows = n
+				effect.Steps = append(effect.Steps, step)
+				reached = true
 			}
 		}
 		if !reached {
@@ -218,32 +387,32 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 			continue
 		}
 		step := w.step(e, lv)
-		if !w.readable(e, root, lv) {
-			step.Unknown = plan.Unreadable
+		if step.Unknown = w.unknown(e, root, lv); step.Unknown != plan.Known {
 			effect.Steps = append(effect.Steps, step)
 			continue
 		}
-		rlt := w.s.loadedRow(e)
+		r := w.refsOf(e)
+		if err := w.reaches(ctx, r, root, i, lv, effect); err != nil {
+			return err
+		}
 		var n int
 		var err error
 		switch {
 		case changes:
 			// A declared column that the action sets would differ from the
 			// declaration: such declared rows are conflicts, not changes.
-			var declared []string
-			if rlt != nil {
-				declared = slices.DeleteFunc(slices.Clone(e.set), func(c string) bool { return !rlt.declares(c) })
-			}
-			if len(declared) > 0 {
-				if err := w.conflict(ctx, e, rlt, root, i, lv, declared); err != nil {
+			conflicting := []string{"false"}
+			for _, c := range r.covers {
+				declared := slices.DeleteFunc(slices.Clone(e.set), func(col string) bool { return !c.lt.declares(col) })
+				if len(declared) == 0 {
+					continue
+				}
+				if err := w.conflict(ctx, r, c, root, i, lv, declared); err != nil {
 					return err
 				}
-				if !rlt.sync {
-					n, err = w.insert(ctx, e, rlt, root, i, lv, kindChanged, true)
-				}
-			} else {
-				n, err = w.insert(ctx, e, rlt, root, i, lv, kindChanged, false)
+				conflicting = append(conflicting, c.matched())
 			}
+			n, err = w.insert(ctx, r, root, i, lv, kindChanged, "NOT ("+strings.Join(conflicting, " OR ")+")")
 			if err == nil && n > 0 {
 				step.OnUpdate, step.OnUpdateTable, err = w.onUpdate(ctx, e)
 				if step.OnUpdate != "" {
@@ -251,11 +420,13 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 				}
 			}
 		case fails:
-			n, err = w.insert(ctx, e, rlt, root, i, lv, kindBlocking, false)
-			if err == nil && rlt != nil {
-				var m int
-				m, err = w.countInserts(ctx, e, rlt, root, i, lv)
-				n += m
+			n, err = w.insert(ctx, r, root, i, lv, kindBlocking, "true")
+			for _, c := range r.covers {
+				if err == nil && c.own(e) {
+					var m int
+					m, err = w.countInserts(ctx, r, c, root, i, lv)
+					n += m
+				}
 			}
 		}
 		if err != nil {
@@ -280,25 +451,29 @@ func (w *walk) step(e edge, lv int) plan.Step {
 	return step
 }
 
-// readable reports whether the role may read what the queries of e need:
-// the referencing relation as a whole, for the identities of its rows, and
-// the referenced columns. Beyond level 0, and for a partitioned table above
-// the table of level 0, the referenced relation is read as a whole too.
-func (w *walk) readable(e edge, root *loadedTable, lv int) bool {
+// unknown says why the walk cannot count the rows of e, or returns Known:
+// the role may not read the referencing relation as a whole, for the
+// identities of its rows, or the referenced columns; beyond level 0, and for
+// a partitioned table above the table of level 0, the referenced relation as
+// a whole; or the triggers of the deletion of the key are disabled.
+func (w *walk) unknown(e edge, root *loadedTable, lv int) plan.Unknown {
+	referenced := e.refTable
 	if lv == 0 && e.toOID == root.meta.oid {
-		return e.readable && e.refColumns
+		referenced = e.refColumns
 	}
-	return e.readable && e.refTable
-}
-
-// loadedRow returns the declared table that is the referencing relation of
-// e, or nil when the run does not declare it.
-func (s *Session) loadedRow(e edge) *loadedTable {
-	lt, ok := s.loaded[e.table]
-	if !ok || lt.meta.oid != e.fromOID {
-		return nil
+	switch {
+	case !e.schemaUsage:
+		return plan.NoSchemaUsage
+	case !e.tableSelect:
+		return plan.NoTableSelect
+	case e.rowSecurity:
+		return plan.RowSecurity
+	case !referenced:
+		return plan.ReferencedUnreadable
+	case e.triggersDisabled:
+		return plan.TriggersDisabled
 	}
-	return lt
+	return plan.Known
 }
 
 // declares reports whether column is a declared column of the table that a
@@ -356,73 +531,61 @@ func declaredMatch(c *comparison, decl, stored string) string {
 	return strings.Join(parts, " AND ")
 }
 
-// source returns the referencing rows of e, called r, with the declared row
-// that matches each, called rd, when the run declares the table.
-func source(e edge, rlt *loadedTable) string {
-	src := e.from + " AS " + walkRowAlias
-	if rlt != nil {
-		src += " LEFT JOIN " + rlt.c.declared + " AS " + walkDeclaredAlias + " ON " + declaredMatch(rlt.c, walkDeclaredAlias, walkRowAlias)
-	}
-	return src
+// referencing returns the condition that the row r references a row of
+// level lv, with its values after the inserts and updates.
+func (w *walk) referencing(r refs, root *loadedTable, i, lv int) string {
+	return "EXISTS (SELECT " + w.parents(r.e, root, i, lv) + " AND " + keyMatch(r.e, r.after()) + ")"
 }
 
-// matched returns the condition that a referencing row has a declared row:
-// the key of a declared row is never NULL.
-func matched(rlt *loadedTable) string {
-	return walkDeclaredAlias + "." + quoteIdent(rlt.c.key[0].name) + " IS NOT NULL"
-}
-
-// after returns the values of the referencing columns of e as they will be
-// after the inserts and updates of an apply: a compared column of a declared
-// row, in a table whose mode updates, takes its declared value.
-func after(e edge, rlt *loadedTable) []string {
-	refs := make([]string, len(e.columns))
-	for i, col := range e.columns {
-		stored := walkRowAlias + "." + quoteIdent(col)
-		refs[i] = stored
-		if rlt != nil && rlt.updating && slices.ContainsFunc(rlt.c.compare, func(c column) bool { return c.name == col }) {
-			refs[i] = "CASE WHEN " + matched(rlt) + " THEN " + walkDeclaredAlias + "." + quoteIdent(col) + " ELSE " + stored + " END"
-		}
-	}
-	return refs
-}
-
-// insert keeps the referencing rows of e that reference the rows of level lv
-// as rows of kind, once each, and returns how many it kept that no earlier
-// step kept. It leaves out the rows that the plan deletes itself, and the
-// rows that a cascade deletes, for a kind other than d. With undeclared, it
-// keeps only the rows that the declaration does not hold.
-func (w *walk) insert(ctx context.Context, e edge, rlt *loadedTable, root *loadedTable, i, lv int, kind string, undeclared bool) (int, error) {
-	var conds []string
-	switch {
-	case undeclared:
-		conds = append(conds, "NOT ("+matched(rlt)+")")
-	case rlt != nil && rlt.sync:
-		// The rows of a table of mode sync that no declared row matches are
-		// rows that the plan deletes.
-		conds = append(conds, matched(rlt))
-	}
+// insert keeps the referencing rows of r that reference the rows of level lv
+// and for which which holds as rows of kind, once each, and returns how many
+// it kept that no earlier step kept. It leaves out the rows that the plan
+// deletes itself, and the rows that a cascade deletes, for a kind other than
+// d.
+func (w *walk) insert(ctx context.Context, r refs, root *loadedTable, i, lv int, kind, which string) (int, error) {
+	conds := []string{"NOT " + r.planDeletes(), which}
 	if kind != kindDeleted {
 		conds = append(conds, "NOT EXISTS (SELECT FROM "+w.table+" AS x WHERE x.rel OPERATOR(pg_catalog.=) "+walkRowAlias+
 			".tableoid AND x.tid OPERATOR(pg_catalog.=) "+walkRowAlias+".ctid AND x.kind OPERATOR(pg_catalog.=) '"+kindDeleted+"')")
 	}
-	conds = append(conds, "EXISTS (SELECT "+w.parents(e, root, i, lv)+" AND "+keyMatch(e, after(e, rlt))+")")
+	conds = append(conds, w.referencing(r, root, i, lv))
 	sql := "INSERT INTO " + w.table + " (rel, via, tid, root, level, kind) SELECT " + walkRowAlias + ".tableoid, " +
-		strconv.FormatUint(uint64(e.fromOID), 10) + ", " + walkRowAlias + ".ctid, " + strconv.Itoa(i) + ", " + strconv.Itoa(lv+1) +
-		", '" + kind + "' FROM " + source(e, rlt) + " WHERE " + strings.Join(conds, " AND ") + " ON CONFLICT (rel, tid, kind) DO NOTHING"
+		strconv.FormatUint(uint64(r.e.fromOID), 10) + ", " + walkRowAlias + ".ctid, " + strconv.Itoa(i) + ", " + strconv.Itoa(lv+1) +
+		", '" + kind + "' FROM " + r.from() + " WHERE " + strings.Join(conds, " AND ") + " ON CONFLICT (rel, tid, kind) DO NOTHING"
 	tag, err := w.tx.Exec(ctx, sql)
 	if err != nil {
-		return 0, fmt.Errorf("follow foreign key %q of table %s: %w", e.name, e.table, err)
+		return 0, fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
 	}
 	return int(tag.RowsAffected()), nil
 }
 
+// reaches adds to effect each other declared table of mode sync whose rows
+// to delete reference the rows of level lv through the edge of r: an apply
+// must delete them before the rows of root, or a cascade from root would
+// delete rows that their own statement counts on.
+func (w *walk) reaches(ctx context.Context, r refs, root *loadedTable, i, lv int, effect *plan.Effect) error {
+	for _, c := range r.covers {
+		if !c.lt.sync || c.lt.deletes == 0 || c.lt == root || slices.Contains(effect.Reaches, c.lt.meta.name) {
+			continue
+		}
+		var found bool
+		if err := w.tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM "+r.from()+" WHERE "+c.in()+" AND NOT ("+c.matched()+") AND "+
+			w.referencing(r, root, i, lv)+")").Scan(&found); err != nil {
+			return fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
+		}
+		if found {
+			effect.Reaches = append(effect.Reaches, c.lt.meta.name)
+		}
+	}
+	return nil
+}
+
 // declaresAll reports whether every referencing column of e is a declared
-// column of rlt, so that a row to insert holds the values that it will
+// column of lt, so that a row to insert holds the values that it will
 // reference with.
-func declaresAll(e edge, rlt *loadedTable) bool {
+func declaresAll(e edge, lt *loadedTable) bool {
 	for _, c := range e.columns {
-		if !rlt.declares(c) {
+		if !lt.declares(c) {
 			return false
 		}
 	}
@@ -430,36 +593,38 @@ func declaresAll(e edge, rlt *loadedTable) bool {
 }
 
 // insertsThatReference returns the FROM and WHERE of the declared rows to
-// insert of rlt, called rd, that reference the rows of level lv through e.
-func (w *walk) insertsThatReference(e edge, rlt *loadedTable, root *loadedTable, i, lv int) string {
-	refs := make([]string, len(e.columns))
-	for j, c := range e.columns {
-		refs[j] = walkDeclaredAlias + "." + quoteIdent(c)
+// insert of the table of c, called rd, that reference the rows of level lv
+// through e.
+func (w *walk) insertsThatReference(e edge, c cover, root *loadedTable, i, lv int) string {
+	values := make([]string, len(e.columns))
+	for j, col := range e.columns {
+		values[j] = walkDeclaredAlias + "." + quoteIdent(col)
 	}
-	return "FROM " + rlt.c.declared + " AS " + walkDeclaredAlias + " WHERE NOT EXISTS (SELECT FROM " + rlt.c.stored + " AS " + walkRowAlias +
-		" WHERE " + declaredMatch(rlt.c, walkDeclaredAlias, walkRowAlias) + ") AND EXISTS (SELECT " + w.parents(e, root, i, lv) +
-		" AND " + keyMatch(e, refs) + ")"
+	return "FROM " + c.lt.c.declared + " AS " + walkDeclaredAlias + " WHERE NOT EXISTS (SELECT FROM " + c.lt.c.stored + " AS " + walkRowAlias +
+		" WHERE " + declaredMatch(c.lt.c, walkDeclaredAlias, walkRowAlias) + ") AND EXISTS (SELECT " + w.parents(e, root, i, lv) +
+		" AND " + keyMatch(e, values) + ")"
 }
 
-// countInserts counts the declared rows to insert of rlt that reference the
-// rows of level lv through e.
-func (w *walk) countInserts(ctx context.Context, e edge, rlt *loadedTable, root *loadedTable, i, lv int) (int, error) {
-	if !declaresAll(e, rlt) {
+// countInserts counts the declared rows to insert of the table of c that
+// reference the rows of level lv through the edge of r.
+func (w *walk) countInserts(ctx context.Context, r refs, c cover, root *loadedTable, i, lv int) (int, error) {
+	if !declaresAll(r.e, c.lt) {
 		return 0, nil
 	}
 	var n int64
-	if err := w.tx.QueryRow(ctx, "SELECT pg_catalog.count(*) "+w.insertsThatReference(e, rlt, root, i, lv)).Scan(&n); err != nil {
-		return 0, fmt.Errorf("follow foreign key %q of table %s: %w", e.name, e.table, err)
+	if err := w.tx.QueryRow(ctx, "SELECT pg_catalog.count(*) "+w.insertsThatReference(r.e, c, root, i, lv)).Scan(&n); err != nil {
+		return 0, fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
 	}
 	return int(n), nil
 }
 
-// conflict adds a conflict for the declared rows of rlt that reference the
-// rows of level lv through e: for a cascade, every such row, and for SET
-// NULL or SET DEFAULT, every such row whose declared columns set names. The
-// stored rows count as they will be after the updates of an apply, and the
-// rows to insert with their declared values.
-func (w *walk) conflict(ctx context.Context, e edge, rlt *loadedTable, root *loadedTable, i, lv int, set []string) error {
+// conflict adds a conflict for the declared rows of the table of c that
+// reference the rows of level lv through the edge of r: for a cascade, every
+// such row, and for SET NULL or SET DEFAULT, every such row whose declared
+// columns set names. The stored rows count as they will be after the
+// updates of an apply, and the rows to insert with their declared values.
+func (w *walk) conflict(ctx context.Context, r refs, c cover, root *loadedTable, i, lv int, set []string) error {
+	e := r.e
 	goes := e.referenced
 	if lv == 0 {
 		goes = make([]string, len(root.c.key))
@@ -467,34 +632,35 @@ func (w *walk) conflict(ctx context.Context, e edge, rlt *loadedTable, root *loa
 			goes[j] = k.name
 		}
 	}
-	keys := texts(walkDeclaredAlias, rlt.c.key)
 	identity := texts(storedAlias, columnsOf(goes))
-	limit := " ORDER BY " + rlt.c.orderBy(walkDeclaredAlias) + " LIMIT " + strconv.Itoa(maxFlaggedRows)
+	limit := " ORDER BY " + c.lt.c.orderBy(c.alias) + " LIMIT " + strconv.Itoa(maxFlaggedRows)
 
-	stored := "SELECT " + keys + ", " + identityColumns(len(goes)) + ", pg_catalog.count(*) OVER () FROM " + source(e, rlt) +
-		" CROSS JOIN LATERAL (SELECT " + identity + " " + w.parents(e, root, i, lv) + " AND " + keyMatch(e, after(e, rlt)) + " LIMIT 1) AS g (" +
-		identityColumns(len(goes)) + ") WHERE " + matched(rlt) + limit
-	c := plan.Conflict{
-		Table: rlt.meta.name, Columns: e.columns, Constraint: e.name, References: e.toTable, OnDelete: e.onDelete, Set: set,
+	stored := "SELECT " + texts(c.alias, c.lt.c.key) + ", " + identityColumns(len(goes)) + ", pg_catalog.count(*) OVER () FROM " + r.from() +
+		" CROSS JOIN LATERAL (SELECT " + identity + " " + w.parents(e, root, i, lv) + " AND " + keyMatch(e, r.after()) + " LIMIT 1) AS g (" +
+		identityColumns(len(goes)) + ") WHERE " + c.matched() + limit
+	conflict := plan.Conflict{
+		Table: c.lt.meta.name, Columns: e.columns, Constraint: e.name, References: e.toTable, OnDelete: e.onDelete, Set: set,
 	}
-	if err := w.conflictRows(ctx, stored, rlt, goes, lv > 0, false, &c); err != nil {
+	if err := w.conflictRows(ctx, stored, c.lt, goes, lv > 0, false, &conflict); err != nil {
 		return err
 	}
-	if declaresAll(e, rlt) {
-		refs := make([]string, len(e.columns))
+	if c.own(e) && declaresAll(e, c.lt) {
+		values := make([]string, len(e.columns))
 		for j, col := range e.columns {
-			refs[j] = walkDeclaredAlias + "." + quoteIdent(col)
+			values[j] = walkDeclaredAlias + "." + quoteIdent(col)
 		}
-		inserts := "SELECT " + keys + ", " + identityColumns(len(goes)) + ", pg_catalog.count(*) OVER () FROM " + rlt.c.declared + " AS " + walkDeclaredAlias +
-			" CROSS JOIN LATERAL (SELECT " + identity + " " + w.parents(e, root, i, lv) + " AND " + keyMatch(e, refs) + " LIMIT 1) AS g (" +
-			identityColumns(len(goes)) + ") WHERE NOT EXISTS (SELECT FROM " + rlt.c.stored + " AS " + walkRowAlias + " WHERE " +
-			declaredMatch(rlt.c, walkDeclaredAlias, walkRowAlias) + ")" + limit
-		if err := w.conflictRows(ctx, inserts, rlt, goes, lv > 0, true, &c); err != nil {
+		inserts := "SELECT " + texts(walkDeclaredAlias, c.lt.c.key) + ", " + identityColumns(len(goes)) + ", pg_catalog.count(*) OVER () FROM " +
+			c.lt.c.declared + " AS " + walkDeclaredAlias +
+			" CROSS JOIN LATERAL (SELECT " + identity + " " + w.parents(e, root, i, lv) + " AND " + keyMatch(e, values) + " LIMIT 1) AS g (" +
+			identityColumns(len(goes)) + ") WHERE NOT EXISTS (SELECT FROM " + c.lt.c.stored + " AS " + walkRowAlias + " WHERE " +
+			declaredMatch(c.lt.c, walkDeclaredAlias, walkRowAlias) + ")" + " ORDER BY " + c.lt.c.orderBy(walkDeclaredAlias) +
+			" LIMIT " + strconv.Itoa(maxFlaggedRows)
+		if err := w.conflictRows(ctx, inserts, c.lt, goes, lv > 0, true, &conflict); err != nil {
 			return err
 		}
 	}
-	if c.Total > 0 {
-		w.conflicts = append(w.conflicts, c)
+	if conflict.Total > 0 {
+		w.conflicts = append(w.conflicts, conflict)
 	}
 	return nil
 }
@@ -520,13 +686,13 @@ func identityColumns(n int) string {
 
 // conflictRows runs a query of conflict, and adds its rows and its total to
 // c, up to maxFlaggedRows rows.
-func (w *walk) conflictRows(ctx context.Context, sql string, rlt *loadedTable, goes []string, cascaded, insert bool, c *plan.Conflict) error {
+func (w *walk) conflictRows(ctx context.Context, sql string, lt *loadedTable, goes []string, cascaded, insert bool, c *plan.Conflict) error {
 	rows, err := w.tx.Query(ctx, sql)
 	if err != nil {
-		return fmt.Errorf("check the declared rows of table %s that foreign key %q references: %w", rlt.meta.name, c.Constraint, err)
+		return fmt.Errorf("check the declared rows of table %s that foreign key %q references: %w", lt.meta.name, c.Constraint, err)
 	}
 	defer rows.Close()
-	keys := make([]pgtype.Text, len(rlt.c.key))
+	keys := make([]pgtype.Text, len(lt.c.key))
 	ids := make([]pgtype.Text, len(goes))
 	var total int64
 	dest := make([]any, 0, len(keys)+len(ids)+1)
@@ -540,7 +706,7 @@ func (w *walk) conflictRows(ctx context.Context, sql string, rlt *loadedTable, g
 	first := true
 	for rows.Next() {
 		if err := rows.Scan(dest...); err != nil {
-			return fmt.Errorf("check the declared rows of table %s that foreign key %q references: %w", rlt.meta.name, c.Constraint, err)
+			return fmt.Errorf("check the declared rows of table %s that foreign key %q references: %w", lt.meta.name, c.Constraint, err)
 		}
 		if first {
 			c.Total += int(total)
@@ -603,7 +769,9 @@ func (w *walk) onUpdate(ctx context.Context, e edge) (string, declaration.TableN
 // partitioned table is read once, from the partitioned table.
 func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 	// pg_partition_tree and pg_partition_ancestors return nothing for a
-	// table that is neither partitioned nor a partition.
+	// table that is neither partitioned nor a partition. A trigger of the
+	// deletion has the bit 8 in tgtype, and does not fire in a session of
+	// origin when tgenabled is D or R.
 	rows, err := w.tx.Query(ctx, `WITH tree AS (
 			SELECT g.oid AS relid FROM pg_catalog.unnest($1::pg_catalog.oid[]) AS g(oid)
 			UNION SELECT p.relid FROM pg_catalog.unnest($1::pg_catalog.oid[]) AS g(oid),
@@ -640,12 +808,19 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 			ARRAY(SELECT a.attname::pg_catalog.text
 				FROM pg_catalog.unnest(COALESCE(NULLIF(co.confdelsetcols, '{}'::pg_catalog.int2[]), co.conkey)) WITH ORDINALITY AS k(attnum, i)
 				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = co.conrelid AND a.attnum = k.attnum ORDER BY k.i),
-			pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND pg_catalog.has_table_privilege(r.oid, 'SELECT')
-				AND NOT pg_catalog.row_security_active(r.oid),
+			pg_catalog.has_schema_privilege(n.oid, 'USAGE'),
+			pg_catalog.has_table_privilege(r.oid, 'SELECT'),
+			pg_catalog.row_security_active(r.oid),
 			pg_catalog.has_schema_privilege(tn.oid, 'USAGE') AND NOT EXISTS (SELECT FROM pg_catalog.unnest(co.confkey) AS k(attnum)
 				WHERE NOT pg_catalog.has_column_privilege(co.confrelid, k.attnum, 'SELECT')),
 			pg_catalog.has_schema_privilege(tn.oid, 'USAGE') AND pg_catalog.has_table_privilege(t.oid, 'SELECT')
-				AND NOT pg_catalog.row_security_active(t.oid)
+				AND NOT pg_catalog.row_security_active(t.oid),
+			EXISTS (WITH RECURSIVE made(oid) AS (
+					SELECT co.oid
+					UNION ALL SELECT c2.oid FROM pg_catalog.pg_constraint AS c2 JOIN made ON c2.conparentid = made.oid
+				)
+				SELECT FROM pg_catalog.pg_trigger AS tg JOIN made ON tg.tgconstraint = made.oid
+				WHERE (tg.tgtype::pg_catalog.int4 & 8) <> 0 AND tg.tgenabled IN ('D', 'R'))
 		FROM pg_catalog.pg_constraint AS co
 		JOIN pg_catalog.pg_class AS r ON r.oid = co.conrelid
 		JOIN pg_catalog.pg_namespace AS n ON n.oid = r.relnamespace
@@ -666,9 +841,10 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 		if err := rows.Scan(&e.name, &e.fromOID, &e.table.Schema, &e.table.Name, &partitioned,
 			&e.toOID, &e.toTable.Schema, &e.toTable.Name, &toPartitioned, &action, &e.self, &e.inTree,
 			&e.columns, &e.referenced, &schemas, &ops, &collSchemas, &collNames, &e.set,
-			&e.readable, &e.refColumns, &e.refTable); err != nil {
+			&e.schemaUsage, &e.tableSelect, &e.rowSecurity, &e.refColumns, &e.refTable, &e.triggersDisabled); err != nil {
 			return nil, fmt.Errorf("read the foreign keys that reference the rows to delete: %w", err)
 		}
+		e.readable = e.schemaUsage && e.tableSelect && !e.rowSecurity
 		e.from = quoteTable(e.table)
 		if !partitioned {
 			e.from = "ONLY " + e.from
@@ -696,64 +872,6 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 		return nil, fmt.Errorf("read the foreign keys that reference the rows to delete: %w", err)
 	}
 	return edges, nil
-}
-
-// checkEffect checks, after the deletions of an apply, that every row that
-// Effects counted as deleted or changed through a foreign key is gone from
-// the snapshot of the transaction: the transaction deleted it, or wrote a new
-// version of it. A row that is still there was deleted, or pointed at
-// another row, by another transaction after the snapshot, so the deletions
-// did not do what the output of the apply says. It returns ErrConflict then.
-func (s *Session) checkEffect(ctx context.Context) error {
-	if s.effect == "" || !s.deletesChecked {
-		return nil
-	}
-	rows, err := s.tx.Query(ctx, `SELECT DISTINCT x.via, n.nspname::pg_catalog.text, c.relname::pg_catalog.text, c.relkind = 'p'
-		FROM `+s.effect+` AS x
-		JOIN pg_catalog.pg_class AS c ON c.oid = x.via
-		JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-		WHERE x.kind OPERATOR(pg_catalog.<>) '`+kindBlocking+`'
-		ORDER BY 2, 3`)
-	if err != nil {
-		return fmt.Errorf("read the rows that the deletions reached: %w", err)
-	}
-	type reached struct {
-		oid         uint32
-		name        declaration.TableName
-		partitioned bool
-	}
-	var tables []reached
-	for rows.Next() {
-		var r reached
-		if err := rows.Scan(&r.oid, &r.name.Schema, &r.name.Name, &r.partitioned); err != nil {
-			rows.Close()
-			return fmt.Errorf("read the rows that the deletions reached: %w", err)
-		}
-		tables = append(tables, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read the rows that the deletions reached: %w", err)
-	}
-	for _, t := range tables {
-		from := quoteTable(t.name)
-		if !t.partitioned {
-			from = "ONLY " + from
-		}
-		var left int64
-		// The array of identities makes PostgreSQL look the rows up by them.
-		if err := s.tx.QueryRow(ctx, "SELECT pg_catalog.count(*) FROM "+from+" AS "+walkRowAlias+" JOIN "+s.effect+" AS x ON x.rel OPERATOR(pg_catalog.=) "+
-			walkRowAlias+".tableoid AND x.tid OPERATOR(pg_catalog.=) "+walkRowAlias+".ctid AND x.kind OPERATOR(pg_catalog.<>) '"+kindBlocking+"' "+
-			"WHERE "+walkRowAlias+".ctid OPERATOR(pg_catalog.=) ANY (ARRAY(SELECT y.tid FROM "+s.effect+" AS y WHERE y.via OPERATOR(pg_catalog.=) $1 "+
-			"AND y.kind OPERATOR(pg_catalog.<>) '"+kindBlocking+"'))", t.oid).Scan(&left); err != nil {
-			return fmt.Errorf("check the rows of table %s that the deletions reached: %w", t.name, err)
-		}
-		if left > 0 {
-			return fmt.Errorf("the deletions did not delete or change %d %s of table %s that the plan counted: %w",
-				left, plural(left, "row", "rows"), t.name, ErrConflict)
-		}
-	}
-	return nil
 }
 
 // sortSteps sorts the steps of an effect by level, then by the referencing

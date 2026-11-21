@@ -73,9 +73,11 @@ type applyResult struct {
 }
 
 // applyAll applies reqs as the package apply does: it compares every table,
-// defers the deferrable foreign keys, inserts and updates from referenced to
-// referencing tables, deletes the other way when allowDelete is true, and
-// commits.
+// computes the effect of the deletions, defers the deferrable foreign keys,
+// inserts and updates from referenced to referencing tables, and, when
+// allowDelete is true, computes the effect again, stops on a declared row in
+// the way, deletes the other way, and checks the effect. It then commits. It
+// does not compare the two effects, which the package apply does.
 func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDelete bool) (applyResult, error) {
 	var r applyResult
 	byName := make(map[declaration.TableName]plan.DiffRequest, len(reqs))
@@ -124,13 +126,23 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		}
 		r.updated += n
 	}
-	if allowDelete {
+	if allowDelete && len(deleting) > 0 {
+		again, err := s.Effects(ctx, deleting)
+		if err != nil {
+			return r, err
+		}
+		if len(again.Conflicts) > 0 {
+			return r, fmt.Errorf("after the inserts and updates, %d foreign keys reach declared rows: %+v", len(again.Conflicts), again.Conflicts)
+		}
 		for _, name := range slices.Backward(order) {
 			n, err := s.Delete(ctx, byName[name])
 			if err != nil {
 				return r, err
 			}
 			r.deleted += n
+		}
+		if err := s.CheckEffect(ctx); err != nil {
+			return r, err
 		}
 	}
 	return r, s.Commit(ctx)
@@ -475,7 +487,7 @@ func TestReferences(t *testing.T) {
 			}{
 				{"superuser", db.Config, want},
 				{"role that may not read a table", reader, append([]string{
-					"ref.types 1 NO ACTION hidden.secret.secret_type_id_fkey(type_id) -> ref.types: unreadable",
+					"ref.types 1 NO ACTION hidden.secret.secret_type_id_fkey(type_id) -> ref.types: no usage",
 				}, want[1:]...)},
 			} {
 				t.Run(tt.name, func(t *testing.T) {

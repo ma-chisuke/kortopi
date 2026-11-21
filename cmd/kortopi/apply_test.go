@@ -175,7 +175,7 @@ func TestRunApply(t *testing.T) {
 			session:    &fakeSession{diffs: goldAndOld},
 			wantCode:   exitOK,
 			wantStdout: planOfGoldAndOld + "\nApplied: 1 inserted, 0 updated, 1 deleted.\n",
-			wantCalls:  append(diffs, "ForeignKeys", "Insert app.plans", "Delete app.plans", "Commit"),
+			wantCalls:  append(diffs, "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect", "Commit"),
 		},
 		{
 			name:       "deletions over the limit",

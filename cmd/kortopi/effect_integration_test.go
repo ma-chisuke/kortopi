@@ -175,14 +175,14 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 			t.Setenv("PGPASSWORD", owner.Password)
 			code, stdout, stderr, rows = e.run(t, owner.User, "apply", "--dir", kinds, "--allow-delete")
 			checkRun(t, code, stdout, stderr, exitError, kindBlock+lines(
-				"    Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not read the table, so what the deletion does to them is not known.",
+				"    Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not use schema b, so what the deletion does to them is not known.",
 				"",
 				"Plan: 0 to insert, 0 to update, 1 to delete in 1 table.",
 				"What the deletion does through 1 foreign key is not known.",
 			),
 				`kortopi: the deletion of rows of m.kind reaches rows of b.facts through foreign key "facts_kind_fkey", ON DELETE SET NULL, `+
-					"and the role may not read b.facts, so what the deletion does to them cannot be counted for the limit on deletions: "+
-					"grant the role SELECT on b.facts, or remove those rows first\n"+
+					`and the role may not use schema "b", so what the deletion does to them cannot be counted for the limit on deletions: `+
+					`grant the role USAGE on schema "b" and SELECT on table b.facts, or remove those rows first`+"\n"+
 					"kortopi: nothing was changed\n")
 			checkCounts(t, rows, effectRowsBefore)
 
