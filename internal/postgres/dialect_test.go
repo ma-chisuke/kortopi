@@ -1,15 +1,17 @@
 package postgres
 
 import (
+	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
 
-// Open passes the options of the command to the session, and returns no
-// session when it fails. Every case fails before a connection is made. It
-// sets the environment, so it does not run in parallel with other tests.
+// Open passes the options of the command to Connect, and returns no session
+// when it fails. Every case fails before a connection is made. It sets the
+// environment, so it does not run in parallel with other tests.
 func TestDialectOpen(t *testing.T) {
 	clearLibpqEnvironment(t)
 
@@ -36,5 +38,27 @@ func TestDialectOpen(t *testing.T) {
 				t.Errorf("Open(%+v) = %v, %v, want no session and an error with %q", tt.opts, s, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// options passes on every field of the options of the command, as it is.
+func TestDialectOptions(t *testing.T) {
+	t.Parallel()
+
+	wait := &bytes.Buffer{}
+	got := options(dialect.Options{
+		Host: "db.example.test", Port: "6543", User: "deployer", Database: "shop",
+		Dir: "data", Apply: true, Export: true, Wait: wait,
+	})
+	want := Options{
+		Host: "db.example.test", Port: "6543", User: "deployer", Database: "shop",
+		Dir: "data", Apply: true, Export: true, Wait: wait,
+	}
+	if got != want {
+		t.Errorf("options() = %+v, want %+v", got, want)
+	}
+	// A new field of dialect.Options has to be passed on, and set above.
+	if n := reflect.TypeFor[dialect.Options]().NumField(); n != 8 {
+		t.Errorf("dialect.Options has %d fields, and this test sets 8: pass the new field on in options, and set it here", n)
 	}
 }

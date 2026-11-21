@@ -30,19 +30,25 @@ func (Dialect) Parser() declaration.SQLParser {
 // Open connects to the database that opts name, as Connect does: an empty
 // field of the connection falls back to the environment variables of libpq.
 func (Dialect) Open(ctx context.Context, opts dialect.Options) (dialect.Session, error) {
-	s, err := Connect(ctx, Options{
-		Host:     opts.Host,
-		Port:     opts.Port,
-		User:     opts.User,
-		Database: opts.Database,
-		Dir:      opts.Dir,
-		Apply:    opts.Apply,
-		Export:   opts.Export,
-		Wait:     opts.Wait,
-	})
+	s, err := Connect(ctx, options(opts))
 	if err != nil {
 		// A nil *Session in the interface would not be nil.
 		return nil, err
 	}
 	return s, nil
+}
+
+// options returns the Options of a session for the options of the command,
+// every field as it is.
+func options(o dialect.Options) Options {
+	return Options{
+		Host:     o.Host,
+		Port:     o.Port,
+		User:     o.User,
+		Database: o.Database,
+		Dir:      o.Dir,
+		Apply:    o.Apply,
+		Export:   o.Export,
+		Wait:     o.Wait,
+	}
 }
