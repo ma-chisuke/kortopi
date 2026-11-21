@@ -1,6 +1,8 @@
 // Package postgres holds everything of kortopi that is specific to
 // PostgreSQL (ADR-0019): the reader of SQL declarations, and the session that
-// plans against a database or applies to it.
+// plans against a database or applies to it. Dialect offers both to the
+// command through the seam of internal/dialect (ADR-0036), and only the
+// command's registration file imports this package.
 //
 // A Session reads the catalogs, loads the declared rows of each table into a
 // temporary table of its own session, and lets PostgreSQL compute the

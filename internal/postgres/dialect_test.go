@@ -1,0 +1,40 @@
+package postgres
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/ma-chisuke/kortopi/internal/dialect"
+)
+
+// Open passes the options of the command to the session, and returns no
+// session when it fails. Every case fails before a connection is made. It
+// sets the environment, so it does not run in parallel with other tests.
+func TestDialectOpen(t *testing.T) {
+	clearLibpqEnvironment(t)
+
+	if got := (Dialect{}).Name(); got != "postgres" {
+		t.Errorf("Name() = %q, want postgres", got)
+	}
+	if _, ok := (Dialect{}).Parser().(Parser); !ok {
+		t.Errorf("Parser() = %T, want the parser of PostgreSQL", (Dialect{}).Parser())
+	}
+	tests := []struct {
+		name    string
+		opts    dialect.Options
+		wantErr string
+	}{
+		{name: "port", opts: dialect.Options{Port: "not a port", Database: "shop"}, wantErr: "read the connection settings: the port is not a number"},
+		{name: "database", opts: dialect.Options{Host: "db.example.test"}, wantErr: "the name of the database is missing"},
+		{name: "user", opts: dialect.Options{User: "app password=secret", Database: "shop"}, wantErr: "the user of the connection looks like a connection string"},
+		{name: "apply and export", opts: dialect.Options{Database: "shop", Apply: true, Export: true}, wantErr: "a session is for an apply or for an export, not for both"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := Dialect{}.Open(t.Context(), tt.opts)
+			if s != nil || err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Open(%+v) = %v, %v, want no session and an error with %q", tt.opts, s, err, tt.wantErr)
+			}
+		})
+	}
+}
