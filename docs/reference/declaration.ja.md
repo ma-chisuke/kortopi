@@ -253,7 +253,7 @@ mode = "insert"
   - kortopi がテーブルに挿入するどの行も、この値を得る。kortopi はこうした列を比べも更新もしない。すでにある行は持っている値を保ち、計画はその列の変更を示さない。
   - 列は、テーブルが持つとおりの名前で書く。テーブルのファイルはその列を宣言してはならず、その列は照合キーの列・生成列・`GENERATED ALWAYS` の識別列であってはならない。
   - テーブルにない列は、宣言した列と同じく、スキーマの変更を待つ（[kortopi plan](plan.ja.md#スキーマの変更を待つテーブルと列)）。
-  - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、それぞれの値を列の型で読む。列の読めない値があれば、計画は止まる（[on_insert の値](#on_insert-の値)）。
+  - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、存在するテーブルのそれぞれの値を列の型で読む。列の読めない値があれば、計画は止まる（[on_insert の値](#on_insert-の値)）。スキーマの変更を待つテーブルの値は、テーブルができてから検査する。
 
   スキーマを変えられるなら、列の既定値のほうが適している。既定値は kortopi の挿入に限らず、あらゆる挿入に効くからである。
 - ほかの設定はエラーであり、`key = []` もエラーである。
@@ -435,7 +435,7 @@ kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to c
 kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "Sort_Order", which is not a column of the table, but column "sort_order" is, whose name differs only in white space or case: write the name as the table has it
 ```
 
-PostgreSQL は、挿入する行がないときも含めて、計画のたびに `on_insert` の各値を読む。そのため、列が読めない値は、それを書いたプルリクエストの計画を止める。
+PostgreSQL は、挿入する行がないときも含めて、計画のたびに存在するテーブルの `on_insert` の各値を読む。そのため、列が読めない値は、それを書いたプルリクエストの計画を止める。スキーマの変更を待つテーブルの値は、テーブルができてから検査する。
 生成列と `GENERATED ALWAYS` の識別列もエラーである。どちらも挿入で値を受け取らないからである。
 テーブルにない列はスキーマの変更を待ち、`--no-pending` があればエラーになる。
 
@@ -481,4 +481,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:4ddc171d2f075ed1d1808e2a53be8deae4f1b8e278be81f3eda9674e0c3b7d0e -->
+<!-- i18n-source: declaration.md sha256:ab3f25d905c52a64cf0db7f3a4609eb26cbe7b0b38276ce88b3a4fcc7f1f3142 -->

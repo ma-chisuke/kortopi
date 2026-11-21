@@ -336,7 +336,7 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - The line comes after the lines of the pending columns and before the rows. A table without rows to insert shows no such line.
 - kortopi never compares these columns, so they never show as a change, and a row that exists keeps what it holds.
 - A column of `on_insert` that the table lacks waits for the schema change, as a declared column does, and its line says where the name comes from: `column floor of on_insert in kortopi.toml: known after the schema is applied`.
-- The plan reads every value by the type of its column before it loads any row, also when no row is to insert. For each value, inside a savepoint of its own that it rolls back, it makes a temporary table of that column alone, which takes its type from the column of the table, and inserts the value into it. So no other column gets a value or a default, and the role needs `SELECT` on these columns, to read their types, as on the declared columns ([What the session needs](#what-the-session-needs)).
+- The plan reads every value of a table that exists by the type of its column before it loads any row, also when no row is to insert. The values of a table that waits for the schema change are checked once the table exists. For each value, inside a savepoint of its own that it rolls back, it makes a temporary table of that column alone, which takes its type from the column of the table, and inserts the value into it. So no other column gets a value or a default, and the role needs `SELECT` on these columns, to read their types, as on the declared columns ([What the session needs](#what-the-session-needs)).
 
 ### Rows that reference rows to delete
 

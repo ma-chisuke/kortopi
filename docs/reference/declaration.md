@@ -252,7 +252,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   - Every row that kortopi inserts into the table gets the values. kortopi never compares or updates such a column: a row that exists keeps what it holds, and a plan shows no change in the column.
   - A column is named exactly as the table has it. The file of the table must not declare it, and it must not be a column of the match key, a generated column, or an identity column that is `GENERATED ALWAYS`.
   - A column that the table lacks waits for the schema change, as a declared column does ([kortopi plan](plan.md#tables-and-columns-that-wait-for-a-schema-change)).
-  - A plan reads every value by the type of its column before it loads any row, also when there is no row to insert, and stops on a value that the column does not read ([A value of on_insert](#a-value-of-on_insert)).
+  - A plan reads every value of a table that exists by the type of its column before it loads any row, also when there is no row to insert, and stops on a value that the column does not read ([A value of on_insert](#a-value-of-on_insert)). The values of a table that waits for the schema change are checked once the table exists.
 
   Where you can change the schema, a default of the column serves better: it applies to every insert, not only to those of kortopi.
 - Any other setting is an error, and so is `key = []`.
@@ -434,7 +434,7 @@ kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to c
 kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "Sort_Order", which is not a column of the table, but column "sort_order" is, whose name differs only in white space or case: write the name as the table has it
 ```
 
-PostgreSQL reads each value of `on_insert` when a plan runs, also when there is no row to insert, so a value that the column does not read stops the plan of the pull request that writes it.
+PostgreSQL reads each value of `on_insert` of a table that exists when a plan runs, also when there is no row to insert, so a value that the column does not read stops the plan of the pull request that writes it. The values of a table that waits for the schema change are checked once the table exists.
 A generated column and an identity column that is `GENERATED ALWAYS` are errors too, because they take no value in an insert.
 A column that the table lacks waits for the schema change; with `--no-pending`, it is an error:
 
