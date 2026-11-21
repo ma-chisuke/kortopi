@@ -31,12 +31,32 @@ type fakeDB struct {
 	// checkErr makes it fail.
 	refused  map[declaration.TableName][]RefusedValue
 	checkErr error
+	// effects holds the effect of the deletions of the tables that it
+	// names, conflicts the conflicts that Effects reports, and effectsErr
+	// makes it fail.
+	effects    map[declaration.TableName]Effect
+	conflicts  []Conflict
+	effectsErr error
 
 	describes [][]declaration.TableName
 	requests  []DiffRequest
 	counted   []declaration.TableName
 	// checked holds the values of each call of CheckValues.
 	checked map[declaration.TableName][]config.InsertValue
+	// effected holds the names of each call of Effects.
+	effected [][]declaration.TableName
+}
+
+func (f *fakeDB) Effects(_ context.Context, names []declaration.TableName) (Effects, error) {
+	f.effected = append(f.effected, slices.Clone(names))
+	if f.effectsErr != nil {
+		return Effects{}, f.effectsErr
+	}
+	e := Effects{Conflicts: f.conflicts}
+	for _, n := range names {
+		e.Tables = append(e.Tables, f.effects[n])
+	}
+	return e, nil
 }
 
 func (f *fakeDB) Describe(_ context.Context, names []declaration.TableName) (map[declaration.TableName]TableInfo, error) {

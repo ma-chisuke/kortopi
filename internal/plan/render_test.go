@@ -61,6 +61,34 @@ var roomTypes = Table{
 	},
 }
 
+// step returns a step of an effect. A step of SET NULL or SET DEFAULT sets
+// every column of the key.
+func step(level int, table declaration.TableName, constraint string, references declaration.TableName, onDelete string, rows int, columns ...string) Step {
+	s := Step{Level: level, Table: table, Columns: columns, Constraint: constraint, References: references, OnDelete: onDelete, Rows: rows}
+	if onDelete == "SET NULL" || onDelete == "SET DEFAULT" {
+		s.Set = columns
+	}
+	return s
+}
+
+// unreadable returns s as a step whose table the role may not read.
+func unreadable(s Step) Step {
+	s.Unknown = Unreadable
+	return s
+}
+
+// withSet returns s with the columns that it sets.
+func withSet(s Step, set ...string) Step {
+	s.Set = set
+	return s
+}
+
+// onUpdate returns s as a step whose change a foreign key ON UPDATE follows.
+func onUpdate(s Step, constraint string, table declaration.TableName) Step {
+	s.Unknown, s.OnUpdate, s.OnUpdateTable = FollowsOnUpdate, constraint, table
+	return s
+}
+
 func TestRender(t *testing.T) {
 	t.Parallel()
 
@@ -270,7 +298,7 @@ func TestRender(t *testing.T) {
 			}},
 		},
 		{
-			name: "references",
+			name: "effect",
 			plan: &Plan{Tables: []Table{
 				{
 					Name: name("facility", "room_types"), Mode: config.ModeSync,
@@ -278,27 +306,39 @@ func TestRender(t *testing.T) {
 					Diff: TableDiff{
 						Inserts: []Row{{Key: values("suite"), Values: values("Suite")}},
 						Deletes: []Row{{Key: values("old")}, {Key: values("older")}},
-						References: []Reference{
-							{Table: name("facility", "room_types"), Columns: []string{"replaced_by"}, Constraint: "room_types_replaced_by_fkey", OnDelete: "SET NULL", Rows: 1},
-							{Table: name("facility", "rooms"), Columns: []string{"room_type"}, Constraint: "rooms_room_type_fkey", OnDelete: "CASCADE", Rows: 3},
-							{Table: name("reservation", "audit"), Columns: []string{"room_type_id"}, Constraint: "audit_room_type_fkey", OnDelete: "NO ACTION", Unreadable: true},
-							{Table: name("reservation", "bookings"), Columns: []string{"room_type_id"}, Constraint: "fk_bookings_room_type", OnDelete: "NO ACTION", Rows: 12},
-							{Table: name("reservation", "holds"), Columns: []string{"room_type", "hotel"}, Constraint: "holds fk", OnDelete: "RESTRICT", Rows: 2},
-							{Table: name("reservation", "quotes"), Columns: []string{"room_type"}, Constraint: "quotes_room_type_fkey", OnDelete: "SET DEFAULT", Rows: 4},
-							{Table: name("reservation", "waits"), Columns: []string{"room_type"}, Constraint: "waits_room_type_fkey", OnDelete: "SOMETHING NEW", Rows: 5},
-						},
 					},
+					Effect: Effect{Steps: []Step{
+						step(1, name("facility", "room_types"), "room_types_replaced_by_fkey", name("facility", "room_types"), "SET NULL", 1, "replaced_by"),
+						step(1, name("facility", "rooms"), "rooms_room_type_fkey", name("facility", "room_types"), "CASCADE", 3, "room_type"),
+						unreadable(step(1, name("reservation", "audit"), "audit_room_type_fkey", name("facility", "room_types"), "NO ACTION", 0, "room_type_id")),
+						step(1, name("reservation", "bookings"), "fk_bookings_room_type", name("facility", "room_types"), "NO ACTION", 12, "room_type_id"),
+						step(1, name("reservation", "holds"), "holds fk", name("facility", "room_types"), "RESTRICT", 2, "room_type", "hotel"),
+						withSet(step(1, name("reservation", "quotes"), "quotes_room_type_fkey", name("facility", "room_types"), "SET DEFAULT", 4, "room_type", "hotel"), "room_type"),
+						step(1, name("reservation", "waits"), "waits_room_type_fkey", name("facility", "room_types"), "SOMETHING NEW", 5, "room_type"),
+						// The rows of facility.rooms that the cascade deletes are
+						// referenced in turn.
+						step(2, name("facility", "desks"), "desks_room_fkey", name("facility", "rooms"), "CASCADE", 40, "room"),
+						step(2, name("facility", "lamps"), "lamps_room_fkey", name("facility", "rooms"), "SET NULL", 1, "room"),
+						unreadable(step(2, name("secret", "keys"), "keys_room_fkey", name("facility", "rooms"), "SET NULL", 0, "room")),
+						step(3, name("facility", "drawers"), "drawers_desk_fkey", name("facility", "desks"), "CASCADE", 80, "desk"),
+						onUpdate(step(3, name("facility", "screws"), "screws_desk_fkey", name("facility", "desks"), "SET NULL", 2, "desk"),
+							"parts_desk_fkey", name("facility", "parts")),
+					}},
 				},
 				{
 					Name: name("geo", "regions"), Mode: config.ModeSync,
 					Key: []string{"code"}, Compare: []string{"name"},
-					Diff: TableDiff{
-						Deletes: []Row{{Key: values("north")}},
-						References: []Reference{
-							{Table: name("geo", "prefectures"), Columns: []string{"region"}, Constraint: "prefectures_region_fkey", OnDelete: "NO ACTION", Rows: 1},
-							{Table: name("geo", "stations"), Columns: []string{"region"}, Constraint: "stations_region_fkey", OnDelete: "CASCADE", Rows: 1},
-						},
-					},
+					Diff: TableDiff{Deletes: []Row{{Key: values("north")}}},
+					Effect: Effect{Steps: []Step{
+						step(1, name("geo", "prefectures"), "prefectures_region_fkey", name("geo", "regions"), "NO ACTION", 1, "region"),
+						step(1, name("geo", "stations"), "stations_region_fkey", name("geo", "regions"), "CASCADE", 1, "region"),
+						step(2, name("geo", "exits"), "exits_station_fkey", name("geo", "stations"), "CASCADE", 2, "station"),
+					}},
+				},
+				{
+					// Rows to delete that nothing references have no block.
+					Name: name("geo", "zones"), Mode: config.ModeSync, Key: []string{"code"},
+					Diff: TableDiff{Deletes: []Row{{Key: values("x")}}},
 				},
 			}},
 		},

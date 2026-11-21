@@ -24,7 +24,10 @@ type fakeDB struct {
 	// extra holds more columns of the tables that it names.
 	extra map[declaration.TableName][]plan.ColumnInfo
 	diffs map[declaration.TableName]plan.TableDiff
-	keys  []ForeignKey
+	// effects holds the effect of the deletions of the tables that it
+	// names.
+	effects map[declaration.TableName]plan.Effect
+	keys    []ForeignKey
 	// changed overrides the number of rows that a write returns, by call.
 	changed map[string]int
 	// fail makes a call return an error, by call.
@@ -94,6 +97,16 @@ func (f *fakeDB) Diff(_ context.Context, req plan.DiffRequest) (plan.TableDiff, 
 		d.Deletes = nil
 	}
 	return d, nil
+}
+
+// Effects returns the effects of the tables. It records no call: the
+// tests of plan.Build show when it is called.
+func (f *fakeDB) Effects(_ context.Context, names []declaration.TableName) (plan.Effects, error) {
+	var e plan.Effects
+	for _, n := range names {
+		e.Tables = append(e.Tables, f.effects[n])
+	}
+	return e, nil
 }
 
 func (f *fakeDB) CountRows(_ context.Context, table declaration.Table) (int, error) {
@@ -189,20 +202,41 @@ var (
 	child  = tn("a.child")
 	other  = tn("m.other")
 
-	// cascading deletes 3 rows of the two tables, and 8 more rows through
-	// ON DELETE CASCADE: 6 of b.orders, from both tables, and 2 of b.quotes.
-	cascading = map[declaration.TableName]plan.TableDiff{
-		child: {Deletes: deletesOf(2), References: []plan.Reference{
-			{Table: tn("b.orders"), Columns: []string{"child_id"}, Constraint: "orders_child", OnDelete: "CASCADE", Rows: 4},
-			{Table: tn("b.reviews"), Columns: []string{"child_id"}, Constraint: "reviews_child", OnDelete: "SET NULL", Rows: 9},
+	// cascading deletes 3 rows of the two tables. Through foreign keys, the
+	// deletions delete 13 more rows, 6 of b.orders from both tables, 2 of
+	// b.quotes, and 5 of b.lines at the second level, and change 9 rows of
+	// b.reviews. A table that the role may not read under NO ACTION does
+	// not stop them.
+	cascading        = map[declaration.TableName]plan.TableDiff{child: {Deletes: deletesOf(2)}, parent: {Deletes: deletesOf(1)}}
+	cascadingEffects = map[declaration.TableName]plan.Effect{
+		child: {Steps: []plan.Step{
+			{Level: 1, Table: tn("b.orders"), Columns: []string{"child_id"}, Constraint: "orders_child", References: child, OnDelete: "CASCADE", Rows: 4},
+			{Level: 1, Table: tn("b.reviews"), Columns: []string{"child_id"}, Constraint: "reviews_child", References: child, OnDelete: "SET NULL",
+				Set: []string{"child_id"}, Rows: 9},
 		}},
-		parent: {Deletes: deletesOf(1), References: []plan.Reference{
-			{Table: tn("b.audit"), Columns: []string{"parent_id"}, Constraint: "audit_parent", OnDelete: "NO ACTION", Unreadable: true},
-			{Table: tn("b.orders"), Columns: []string{"parent_id"}, Constraint: "orders_parent", OnDelete: "CASCADE", Rows: 2},
-			{Table: tn("b.quotes"), Columns: []string{"parent_id"}, Constraint: "quotes_parent", OnDelete: "CASCADE", Rows: 2},
+		parent: {Steps: []plan.Step{
+			{Level: 1, Table: tn("b.audit"), Columns: []string{"parent_id"}, Constraint: "audit_parent", References: parent, OnDelete: "NO ACTION",
+				Unknown: plan.Unreadable},
+			{Level: 1, Table: tn("b.orders"), Columns: []string{"parent_id"}, Constraint: "orders_parent", References: parent, OnDelete: "CASCADE", Rows: 2},
+			{Level: 1, Table: tn("b.quotes"), Columns: []string{"parent_id"}, Constraint: "quotes_parent", References: parent, OnDelete: "CASCADE", Rows: 2},
+			{Level: 2, Table: tn("b.lines"), Columns: []string{"order_id"}, Constraint: "lines_order", References: tn("b.orders"), OnDelete: "CASCADE", Rows: 5},
 		}},
 	}
 )
+
+// unknownStep returns a step of the deletions of z.parent whose effect is
+// not known.
+func unknownStep(level int, table, constraint, onDelete string, unknown plan.Unknown) plan.Step {
+	references := parent
+	if level > 1 {
+		references = tn("b.orders")
+	}
+	s := plan.Step{Level: level, Table: tn(table), Columns: []string{"x"}, Constraint: constraint, References: references, OnDelete: onDelete, Unknown: unknown}
+	if unknown == plan.FollowsOnUpdate {
+		s.Rows, s.OnUpdate, s.OnUpdateTable = 3, "parts_x", tn("b.parts")
+	}
+	return s
+}
 
 func TestRun(t *testing.T) {
 	t.Parallel()
@@ -284,47 +318,78 @@ func TestRun(t *testing.T) {
 			db:       &fakeDB{diffs: full},
 			opts:     Options{AllowDelete: true, MaxDelete: 2},
 			want:     diffs,
-			wantErr:  "the apply would delete 3 rows, more than the limit of 2 (2 rows of a.child, 1 row of z.parent): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 3",
+			wantErr:  "the apply would delete 3 rows, more than the limit of 2: 2 rows of a.child and 1 row of z.parent to delete: check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 3",
 		},
 		{
-			name:     "cascaded deletions over the limit",
+			name:     "deletions and their effect over the limit",
 			settings: sync,
-			db:       &fakeDB{diffs: cascading},
-			opts:     Options{AllowDelete: true, MaxDelete: 10},
+			db:       &fakeDB{diffs: cascading, effects: cascadingEffects},
+			opts:     Options{AllowDelete: true, MaxDelete: 24},
 			want:     diffs,
-			wantErr: "the apply would delete 11 rows, more than the limit of 10 (2 rows of a.child, 1 row of z.parent, " +
-				"and 6 rows of b.orders and 2 rows of b.quotes that ON DELETE CASCADE deletes with them): " +
-				"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 11",
+			wantErr: "the apply would delete or change 25 rows, more than the limit of 24: 2 rows of a.child and 1 row of z.parent to delete, " +
+				"13 rows that ON DELETE CASCADE deletes with them (5 rows of b.lines, 6 rows of b.orders, and 2 rows of b.quotes), " +
+				"and 9 rows that ON DELETE SET NULL or SET DEFAULT changes (9 rows of b.reviews): " +
+				"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 25",
 		},
 		{
-			name:       "cascaded deletions up to the limit",
+			name:     "deletions and a cascade over the limit",
+			settings: sync,
+			db: &fakeDB{diffs: cascading, effects: map[declaration.TableName]plan.Effect{
+				parent: {Steps: cascadingEffects[parent].Steps[1:2]},
+			}},
+			opts: Options{AllowDelete: true, MaxDelete: 4},
+			want: diffs,
+			wantErr: "the apply would delete 5 rows, more than the limit of 4: 2 rows of a.child and 1 row of z.parent to delete, " +
+				"and 2 rows that ON DELETE CASCADE deletes with them (2 rows of b.orders): " +
+				"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 5",
+		},
+		{
+			name:       "deletions and their effect up to the limit",
 			settings:   sync,
-			db:         &fakeDB{diffs: cascading},
-			opts:       Options{AllowDelete: true, MaxDelete: 11},
+			db:         &fakeDB{diffs: cascading, effects: cascadingEffects},
+			opts:       Options{AllowDelete: true, MaxDelete: 25},
 			want:       append(diffs, "ForeignKeys a.child z.parent", "Delete z.parent", "Delete a.child", "Commit"),
 			wantResult: Result{Deleted: 3},
 		},
 		{
 			name:     "a cascade into a table that the role may not read",
 			settings: sync,
-			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{
-				parent: {Deletes: deletesOf(1), References: []plan.Reference{
-					{Table: tn("b.audit"), Columns: []string{"parent_id"}, Constraint: "audit_parent", OnDelete: "NO ACTION", Unreadable: true},
-					{Table: tn("b.orders"), Columns: []string{"parent_id"}, Constraint: "orders_parent", OnDelete: "CASCADE", Unreadable: true},
+			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{parent: {Deletes: deletesOf(1)}}, effects: map[declaration.TableName]plan.Effect{
+				parent: {Steps: []plan.Step{
+					unknownStep(1, "b.audit", "audit_parent", "NO ACTION", plan.Unreadable),
+					unknownStep(1, "b.orders", "orders_parent", "CASCADE", plan.Unreadable),
 				}},
 			}},
 			opts: all,
 			want: diffs,
-			wantErr: `the deletion of rows of z.parent cascades through foreign key "orders_parent" to rows of b.orders, which the role may not read, ` +
-				"so the rows that it would delete with them cannot be counted for the limit on deletions: grant the role SELECT on b.orders, or remove those rows first",
+			wantErr: `the deletion of rows of z.parent reaches rows of b.orders through foreign key "orders_parent", ON DELETE CASCADE, and the role may not read b.orders, ` +
+				"so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on b.orders, or remove those rows first",
+		},
+		{
+			name:     "effects that are not known, at any depth",
+			settings: sync,
+			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{parent: {Deletes: deletesOf(1)}}, effects: map[declaration.TableName]plan.Effect{
+				parent: {Steps: []plan.Step{
+					unknownStep(1, "b.notes", "notes_parent", "SET NULL", plan.Unreadable),
+					unknownStep(2, "b.lines", "lines_order", "CASCADE", plan.Unreadable),
+					unknownStep(2, "b.tags", "tags_order", "SET DEFAULT", plan.FollowsOnUpdate),
+				}},
+			}},
+			opts: all,
+			want: diffs,
+			wantErr: `the deletion of rows of z.parent reaches rows of b.notes through foreign key "notes_parent", ON DELETE SET NULL, and the role may not read b.notes, ` +
+				"so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on b.notes, or remove those rows first\n" +
+				`the deletion of rows of z.parent reaches rows of b.lines through foreign key "lines_order", ON DELETE CASCADE, from rows of b.orders that ON DELETE CASCADE deletes, ` +
+				"and the role may not read b.lines, so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on b.lines, or remove those rows first\n" +
+				`the deletion of rows of z.parent sets columns of rows of b.tags through foreign key "tags_order", ON DELETE SET DEFAULT, from rows of b.orders that ON DELETE CASCADE deletes, ` +
+				`and foreign key "parts_x" of table b.parts references a column that it sets, so its action ON UPDATE follows, ` +
+				"which kortopi does not count for the limit on deletions: change or remove the rows of b.tags that reference the rows to delete first",
 		},
 		{
 			name:     "a cascade into a table that the role may not read, without deletions",
 			settings: sync,
-			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{
-				parent: {Inserts: rowsOf(1), Deletes: deletesOf(1), References: []plan.Reference{
-					{Table: tn("b.orders"), Columns: []string{"parent_id"}, Constraint: "orders_parent", OnDelete: "CASCADE", Unreadable: true},
-				}},
+			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{parent: {Inserts: rowsOf(1), Deletes: deletesOf(1)}}, effects: map[declaration.TableName]plan.Effect{
+				parent: {Steps: []plan.Step{unknownStep(1, "b.orders", "orders_parent", "CASCADE", plan.Unreadable)}},
 			}},
 			opts:       Options{MaxDelete: 0},
 			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "Commit"),

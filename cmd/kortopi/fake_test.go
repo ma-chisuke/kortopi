@@ -20,7 +20,10 @@ import (
 // fakeSession is a session that answers from its fields and records the
 // calls, for the tests of plan and apply.
 type fakeSession struct {
-	diffs    map[declaration.TableName]plan.TableDiff
+	diffs map[declaration.TableName]plan.TableDiff
+	// effects holds the effect of the deletions of the tables that it
+	// names.
+	effects  map[declaration.TableName]plan.Effect
 	diffErr  error
 	closeErr error
 	// missing names the tables that the database does not have.
@@ -79,6 +82,16 @@ func (s *fakeSession) Diff(_ context.Context, req plan.DiffRequest) (plan.TableD
 		d.Deletes = nil
 	}
 	return d, s.diffErr
+}
+
+// Effects returns the effects of the tables. It records no call: the
+// tests of plan.Build show when it is called.
+func (s *fakeSession) Effects(_ context.Context, names []declaration.TableName) (plan.Effects, error) {
+	var e plan.Effects
+	for _, n := range names {
+		e.Tables = append(e.Tables, s.effects[n])
+	}
+	return e, nil
 }
 
 func (s *fakeSession) CountRows(_ context.Context, t declaration.Table) (int, error) {

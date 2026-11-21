@@ -39,8 +39,8 @@ const maxFlaggedRows = 5
 // loaded until the session ends: Effects reads them for every table, and in
 // an apply, Insert, Update, and Delete write from them.
 //
-// When the table has rows to delete, Diff also counts the rows of other
-// tables that reference them (ADR-0018).
+// What the rows to delete do to other rows through foreign keys, Effects
+// computes once every table is compared (ADR-0039).
 func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableDiff, err error) {
 	defer s.explainWait(ctx, &err)
 	if s.export {
@@ -67,7 +67,6 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 	}
 
 	var diff plan.TableDiff
-	var keys []foreignKey
 	// The declared rows stay loaded until the session ends, also in a plan:
 	// Effects reads the declared rows of every table (ADR-0039), and an apply
 	// writes from them.
@@ -106,11 +105,6 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 				return fmt.Errorf("find the rows to delete from table %s: %w", table.Name, err)
 			}
 		}
-		if len(diff.Deletes) > 0 {
-			if diff.References, keys, err = s.references(ctx, tx, meta, c); err != nil {
-				return fmt.Errorf("count the references to the rows to delete from table %s: %w", table.Name, err)
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -118,7 +112,7 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 	}
 	lt := &loadedTable{
 		meta: meta, c: c, inserts: len(diff.Inserts), updates: len(diff.Updates), deletes: len(diff.Deletes),
-		updating: req.Updates, sync: req.Deletes, refs: diff.References, keys: keys,
+		updating: req.Updates, sync: req.Deletes,
 	}
 	if s.apply {
 		if err := s.checkWrites(lt, table); err != nil {

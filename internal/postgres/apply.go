@@ -33,9 +33,9 @@ type loadedTable struct {
 	// deletes them (ADR-0013).
 	updating bool
 	sync     bool
-	// refs are the references to the rows to delete that the plan showed,
-	// and keys the foreign keys that point at the table.
-	refs []plan.Reference
+	// keys are the foreign keys that reference the rows to delete of the
+	// table and that the role may read, as Effects found them, for the count
+	// before the deletions.
 	keys []foreignKey
 }
 
@@ -182,25 +182,36 @@ func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err 
 		return 0, err
 	}
 	if !s.deletesChecked {
-		if err := s.checkDeletes(); err != nil {
+		if err := s.checkDeletes(ctx); err != nil {
 			return 0, err
 		}
 		s.deletesChecked = true
-	}
-	if err := s.checkReferences(ctx, lt); err != nil {
-		return 0, err
 	}
 	return s.write(ctx, lt, "delete from", lt.c.deleteSQL(), lt.deletes)
 }
 
 // checkDeletes returns an error when the role may not delete from a loaded
-// table that has rows to delete. It looks at every such table, so that the
-// error comes before the first row is deleted.
-func (s *Session) checkDeletes() error {
-	for _, name := range sortedNames(s.loaded) {
+// table that has rows to delete, when Effects did not compute the effect of
+// the deletions, or when a row that this apply wrote references a row to
+// delete. It looks at every such table, so that the error comes before the
+// first row is deleted, and before a deletion changes a row through a
+// foreign key.
+func (s *Session) checkDeletes(ctx context.Context) error {
+	names := sortedNames(s.loaded)
+	for _, name := range names {
 		if lt := s.loaded[name]; lt.deletes > 0 && !lt.meta.deletable {
 			return fmt.Errorf("an apply needs DELETE on table %s, and the role %q lacks it: grant the role DELETE on the table, "+
 				"or apply without deleting rows", name, s.role)
+		}
+	}
+	if s.effect == "" {
+		return errors.New("the effect of the deletions is not known: compute it with Effects before the first deletion")
+	}
+	for _, name := range names {
+		if lt := s.loaded[name]; lt.deletes > 0 {
+			if err := s.checkReferences(ctx, lt); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -431,134 +442,17 @@ var onDeleteActions = map[string]string{
 	"d": "SET DEFAULT",
 }
 
-// references counts, for every foreign key that points at the table of c,
-// the rows that reference a row to delete (ADR-0018). A foreign key from a
-// table that the role may not read is reported as unreadable.
-func (s *Session) references(ctx context.Context, tx pgx.Tx, meta *tableMeta, c *comparison) ([]plan.Reference, []foreignKey, error) {
-	keys, err := s.foreignKeysTo(ctx, tx, meta, c)
-	if err != nil {
-		return nil, nil, err
-	}
-	var refs []plan.Reference
-	for _, fk := range keys {
-		ref := plan.Reference{Table: fk.table, Columns: fk.columns, Constraint: fk.name, OnDelete: fk.onDelete}
-		if !fk.readable {
-			ref.Unreadable = true
-			refs = append(refs, ref)
-			continue
-		}
-		var n int64
-		if err := tx.QueryRow(ctx, c.referencesSQL(fk, false)).Scan(&n); err != nil {
-			return nil, nil, fmt.Errorf("count the rows of table %s that foreign key %q points at: %w", fk.table, fk.name, err)
-		}
-		if n > 0 {
-			ref.Rows = int(n)
-			refs = append(refs, ref)
-		}
-	}
-	return refs, keys, nil
-}
-
-// foreignKeysTo returns every foreign key that points at the table of meta,
-// or directly at one of its partitions, from any table, sorted by the
-// referencing table and then by the name of the constraint.
-func (s *Session) foreignKeysTo(ctx context.Context, tx pgx.Tx, meta *tableMeta, c *comparison) ([]foreignKey, error) {
-	rows, err := tx.Query(ctx, `SELECT co.conname::pg_catalog.text, n.nspname::pg_catalog.text, r.relname::pg_catalog.text,
-			r.relkind = 'p', co.confdeltype::pg_catalog.text, co.conrelid = co.confrelid,
-			co.confrelid = $1::pg_catalog.oid, tn.nspname::pg_catalog.text, t.relname::pg_catalog.text, t.relkind = 'p',
-			ARRAY(SELECT a.attname::pg_catalog.text FROM pg_catalog.unnest(co.conkey) WITH ORDINALITY AS k(attnum, i)
-				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = co.conrelid AND a.attnum = k.attnum ORDER BY k.i),
-			ARRAY(SELECT a.attname::pg_catalog.text FROM pg_catalog.unnest(co.confkey) WITH ORDINALITY AS k(attnum, i)
-				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = co.confrelid AND a.attnum = k.attnum ORDER BY k.i),
-			ARRAY(SELECT on_.nspname::pg_catalog.text FROM pg_catalog.unnest(co.conpfeqop) WITH ORDINALITY AS k(op, i)
-				JOIN pg_catalog.pg_operator AS o ON o.oid = k.op
-				JOIN pg_catalog.pg_namespace AS on_ ON on_.oid = o.oprnamespace ORDER BY k.i),
-			ARRAY(SELECT o.oprname::pg_catalog.text FROM pg_catalog.unnest(co.conpfeqop) WITH ORDINALITY AS k(op, i)
-				JOIN pg_catalog.pg_operator AS o ON o.oid = k.op ORDER BY k.i),
-			ARRAY(SELECT COALESCE(cn.nspname::pg_catalog.text, '') FROM ROWS FROM (pg_catalog.unnest(co.conkey), pg_catalog.unnest(co.confkey))
-					WITH ORDINALITY AS k(fk, pk, i)
-				JOIN pg_catalog.pg_attribute AS fa ON fa.attrelid = co.conrelid AND fa.attnum = k.fk
-				JOIN pg_catalog.pg_attribute AS pa ON pa.attrelid = co.confrelid AND pa.attnum = k.pk
-				LEFT JOIN pg_catalog.pg_collation AS cl ON cl.oid = pa.attcollation AND pa.attcollation <> fa.attcollation
-				LEFT JOIN pg_catalog.pg_namespace AS cn ON cn.oid = cl.collnamespace ORDER BY k.i),
-			ARRAY(SELECT COALESCE(cl.collname::pg_catalog.text, '') FROM ROWS FROM (pg_catalog.unnest(co.conkey), pg_catalog.unnest(co.confkey))
-					WITH ORDINALITY AS k(fk, pk, i)
-				JOIN pg_catalog.pg_attribute AS fa ON fa.attrelid = co.conrelid AND fa.attnum = k.fk
-				JOIN pg_catalog.pg_attribute AS pa ON pa.attrelid = co.confrelid AND pa.attnum = k.pk
-				LEFT JOIN pg_catalog.pg_collation AS cl ON cl.oid = pa.attcollation AND pa.attcollation <> fa.attcollation
-				ORDER BY k.i),
-			pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND NOT pg_catalog.row_security_active(r.oid)
-				AND NOT EXISTS (SELECT FROM pg_catalog.unnest(co.conkey) AS k(attnum)
-					WHERE NOT pg_catalog.has_column_privilege(co.conrelid, k.attnum, 'SELECT'))
-				AND NOT EXISTS (SELECT FROM pg_catalog.unnest(co.confkey) AS k(attnum)
-					WHERE NOT pg_catalog.has_column_privilege(co.confrelid, k.attnum, 'SELECT'))
-		FROM pg_catalog.pg_constraint AS co
-		JOIN pg_catalog.pg_class AS r ON r.oid = co.conrelid
-		JOIN pg_catalog.pg_namespace AS n ON n.oid = r.relnamespace
-		JOIN pg_catalog.pg_class AS t ON t.oid = co.confrelid
-		JOIN pg_catalog.pg_namespace AS tn ON tn.oid = t.relnamespace
-		WHERE co.contype = 'f' AND co.conparentid = 0
-			AND (co.confrelid = $1::pg_catalog.oid
-				OR co.confrelid IN (SELECT p.relid FROM pg_catalog.pg_partition_tree($1::pg_catalog.oid::pg_catalog.regclass) AS p))
-		ORDER BY n.nspname COLLATE pg_catalog."C", r.relname COLLATE pg_catalog."C", co.conname COLLATE pg_catalog."C"`, meta.oid)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var keys []foreignKey
-	for rows.Next() {
-		var fk foreignKey
-		var partitioned, toTable, toPartitioned bool
-		var action string
-		var to declaration.TableName
-		var schemas, ops, collSchemas, collNames []string
-		if err := rows.Scan(&fk.name, &fk.table.Schema, &fk.table.Name, &partitioned, &action, &fk.self,
-			&toTable, &to.Schema, &to.Name, &toPartitioned,
-			&fk.columns, &fk.referenced, &schemas, &ops, &collSchemas, &collNames, &fk.readable); err != nil {
-			return nil, err
-		}
-		fk.from = quoteTable(fk.table)
-		if !partitioned {
-			fk.from = "ONLY " + fk.from
-		}
-		fk.to = c.stored
-		if !toTable {
-			// A foreign key that points at a partition joins on the rows of
-			// that partition.
-			fk.to = quoteTable(to)
-			if !toPartitioned {
-				fk.to = "ONLY " + fk.to
-			}
-		}
-		fk.onDelete = onDeleteActions[action]
-		for i := range ops {
-			eq := equality{kind: compareOperator, schema: schemas[i], op: ops[i]}
-			if !validOperator(ops[i]) {
-				eq = textEquality
-			}
-			fk.ops = append(fk.ops, eq)
-			collation := ""
-			if i < len(collNames) && collNames[i] != "" {
-				collation = quoteIdent(collSchemas[i]) + "." + quoteIdent(collNames[i])
-			}
-			fk.collations = append(fk.collations, collation)
-		}
-		keys = append(keys, fk)
-	}
-	return keys, rows.Err()
-}
-
-// checkReferences counts again, before the rows of lt are deleted, the rows
-// that refer to them, inside the transaction, so that the rows that this
-// apply wrote count too. A row that this apply wrote and that refers to a
-// row that it deletes means that the declaration contradicts itself: the
-// deletion would fail on it, or set it to NULL, or delete it, after the
-// plan said otherwise.
+// checkReferences counts again, before the first deletion, inside the
+// transaction, the rows that this apply wrote and that refer to the rows to
+// delete of lt, through the foreign keys that Effects found. The plan counted
+// the rows as they would be after the inserts and updates, and a declared row
+// that the deletions would delete or change is a mistake of the plan; so a
+// row that this apply wrote and that still refers to a row that it deletes
+// is a declared row whose foreign key fails on delete, or a row that a
+// trigger, a rule, or a default of a column wrote. The deletion would fail
+// on it, or delete or change it beyond what the plan shows.
 func (s *Session) checkReferences(ctx context.Context, lt *loadedTable) error {
 	for _, fk := range lt.keys {
-		if !fk.readable {
-			continue
-		}
 		var now, written int64
 		if err := s.tx.QueryRow(ctx, lt.c.referencesSQL(fk, true)).Scan(&now, &written); err != nil {
 			return fmt.Errorf("count the rows of table %s that foreign key %q points at: %w", fk.table, fk.name, err)
@@ -566,16 +460,11 @@ func (s *Session) checkReferences(ctx context.Context, lt *loadedTable) error {
 		if written == 0 {
 			continue
 		}
-		planned := 0
-		for _, ref := range lt.refs {
-			if ref.Table == fk.table && ref.Constraint == fk.name {
-				planned = ref.Rows
-			}
-		}
-		return fmt.Errorf("delete from table %s: foreign key %q of table %s (%s) now has %d %s to a row to delete, "+
-			"and the plan counted %d: rows that this apply wrote refer to a row that it deletes, so the declaration contradicts itself: "+
-			"declare the referencing rows and the deletion consistently",
-			lt.meta.name, fk.name, fk.table, strings.Join(fk.columns, ", "), now, plural(now, "row that refers", "rows that refer"), planned)
+		return fmt.Errorf("delete from table %s: foreign key %q of table %s (%s) has %d %s that this apply wrote and that %s to a row to delete, "+
+			"so the deletion would fail on %s, or delete or change %s beyond what the plan shows: "+
+			"the declaration contradicts itself, or a trigger or a default of a column wrote %s: declare the referencing rows and the deletion consistently",
+			lt.meta.name, fk.name, fk.table, strings.Join(fk.columns, ", "), written, plural(written, "row", "rows"),
+			plural(written, "refers", "refer"), plural(written, "it", "them"), plural(written, "it", "them"), plural(written, "it", "them"))
 	}
 	return nil
 }

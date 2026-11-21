@@ -28,8 +28,11 @@ import (
 // column, which the database checks for each table with such values before
 // any row is loaded (ADR-0035). A column
 // that the rows to insert of a table would lack, NOT NULL and without a
-// default, shows only with the difference; such mistakes of all tables are
-// reported together after the comparison. An error of the database stops the
+// default, shows only with the difference, and so does a declared row that
+// the deletions of the plan would delete or change through a foreign key,
+// which Build learns when it asks the database for the effect of the
+// deletions, once every table is compared (ADR-0039); such mistakes of all
+// tables are reported together after the comparison. An error of the database stops the
 // build at once. The contract does not tie such an error to one table, so
 // Build cannot tell an error in the rows of one table, after which the next
 // table could still be compared, from an error of the session, such as a
@@ -127,10 +130,51 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 			errs = append(errs, missingValues(dt, dt.Path(decl.Dir), settingsFile, infos[dt.Name], tables[i].OnInsert, n)...)
 		}
 	}
-	if len(errs) > 0 {
+	conflicts, err := effects(ctx, db, decl, tables)
+	if err != nil {
+		return nil, joinAfter(errs, err)
+	}
+	if errs = append(errs, conflicts...); len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 	return &Plan{Tables: tables}, nil
+}
+
+// effects asks the database for the effect of the deletions of the tables
+// that have rows to delete, in the order of the plan, and sets the effect of
+// each (ADR-0039). It returns a mistake for each conflict: declared rows
+// that the deletions would delete or change, so that the declaration
+// contradicts itself. err is an error of the database.
+func effects(ctx context.Context, db Database, decl *declaration.Declaration, tables []Table) (mistakes []error, err error) {
+	var names []declaration.TableName
+	var index []int
+	for i := range tables {
+		if len(tables[i].Diff.Deletes) > 0 {
+			names = append(names, tables[i].Name)
+			index = append(index, i)
+		}
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	e, err := db.Effects(ctx, names)
+	if err != nil {
+		return nil, err
+	}
+	if len(e.Tables) != len(names) {
+		return nil, fmt.Errorf("the database reported the effect of the deletions of %d tables, not of %d", len(e.Tables), len(names))
+	}
+	for j, i := range index {
+		tables[i].Effect = e.Tables[j]
+	}
+	for _, c := range e.Conflicts {
+		k := slices.IndexFunc(tables, func(t Table) bool { return t.Name == c.Table })
+		if k < 0 {
+			return nil, fmt.Errorf("the database reported a conflict in table %s, which the plan does not compare", c.Table)
+		}
+		mistakes = append(mistakes, ConflictError(decl.Tables[k].Path(decl.Dir), tables[k].Key, c))
+	}
+	return mistakes, nil
 }
 
 // declaredTwice returns an error for each table of partitionOf, the

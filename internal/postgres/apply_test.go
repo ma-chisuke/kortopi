@@ -212,11 +212,17 @@ func TestCheckWrites(t *testing.T) {
 	}
 	meta.deletable = true
 	want = `an apply needs DELETE on table a.b, and the role "w" lacks it: grant the role DELETE on the table, or apply without deleting rows`
-	if err := s.checkDeletes(); err == nil || err.Error() != want {
+	if err := s.checkDeletes(t.Context()); err == nil || err.Error() != want {
 		t.Errorf("checkDeletes = %v, want %s", err, want)
 	}
 	other.deletable = true
-	if err := s.checkDeletes(); err != nil {
+	// The deletions need their effect, which Effects computes.
+	want = "the effect of the deletions is not known: compute it with Effects before the first deletion"
+	if err := s.checkDeletes(t.Context()); err == nil || err.Error() != want {
+		t.Errorf("checkDeletes without the effect = %v, want %s", err, want)
+	}
+	s.effect = tempTable(1)
+	if err := s.checkDeletes(t.Context()); err != nil {
 		t.Errorf("checkDeletes with every privilege: %v", err)
 	}
 }

@@ -74,9 +74,10 @@ type Options struct {
 	// AllowDelete lets the apply delete rows of tables in mode sync. Without
 	// it, the apply makes the other changes and leaves the deletions out.
 	AllowDelete bool
-	// MaxDelete is the largest number of rows that one apply deletes, over
-	// all tables, with the rows that ON DELETE CASCADE deletes with them.
-	// An apply that would delete more stops before it changes anything.
+	// MaxDelete is the largest number of rows that the deletions of one
+	// apply delete or change, over all tables, with the rows that foreign
+	// keys delete or change with them at every depth (ADR-0039). An apply
+	// that would delete or change more stops before it changes anything.
 	MaxDelete int
 	// Planned, when it is not nil, gets the plan as soon as it is computed
 	// and every declared table and column exists: before the guards and the

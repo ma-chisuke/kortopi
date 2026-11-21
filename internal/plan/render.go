@@ -86,11 +86,12 @@ func (d *TableDiff) changes() bool {
 // Each table with something to show gets a block: a header with its mode and
 // match key, a line for each pending column, a line of the values of
 // on_insert when the table has rows to insert, a line for each row to insert
-// (+), update (~), and delete (-), a line under the rows to delete for each
-// foreign key that points at them, and the counts of the table. A table that
-// the database does not have yet gets one line. Tables without changes get no
-// block, and the summary at the end counts them. An empty plan prints the
-// lines of EmptyLines.
+// (+), update (~), and delete (-), the counts of the table, and, after them,
+// the lines of EffectLines: what the deletions of the table also do through
+// foreign keys. A table that the database does not have yet gets one line.
+// Tables without changes get no block, and the summary at the end counts
+// them, with the lines of EffectSummary. An empty plan prints the lines of
+// EmptyLines.
 //
 // A value prints as the database prints it, and NULL as NULL. A value that
 // could be misread prints in double quotes with the escapes of Go: an empty
@@ -128,6 +129,9 @@ func Render(w io.Writer, p *Plan) error {
 
 	fmt.Fprintf(&b, "Plan: %d to insert, %d to update, %d to delete in %s.\n",
 		inserts, updates, deletes, count(len(p.Tables), "table", "tables"))
+	for _, line := range p.EffectSummary() {
+		b.WriteString(line + "\n")
+	}
 	if pendingTables > 0 || pendingColumns > 0 {
 		var parts []string
 		if pendingTables > 0 {
@@ -202,11 +206,6 @@ func writeTable(b *strings.Builder, t *Table) error {
 		}
 		writeLine(b, '-', pairs(t.Key, r.Key))
 	}
-	for _, r := range t.Diff.References {
-		b.WriteString("    ")
-		b.WriteString(FormatReference(r, len(t.Diff.Deletes)))
-		b.WriteString("\n")
-	}
 
 	if !t.Diff.changes() {
 		b.WriteString("  no changes\n")
@@ -220,48 +219,10 @@ func writeTable(b *strings.Builder, t *Table) error {
 		counts = append(counts, fmt.Sprintf("%d to delete", len(t.Diff.Deletes)))
 	}
 	fmt.Fprintf(b, "  %s\n", strings.Join(counts, ", "))
+	for _, line := range EffectLines(t) {
+		b.WriteString("  " + line + "\n")
+	}
 	return nil
-}
-
-// FormatReference returns the line of a foreign key that points at rows to
-// delete: how many rows reference them, the referencing table, its columns,
-// and the constraint, and what the action ON DELETE of the key does while
-// those rows still reference a row to delete (ADR-0018). The run may delete
-// or change the referencing rows first, so the line says what PostgreSQL does
-// in that state, not that it will happen. deleting is the number of rows to
-// delete. When the role may not read the referencing table, the line says so
-// instead of a count.
-func FormatReference(r Reference, deleting int) string {
-	columns := make([]string, len(r.Columns))
-	for i, c := range r.Columns {
-		columns[i] = FormatName(c)
-	}
-	source := FormatTable(r.Table) + " (" + strings.Join(columns, ", ") + "), " + FormatName(r.Constraint)
-	subject, verb, target := "these rows", "reference", "them"
-	switch {
-	case r.Unreadable:
-		subject = "such rows"
-	case r.Rows == 1:
-		subject, verb = "this row", "references"
-	}
-	if deleting == 1 {
-		target = "it"
-	}
-	action := "ON DELETE " + r.OnDelete
-	switch r.OnDelete {
-	case "NO ACTION", "RESTRICT":
-		action += ", so the deletion fails while " + subject + " " + verb + " " + target
-	case "CASCADE":
-		action += ", so the deletion deletes " + subject + " too"
-	case "SET NULL":
-		action += ", so the deletion sets the reference of " + subject + " to NULL"
-	case "SET DEFAULT":
-		action += ", so the deletion sets the reference of " + subject + " to the default"
-	}
-	if r.Unreadable {
-		return "maybe referenced by rows of " + source + ": the role may not read the table to count them; " + action
-	}
-	return "referenced by " + count(r.Rows, "row", "rows") + " of " + source + ": " + action
 }
 
 // FormatInsertValues returns the values of on_insert as a plan prints them

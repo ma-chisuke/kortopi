@@ -105,6 +105,12 @@ func table(name declaration.TableName, mode config.Mode, d plan.TableDiff) plan.
 	return plan.Table{Name: name, Mode: mode, Key: []string{"id"}, Compare: []string{"name"}, Diff: d}
 }
 
+// withEffect returns t with the steps as the effect of its deletions.
+func withEffect(t plan.Table, steps ...plan.Step) plan.Table {
+	t.Effect = plan.Effect{Steps: steps}
+	return t
+}
+
 // withOnInsert returns t with the values of on_insert.
 func withOnInsert(t plan.Table, values ...config.InsertValue) plan.Table {
 	t.OnInsert = values
@@ -206,10 +212,12 @@ func TestWrite(t *testing.T) {
 			name: "deletions",
 			plan: &plan.Plan{Tables: []plan.Table{
 				table(cities, config.ModeSync, plan.TableDiff{Deletes: deletes("10", "11")}),
-				table(regions, config.ModeSync, plan.TableDiff{Inserts: inserts("2"), Deletes: deletes("1"), References: []plan.Reference{
-					{Table: cities, Columns: []string{"region"}, Constraint: "cities_region", OnDelete: "NO ACTION", Rows: 2},
-					{Table: tn("geo", "stations"), Columns: []string{"region"}, Constraint: "stations_region", OnDelete: "CASCADE", Unreadable: true},
-				}}),
+				withEffect(table(regions, config.ModeSync, plan.TableDiff{Inserts: inserts("2"), Deletes: deletes("1")}),
+					plan.Step{Level: 1, Table: cities, Columns: []string{"region"}, Constraint: "cities_region", References: regions, OnDelete: "NO ACTION", Rows: 2},
+					plan.Step{Level: 1, Table: tn("geo", "lines"), Columns: []string{"region"}, Constraint: "lines_region", References: regions, OnDelete: "CASCADE", Rows: 3},
+					plan.Step{Level: 2, Table: tn("geo", "stops"), Columns: []string{"line"}, Constraint: "stops_line", References: tn("geo", "lines"), OnDelete: "SET NULL", Set: []string{"line"}, Rows: 7},
+					plan.Step{Level: 1, Table: tn("geo", "stations"), Columns: []string{"region"}, Constraint: "stations_region", References: regions, OnDelete: "CASCADE", Unknown: plan.Unreadable},
+				),
 			}},
 			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
 			header: Header{Dir: "data", Database: "shop"},

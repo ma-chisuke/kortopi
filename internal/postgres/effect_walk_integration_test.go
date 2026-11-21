@@ -3,7 +3,9 @@
 package postgres
 
 import (
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -197,6 +199,71 @@ func TestEffectsOfRowsThatThePlanChanges(t *testing.T) {
 				"m.order_tag.order_tag_order_id_fkey(order_id) CASCADE -> t.orders: 1: 2 -> id=2 (cascaded)",
 				"m.room.room_kind_fkey(kind) SET NULL -> m.kind set kind: 2: 1 -> code=old; 3 (insert) -> code=old",
 			})
+		})
+	}
+}
+
+// The walk reads a large table that references the rows of a cascade
+// without an index on its referencing column once for each level at which
+// it follows the table. PostgreSQL deletes row by row through the triggers
+// of the foreign keys, so without an index it scans such a table once for
+// each deleted row: the deletions run with the indexes. The test logs how
+// long the plan takes without and with the indexes, and how long the
+// deletions and the check after them take.
+func TestEffectsOnLargeTables(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA m; CREATE SCHEMA t;
+				CREATE TABLE m.plan (id int PRIMARY KEY, code text NOT NULL UNIQUE);
+				INSERT INTO m.plan VALUES (1, 'basic'), (2, 'legacy');
+				CREATE TABLE t.orders (id int PRIMARY KEY, plan_id int NOT NULL REFERENCES m.plan ON DELETE CASCADE);
+				INSERT INTO t.orders SELECT g, 1 + g % 2 FROM generate_series(1, 1000) AS g;
+				CREATE TABLE t.order_line (id bigint PRIMARY KEY, order_id int NOT NULL REFERENCES t.orders ON DELETE CASCADE);
+				INSERT INTO t.order_line SELECT g, 1 + g % 1000 FROM generate_series(1, 50000) AS g;
+				CREATE TABLE t.line_event (id bigint PRIMARY KEY, line_id bigint REFERENCES t.order_line ON DELETE SET NULL);
+				INSERT INTO t.line_event SELECT g, 1 + g % 50000 FROM generate_series(1, 200000) AS g;
+				ANALYZE;
+			`)
+			dir := writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"})
+			want := []string{
+				"m.plan 1 CASCADE t.orders.orders_plan_id_fkey(plan_id) -> m.plan: 500",
+				"m.plan 2 CASCADE t.order_line.order_line_order_id_fkey(order_id) -> t.orders: 25000",
+				"m.plan 3 SET NULL t.line_event.line_event_line_id_fkey(line_id) -> t.order_line set line_id: 100000",
+			}
+			plain := db.session(t, dir)
+			start := time.Now()
+			steps, conflicts := effectOf(t, plain, []plan.DiffRequest{request(t, plain, csvTable("m", "plan", "id", "code"), []string{"code"}, config.ModeSync)})
+			t.Logf("without indexes on the referencing columns, the plan and its effect took %v", time.Since(start))
+			checkLines(t, "steps", steps, want)
+			checkLines(t, "conflicts", conflicts, nil)
+			if err := plain.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+
+			db.Exec(t, "CREATE INDEX ON t.order_line (order_id); CREATE INDEX ON t.line_event (line_id); ANALYZE")
+			s := db.applySession(t, db.Config, dir)
+			req := request(t, s, csvTable("m", "plan", "id", "code"), []string{"code"}, config.ModeSync)
+			start = time.Now()
+			steps, conflicts = effectOf(t, s, []plan.DiffRequest{req})
+			t.Logf("with the indexes, the plan and its effect took %v", time.Since(start))
+			checkLines(t, "steps", steps, want)
+			checkLines(t, "conflicts", conflicts, nil)
+			start = time.Now()
+			if _, err := s.Delete(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("the deletion took %v", time.Since(start))
+			start = time.Now()
+			if err := s.Commit(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("the check of the effect and the commit took %v", time.Since(start))
+			if got := db.Query(t, `SELECT (SELECT count(*) FROM t.orders)::text, (SELECT count(*) FROM t.order_line)::text,
+				(SELECT count(*) FROM t.line_event WHERE line_id IS NULL)::text`); !slices.Equal(got[0], []string{"500", "25000", "100000"}) {
+				t.Errorf("rows after the apply: %v, want 500 orders, 25000 lines, and 100000 events without a line", got)
+			}
 		})
 	}
 }

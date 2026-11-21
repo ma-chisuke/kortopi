@@ -1,0 +1,35 @@
+facility.room_types (sync, key: code)
+  + code=suite  name=Suite
+  - code=old
+  - code=older
+  1 to insert, 0 to update, 2 to delete
+  Through foreign keys, the deletions of these rows also reach other rows:
+    1 row of facility.room_types (replaced_by) references them through room_types_replaced_by_fkey, ON DELETE SET NULL, so the deletions set replaced_by of this row to NULL.
+    3 rows of facility.rooms (room_type) reference them through rooms_room_type_fkey, ON DELETE CASCADE, so the deletions delete these rows too.
+      40 rows of facility.desks (room) reference those rows of facility.rooms through desks_room_fkey, ON DELETE CASCADE, so the deletions delete these rows too.
+        80 rows of facility.drawers (desk) reference those rows of facility.desks through drawers_desk_fkey, ON DELETE CASCADE, so the deletions delete these rows too.
+        2 rows of facility.screws (desk) reference those rows of facility.desks through screws_desk_fkey, ON DELETE SET NULL, so the deletions set desk of these rows to NULL, and foreign key parts_desk_fkey of facility.parts references a column that it sets, so what its ON UPDATE action does is not known.
+      1 row of facility.lamps (room) references those rows of facility.rooms through lamps_room_fkey, ON DELETE SET NULL, so the deletions set room of this row to NULL.
+      Rows of secret.keys (room) may reference those rows of facility.rooms through keys_room_fkey, ON DELETE SET NULL, but the role may not read the table, so what the deletions do to them is not known.
+    Rows of reservation.audit (room_type_id) may reference them through audit_room_type_fkey, ON DELETE NO ACTION, but the role may not read the table, so what the deletions do to them is not known.
+    12 rows of reservation.bookings (room_type_id) reference them through fk_bookings_room_type, ON DELETE NO ACTION, so the deletions fail while these rows reference them.
+    2 rows of reservation.holds (room_type, hotel) reference them through "holds fk", ON DELETE RESTRICT, so the deletions fail while these rows reference them.
+    4 rows of reservation.quotes (room_type, hotel) reference them through quotes_room_type_fkey, ON DELETE SET DEFAULT, so the deletions set room_type of these rows to its default.
+    5 rows of reservation.waits (room_type) reference them through waits_room_type_fkey, ON DELETE SOMETHING NEW.
+
+geo.regions (sync, key: code)
+  - code=north
+  0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of geo.prefectures (region) references it through prefectures_region_fkey, ON DELETE NO ACTION, so the deletion fails while this row references it.
+    1 row of geo.stations (region) references it through stations_region_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      2 rows of geo.exits (station) reference that row of geo.stations through exits_station_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+
+geo.zones (sync, key: code)
+  - code=x
+  0 to insert, 0 to update, 1 to delete
+
+Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
+Through foreign keys, the deletions also delete 126 rows and change 8 rows.
+Through foreign keys ON DELETE NO ACTION or RESTRICT, 15 rows make the deletions fail.
+What the deletions do through 3 foreign keys is not known.

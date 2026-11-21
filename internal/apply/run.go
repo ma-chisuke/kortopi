@@ -178,19 +178,19 @@ func pending(p *plan.Plan, settingsFile string) error {
 }
 
 // checkDeletes checks the limit on the rows that an apply deletes
-// (ADR-0018). It counts the rows to delete of every table, and the rows that
-// a foreign key ON DELETE CASCADE deletes with them, as the references of the
-// plan count them. Only the first level of cascades is counted: a row that a
-// cascaded row takes with it through another cascade is not. A referencing
-// row that the run deletes from its own table as well is counted twice, so
-// the count errs toward stopping.
+// (ADR-0018), with the whole effect of the deletions (ADR-0039): it counts
+// the rows to delete of every table, the rows that foreign keys ON DELETE
+// CASCADE delete with them at every depth, and the rows that ON DELETE SET
+// NULL and SET DEFAULT change, each row once, as the plan counted them.
 //
-// A cascade into a table that the role may not read stops the apply, since
-// its rows cannot be counted.
+// A step whose effect is not known stops the apply: a table that the role may
+// not read, under CASCADE, SET NULL, or SET DEFAULT, at any depth, and a
+// change that an action ON UPDATE of another foreign key would follow.
 func checkDeletes(p *plan.Plan, limit int) error {
 	var errs, direct []string
-	var deletes int
-	cascaded := make(map[declaration.TableName]int)
+	var deletes, cascaded, changed int
+	cascadedBy := make(map[declaration.TableName]int)
+	changedBy := make(map[declaration.TableName]int)
 	for i := range p.Tables {
 		t := &p.Tables[i]
 		n := len(t.Diff.Deletes)
@@ -199,37 +199,79 @@ func checkDeletes(p *plan.Plan, limit int) error {
 		}
 		deletes += n
 		direct = append(direct, rows(n)+" of "+t.Name.String())
-		for _, ref := range t.Diff.References {
-			switch {
-			case ref.OnDelete != "CASCADE":
-			case ref.Unreadable:
-				errs = append(errs, fmt.Sprintf("the deletion of rows of %s cascades through foreign key %q to rows of %s, which the role may not read, "+
-					"so the rows that it would delete with them cannot be counted for the limit on deletions: "+
-					"grant the role SELECT on %s, or remove those rows first", t.Name, ref.Constraint, ref.Table, ref.Table))
-			default:
-				cascaded[ref.Table] += ref.Rows
-				deletes += ref.Rows
+		for j := range t.Effect.Steps {
+			step := &t.Effect.Steps[j]
+			if !step.Deletes() && !step.Changes() {
+				continue
+			}
+			if step.Unknown != plan.Known {
+				errs = append(errs, unknownEffect(t.Name, step))
+				continue
+			}
+			if step.Deletes() {
+				cascadedBy[step.Table] += step.Rows
+				cascaded += step.Rows
+			} else {
+				changedBy[step.Table] += step.Rows
+				changed += step.Rows
 			}
 		}
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "\n"))
 	}
-	if deletes <= limit {
+	total := deletes + cascaded + changed
+	if total <= limit {
 		return nil
 	}
 
-	what := strings.Join(direct, ", ")
-	if len(cascaded) > 0 {
-		names := slices.SortedFunc(maps.Keys(cascaded), compareNames)
-		parts := make([]string, len(names))
-		for i, n := range names {
-			parts[i] = rows(cascaded[n]) + " of " + n.String()
-		}
-		what += ", and " + joinAnd(parts) + " that ON DELETE CASCADE deletes with them"
+	groups := []string{joinAnd(direct) + " to delete"}
+	if cascaded > 0 {
+		groups = append(groups, rows(cascaded)+" that ON DELETE CASCADE deletes with them ("+byTable(cascadedBy)+")")
 	}
-	return fmt.Errorf("the apply would delete %s, more than the limit of %d (%s): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete %d",
-		rows(deletes), limit, what, deletes)
+	if changed > 0 {
+		groups = append(groups, rows(changed)+" that ON DELETE SET NULL or SET DEFAULT changes ("+byTable(changedBy)+")")
+	}
+	what := groups[0]
+	if len(groups) > 1 {
+		what = strings.Join(groups[:len(groups)-1], ", ") + ", and " + groups[len(groups)-1]
+	}
+	verb := "delete"
+	if changed > 0 {
+		verb = "delete or change"
+	}
+	return fmt.Errorf("the apply would %s %s, more than the limit of %d: %s: "+
+		"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete %d",
+		verb, rows(total), limit, what, total)
+}
+
+// byTable returns the counts of rows of each table, sorted by the names of
+// the tables, as in "1 row of t.orders and 3 rows of t.lines".
+func byTable(counts map[declaration.TableName]int) string {
+	names := slices.SortedFunc(maps.Keys(counts), compareNames)
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = rows(counts[n]) + " of " + n.String()
+	}
+	return joinAnd(parts)
+}
+
+// unknownEffect is the error of a step of the deletions of table whose effect
+// is not known, so that the limit on deletions cannot count it.
+func unknownEffect(table declaration.TableName, step *plan.Step) string {
+	from := ""
+	if step.Level > 1 {
+		from = ", from rows of " + step.References.String() + " that ON DELETE CASCADE deletes"
+	}
+	if step.Unknown == plan.FollowsOnUpdate {
+		return fmt.Sprintf("the deletion of rows of %s sets columns of rows of %s through foreign key %q, ON DELETE %s%s, "+
+			"and foreign key %q of table %s references a column that it sets, so its action ON UPDATE follows, "+
+			"which kortopi does not count for the limit on deletions: change or remove the rows of %s that reference the rows to delete first",
+			table, step.Table, step.Constraint, step.OnDelete, from, step.OnUpdate, step.OnUpdateTable, step.Table)
+	}
+	return fmt.Sprintf("the deletion of rows of %s reaches rows of %s through foreign key %q, ON DELETE %s%s, and the role may not read %s, "+
+		"so what the deletion does to them cannot be counted for the limit on deletions: grant the role SELECT on %s, or remove those rows first",
+		table, step.Table, step.Constraint, step.OnDelete, from, step.Table, step.Table)
 }
 
 // rows returns n with the noun row or rows.
