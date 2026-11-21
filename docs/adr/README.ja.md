@@ -40,5 +40,6 @@
 | [ADR-0032](ADR-0032-require-the-name-of-the-database.ja.md) | データベースの名前を必須とし、ユーザーの名前で代用しない | accepted | 2026-11-21 |
 | [ADR-0033](ADR-0033-check-titles-of-the-dependency-bot-for-their-form-not-their-length.ja.md) | 依存を更新するボットのタイトルは、GitHub が伝える作成者で見分け、長さではなく形を検査する | accepted | 2026-11-21 |
 | [ADR-0034](ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) | `--no-pending` で、データベースにないすべての名前で計画を止められるようにする | accepted | 2026-11-21 |
+| [ADR-0035](ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.ja.md) | 挿入のときだけ設定する値を、設定に書けるようにする | accepted | 2026-11-21 |
 
-<!-- i18n-source: README.md sha256:6abf5340258b30d374e180ba334b0ad07dcdd6af88649fdea49d0975b0bb7354 -->
+<!-- i18n-source: README.md sha256:138c9cdc8cf4fdbb628f3eff2149f71083e93e9e2c52cffac2088b5142603dc2 -->
