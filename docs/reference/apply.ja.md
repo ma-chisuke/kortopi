@@ -102,7 +102,7 @@ apply は、計画が固定する設定で読み、比べる（[値の比べ方]
 - スキーマを付けずにテーブルを挙げるトリガーは、ロールの検索パスでそのテーブルを見つける。
 - 行単位セキュリティを持つテーブルに書くトリガーは、アプリケーションの文と同じく、そのポリシーに従う。
 
-どの行を書き、行のどの列を更新するかは、固定した設定のもとで、計画と同じ比べ方で決める。決めるのは、書き込みのたびにその直前である。書き込みはその行を取るだけで、値を比べない。
+どの行を書き、行のどの列を更新するかは、固定した設定のもとで、計画と同じ比べ方で決める。決めるのは、書き込みのたびにその直前である。書き込みはその行を取るだけで、保存された行を照合キーで取るほかは値を比べない。
 どの設定もトランザクションの中に限られる。そのため、apply のあと、接続は自分の設定に戻る。コネクションプーラーを通しても同じである。
 アプリケーションの設定で失敗するトリガーは、apply も PostgreSQL のエラーで失敗させる。このとき何も変わらない。
 
@@ -403,4 +403,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:c1eedba86a9e1077849460a3077ad09b0f3971daedb2b3dd42a380111bc144d4 -->
+<!-- i18n-source: apply.md sha256:ec2ad3b08d456e4da9ff59db177dba59bf0b17d6fa71209f3bbfa71d893ad24c -->

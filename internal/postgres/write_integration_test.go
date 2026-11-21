@@ -367,12 +367,50 @@ func TestUpdateDecidesInThePinnedSettings(t *testing.T) {
 	}
 }
 
+// A role that holds SELECT on the declared columns alone, INSERT on them,
+// UPDATE on the compared columns, and DELETE, which is all that an apply
+// needs (ADR-0024, ADR-0026), applies inserts, updates, and deletions: the
+// writes and the statements that pick their rows read no column that the
+// role may not read, no system column of the table included.
+func TestApplyWithSelectOnTheDeclaredColumns(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.items (code text PRIMARY KEY, n integer NOT NULL, note text, secret text DEFAULT 'kept');
+				INSERT INTO app.items VALUES ('a', 1, 'x', 's'), ('b', 2, 'y', 's'), ('gone', 3, NULL, 's');
+			`)
+			cfg := db.Role(t, "columns")
+			role := quoteIdent(cfg.User)
+			db.Exec(t, `
+				GRANT USAGE ON SCHEMA app TO `+role+`;
+				GRANT SELECT (code, n, note), INSERT (code, n, note), UPDATE (n, note), DELETE ON app.items TO `+role+`;
+			`)
+			dir := writeFiles(t, map[string]string{"app/items.csv": "code,n,note\na,1,x\nb,20,Y\nnew,4,\n"})
+			s := db.applySession(t, cfg, dir)
+			req := request(t, s, csvTable("app", "items", "code", "n", "note"), nil, config.ModeSync)
+			got, err := applyAll(t.Context(), s, []plan.DiffRequest{req}, true)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if want := (applyResult{inserted: 1, updated: 1, deleted: 1}); got != want {
+				t.Errorf("apply = %+v, want %+v", got, want)
+			}
+			want := []string{"app.items (a,1,x,s)", "app.items (b,20,Y,s)", "app.items (new,4,,kept)"}
+			if rows := dump(t, db, "app.items"); !slices.Equal(rows, want) {
+				t.Errorf("rows after the apply = %v, want %v", rows, want)
+			}
+		})
+	}
+}
+
 // The statements of a write run in the search path of the role, which here
 // puts a schema of its own before pg_catalog, with an operator = for the
 // types that the statements compare, and functions and an aggregate with
 // the names of those that kortopi calls. None of them is called: the writes
-// compare nothing but row identifiers, and name every function and operator
-// with its schema. The objects do catch a statement that names them without
+// compare nothing but row identifiers and keys, and name every function and
+// operator with its schema. The objects do catch a statement that names them without
 // a schema, as the plain connection shows.
 func TestWritesInTheSearchPathOfTheRole(t *testing.T) {
 	for _, srv := range eachServer(t) {

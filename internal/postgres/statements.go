@@ -407,25 +407,51 @@ const (
 // A write of an apply is two statements (ADR-0037). A pick statement, in the
 // pinned settings, records in a temporary table which rows the write takes,
 // with the conditions of the plan: the rows of insertsSQL, updatesSQL, or
-// deletesSQL, by their row identifiers, ctid, and for a stored row also the
-// table that holds it, tableoid, which tells the partitions of a partitioned
-// table apart. The write then runs in the settings of the session, and takes
-// those rows by their identifiers. It compares no value: everything that
-// depends on the settings, such as a column that is compared by its text,
-// was decided by the pick. Every name in it is qualified, and its operators
-// are those of tid and oid in pg_catalog, so an object in the search path of
-// the session cannot change it.
+// deletesSQL. It names a declared row by its row identifier, ctid, in the
+// temporary table of the declared rows, which kortopi owns, and a stored row
+// by the values of its match key, typed as the key columns are, because the
+// role may lack the privilege to read the system columns of the table, and a
+// partition that is a foreign table may have no row identifiers. The write
+// then runs in the settings of the session, and takes those rows: a declared
+// row by its identifier, a stored row by its key, with the equality of the
+// key that the plan used. Everything that depends on the settings, such as
+// a column that is compared by its text, was decided by the pick. Every name
+// in the write is qualified, and so is every operator, so an object in the
+// search path of the session cannot change it.
 
-// joinPicked returns the condition that pairs the row of alias, a row of the
-// declared or the stored rows, with a picked row whose identifier is column.
-func joinPicked(alias, column string) string {
-	return alias + ".ctid OPERATOR(pg_catalog.=) " + pickedAlias + "." + quoteIdent(column)
+// joinPicked returns the condition that pairs a declared row with the
+// picked row whose identifier is column.
+func joinPicked(column string) string {
+	return declaredAlias + ".ctid OPERATOR(pg_catalog.=) " + pickedAlias + "." + quoteIdent(column)
+}
+
+// pickedKey returns the name of the column of a picked row that holds the
+// value of the key column number i, from 0.
+func pickedKey(i int) string {
+	return quoteIdent("k" + strconv.Itoa(i+1))
+}
+
+// pickKeys returns the key columns of the stored rows, as the columns of a
+// picked row: "k1", "k2", and so on.
+func (c *comparison) pickKeys() string {
+	parts := make([]string, len(c.key))
+	for i, k := range c.key {
+		parts[i] = storedAlias + "." + quoteIdent(k.name) + " AS " + pickedKey(i)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // storedPicked returns the condition that pairs a stored row with the
-// picked row that names its table and its identifier.
-func storedPicked() string {
-	return storedAlias + ".tableoid OPERATOR(pg_catalog.=) " + pickedAlias + `."table" AND ` + joinPicked(storedAlias, "stored")
+// picked row that holds its key: every key column is equal, with the
+// equality operator of its type, named with its schema, as match compares
+// them. The values are typed, never text, and in the collation of the
+// column, so the result does not depend on the settings of the session.
+func (c *comparison) storedPicked() string {
+	parts := make([]string, len(c.key))
+	for i, k := range c.key {
+		parts[i] = equalExpr(k.eq, pickedAlias+"."+pickedKey(i), storedAlias+"."+quoteIdent(k.name))
+	}
+	return strings.Join(parts, " AND ")
 }
 
 // pickInsertsSQL returns the statement that records in the temporary table
@@ -449,7 +475,7 @@ func (c *comparison) insertSQL(picked, values string) string {
 		names[i] = col.name
 	}
 	selected := quoteColumns(declaredAlias+".", names)
-	from := picked + " AS " + pickedAlias + " JOIN " + c.declared + " AS " + declaredAlias + " ON " + joinPicked(declaredAlias, "row")
+	from := picked + " AS " + pickedAlias + " JOIN " + c.declared + " AS " + declaredAlias + " ON " + joinPicked("row")
 	if len(c.onInsert) > 0 {
 		from += " CROSS JOIN " + values + " AS " + valuesAlias
 	}
@@ -482,13 +508,11 @@ func (c *comparison) insertValuesSQL(temp string) string {
 // pickUpdatesSQL returns the statement that records in the temporary table
 // temp the matched rows in which a compared column differs, the rows of
 // updatesSQL: the identifier of the declared row in the column "declared",
-// the table and the identifier of the stored row in "table" and "stored",
-// and for each compared column, numbered from 1 as "c1", whether its values
-// differ.
+// the key of the stored row in "k1" and so on, and for each compared
+// column, numbered from 1 as "c1", whether its values differ.
 func (c *comparison) pickUpdatesSQL(temp string) string {
 	var b strings.Builder
-	b.WriteString("CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + declaredAlias + `.ctid AS "declared", ` +
-		storedAlias + `.tableoid AS "table", ` + storedAlias + `.ctid AS "stored"`)
+	b.WriteString("CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + declaredAlias + `.ctid AS "declared", ` + c.pickKeys())
 	conds := make([]string, len(c.compare))
 	for i, col := range c.compare {
 		conds[i] = c.differs(col)
@@ -512,23 +536,22 @@ func (c *comparison) updateSQL(picked string) string {
 			" THEN " + declaredAlias + "." + quoteIdent(col.name) + " ELSE " + storedAlias + "." + quoteIdent(col.name) + " END"
 	}
 	return "UPDATE " + c.stored + " AS " + storedAlias + " SET " + strings.Join(sets, ", ") +
-		" FROM " + picked + " AS " + pickedAlias + " JOIN " + c.declared + " AS " + declaredAlias + " ON " + joinPicked(declaredAlias, "declared") +
-		" WHERE " + storedPicked()
+		" FROM " + picked + " AS " + pickedAlias + " JOIN " + c.declared + " AS " + declaredAlias + " ON " + joinPicked("declared") +
+		" WHERE " + c.storedPicked()
 }
 
 // pickDeletesSQL returns the statement that records in the temporary table
 // temp the stored rows that no declared row matches, the rows of
-// deletesSQL: their tables in the column "table", and their identifiers in
-// "stored".
+// deletesSQL, by their keys in the columns "k1" and so on.
 func (c *comparison) pickDeletesSQL(temp string) string {
-	return "CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + storedAlias + `.tableoid AS "table", ` +
-		storedAlias + `.ctid AS "stored" FROM ` + c.stored + " AS " + storedAlias + " WHERE " + c.unmatched()
+	return "CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + c.pickKeys() +
+		" FROM " + c.stored + " AS " + storedAlias + " WHERE " + c.unmatched()
 }
 
 // deleteSQL deletes the stored rows that pickDeletesSQL recorded in the
 // temporary table picked.
 func (c *comparison) deleteSQL(picked string) string {
-	return "DELETE FROM " + c.stored + " AS " + storedAlias + " USING " + picked + " AS " + pickedAlias + " WHERE " + storedPicked()
+	return "DELETE FROM " + c.stored + " AS " + storedAlias + " USING " + picked + " AS " + pickedAlias + " WHERE " + c.storedPicked()
 }
 
 // referencingAlias is the alias of the referencing rows in referencesSQL.

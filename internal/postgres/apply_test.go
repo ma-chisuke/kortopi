@@ -16,8 +16,9 @@ import (
 )
 
 // A write takes the rows that a pick statement chose with the conditions of
-// the plan, by their identifiers, and compares no value: its only operators
-// are the equalities of tid and oid in pg_catalog (ADR-0037).
+// the plan: a declared row by its identifier in the temporary table, a stored
+// row by its key, with the equality of the key, named with its schema. It
+// reads no system column of the table (ADR-0037).
 func TestWriteStatements(t *testing.T) {
 	c := testComparison()
 	c.table = `"s"."t"`
@@ -53,7 +54,7 @@ func TestWriteStatements(t *testing.T) {
 	}
 	c.onInsert = nil
 
-	pickUpdates := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT d.ctid AS "declared", s.tableoid AS "table", s.ctid AS "stored", ` +
+	pickUpdates := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT d.ctid AS "declared", s."a" AS "k1", s."b" AS "k2", ` +
 		c.differs(c.compare[0]) + ` AS "c1", ` + c.differs(c.compare[1]) + ` AS "c2" ` +
 		`FROM pg_temp."kortopi_1" AS d JOIN ONLY "s"."t" AS s ON ` + match + ` WHERE ` + c.differs(c.compare[0]) + ` OR ` + c.differs(c.compare[1])
 	if got := c.pickUpdatesSQL(picked); got != pickUpdates {
@@ -61,18 +62,18 @@ func TestWriteStatements(t *testing.T) {
 	}
 	update := `UPDATE ONLY "s"."t" AS s SET "x" = CASE WHEN w."c1" THEN d."x" ELSE s."x" END, "j" = CASE WHEN w."c2" THEN d."j" ELSE s."j" END ` +
 		`FROM pg_temp."kortopi_2" AS w JOIN pg_temp."kortopi_1" AS d ON d.ctid OPERATOR(pg_catalog.=) w."declared" ` +
-		`WHERE s.tableoid OPERATOR(pg_catalog.=) w."table" AND s.ctid OPERATOR(pg_catalog.=) w."stored"`
+		`WHERE w."k1" OPERATOR("pg_catalog".=) s."a" AND w."k2" OPERATOR("pg_catalog".=) s."b"`
 	if got := c.updateSQL(picked); got != update {
 		t.Errorf("updateSQL =\n%s\nwant\n%s", got, update)
 	}
 
-	pickDeletes := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT s.tableoid AS "table", s.ctid AS "stored" ` +
+	pickDeletes := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT s."a" AS "k1", s."b" AS "k2" ` +
 		`FROM ONLY "s"."t" AS s WHERE NOT EXISTS (SELECT FROM pg_temp."kortopi_1" AS d WHERE ` + match + `)`
 	if got := c.pickDeletesSQL(picked); got != pickDeletes {
 		t.Errorf("pickDeletesSQL =\n%s\nwant\n%s", got, pickDeletes)
 	}
 	del := `DELETE FROM ONLY "s"."t" AS s USING pg_temp."kortopi_2" AS w ` +
-		`WHERE s.tableoid OPERATOR(pg_catalog.=) w."table" AND s.ctid OPERATOR(pg_catalog.=) w."stored"`
+		`WHERE w."k1" OPERATOR("pg_catalog".=) s."a" AND w."k2" OPERATOR("pg_catalog".=) s."b"`
 	if got := c.deleteSQL(picked); got != del {
 		t.Errorf("deleteSQL =\n%s\nwant\n%s", got, del)
 	}

@@ -102,7 +102,7 @@ So the defaults, the triggers, the actions of the foreign keys, and the deferred
 - A trigger that names a table without its schema finds it through the search path of the role.
 - A trigger that writes a table with row-level security is held to its policies as your application's statement is.
 
-Which rows to write, and which columns of a row to update, is decided just before each write, in the pinned settings, with the comparisons of the plan; the write then takes those rows and compares no value.
+Which rows to write, and which columns of a row to update, is decided just before each write, in the pinned settings, with the comparisons of the plan; the write then takes those rows, the stored ones by their match key, and compares no other value.
 Each setting is local to the transaction, so the connection has its own settings again after the apply, also through a connection pooler.
 A trigger that fails in the settings of your application fails the apply too, with the error of PostgreSQL, and nothing is changed.
 
