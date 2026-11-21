@@ -174,6 +174,9 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 	if c.notNull, err = requestColumns(meta, table, req.NotNull); err != nil {
 		return nil, nil, err
 	}
+	if c.onInsert, err = insertColumns(meta, table, req.OnInsert); err != nil {
+		return nil, nil, err
+	}
 	for _, name := range req.Pending {
 		if !slices.Contains(table.Columns, name) {
 			return nil, nil, fmt.Errorf("table %s: pending column %q is not declared", table.Name, name)

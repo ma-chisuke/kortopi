@@ -138,3 +138,91 @@ func TestCheckValuesPrivilegesAndApply(t *testing.T) {
 		})
 	}
 }
+
+// An insert of an apply gives every new row the values of on_insert, as
+// PostgreSQL reads them by the types of their columns: now is the time of
+// the transaction, the same for every row of the statement, and the empty
+// string is not NULL. The columns are not compared: rows that exist keep
+// what they hold, and a plan after the apply is empty.
+func TestApplyOnInsert(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.rooms (
+					name text PRIMARY KEY,
+					capacity integer NOT NULL,
+					created_at timestamptz NOT NULL,
+					created_by text NOT NULL,
+					sort_order integer NOT NULL,
+					note text
+				);
+				INSERT INTO app.rooms VALUES ('lobby', 20, '2020-01-01 00:00:00+00', 'by hand', 5, NULL);
+			`)
+			dir := writeFiles(t, map[string]string{"app/rooms.csv": "name,capacity\nannex,10\nhall,80\nlobby,30\nstudio,4\n"})
+			before := db.Query(t, "SELECT pg_catalog.clock_timestamp()")[0][0]
+			s := db.applySession(t, db.Config, dir)
+			req := request(t, s, csvTable("app", "rooms", "name", "capacity"), nil, config.ModeUpsert)
+			req.OnInsert = []config.InsertValue{
+				{Column: "created_at", Value: "now"}, {Column: "created_by", Value: "kortopi"},
+				{Column: "note", Value: ""}, {Column: "sort_order", Value: "0"},
+			}
+			got, err := applyAll(t.Context(), s, []plan.DiffRequest{req}, false)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			after := db.Query(t, "SELECT pg_catalog.clock_timestamp()")[0][0]
+			if want := (applyResult{inserted: 3, updated: 1}); got != want {
+				t.Errorf("apply = %+v, want %+v", got, want)
+			}
+			rows := db.Query(t, `SELECT name, capacity, created_by, sort_order, note IS NULL, note,
+					created_at = '2020-01-01 00:00:00+00' OR (created_at >= '`+before+`' AND created_at <= '`+after+`')
+				FROM app.rooms ORDER BY name`)
+			want := [][]string{
+				{"annex", "10", "kortopi", "0", "f", "", "t"},
+				{"hall", "80", "kortopi", "0", "f", "", "t"},
+				// The row that exists keeps its values; only the declared
+				// column changes.
+				{"lobby", "30", "by hand", "5", "t", "NULL", "t"},
+				{"studio", "4", "kortopi", "0", "f", "", "t"},
+			}
+			if !slices.EqualFunc(rows, want, slices.Equal) {
+				t.Errorf("rows after the apply:\n%v\nwant\n%v", rows, want)
+			}
+			if n := db.Query(t, "SELECT pg_catalog.count(DISTINCT created_at) FROM app.rooms WHERE name <> 'lobby'")[0][0]; n != "1" {
+				t.Errorf("the new rows hold %s times, want one", n)
+			}
+			checkEmpty(t, db, dir, []plan.DiffRequest{req})
+		})
+	}
+}
+
+// An apply needs INSERT on the columns of on_insert, and the check comes
+// before the first write.
+func TestApplyOnInsertPrivileges(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.t (id integer PRIMARY KEY, v text, at timestamptz NOT NULL);
+			`)
+			writer := db.Role(t, "writer")
+			role := quoteIdent(writer.User)
+			db.Exec(t, `GRANT USAGE ON SCHEMA app TO `+role+`; GRANT SELECT, UPDATE ON app.t TO `+role+`; GRANT INSERT (id, v) ON app.t TO `+role)
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,a\n"})
+			s := db.applySession(t, writer, dir)
+			req := request(t, s, csvTable("app", "t", "id", "v"), nil, config.ModeUpsert)
+			req.OnInsert = []config.InsertValue{{Column: "at", Value: "now"}}
+			_, err := applyAll(t.Context(), s, []plan.DiffRequest{req}, false)
+			want := `an apply needs INSERT on table app.t, and the role "` + writer.User + `" may not insert into its column "at": grant the role INSERT on the table`
+			if err == nil || err.Error() != want {
+				t.Errorf("apply = %v, want %s", err, want)
+			}
+			if n := db.Query(t, "SELECT pg_catalog.count(*) FROM app.t")[0][0]; n != "0" {
+				t.Errorf("the apply wrote %s rows, want none", n)
+			}
+		})
+	}
+}

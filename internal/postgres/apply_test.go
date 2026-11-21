@@ -28,6 +28,15 @@ func TestWriteStatements(t *testing.T) {
 	if got := c.insertSQL(); !strings.Contains(got, `("a", "b", "x", "j") OVERRIDING SYSTEM VALUE SELECT`) {
 		t.Errorf("insertSQL with an identity key =\n%s", got)
 	}
+	// The columns of on_insert follow, each with its value as a literal.
+	c.overriding = false
+	c.onInsert = []insertColumn{{name: "created at", literal: "'now'"}, {name: `n"`, literal: `E'a\\b'`}}
+	withValues := `INSERT INTO "s"."t" ("a", "b", "x", "j", "created at", "n""") SELECT d."a", d."b", d."x", d."j", 'now', E'a\\b' ` +
+		`FROM pg_temp."kortopi_1" AS d WHERE NOT EXISTS (SELECT FROM ONLY "s"."t" AS s WHERE ` + match + `)`
+	if got := c.insertSQL(); got != withValues {
+		t.Errorf("insertSQL with values of on_insert =\n%s\nwant\n%s", got, withValues)
+	}
+	c.onInsert = nil
 	update := `UPDATE ONLY "s"."t" AS s SET "x" = CASE WHEN ` + c.differs(c.compare[0]) + ` THEN d."x" ELSE s."x" END, ` +
 		`"j" = CASE WHEN ` + c.differs(c.compare[1]) + ` THEN d."j" ELSE s."j" END ` +
 		`FROM pg_temp."kortopi_1" AS d WHERE ` + match + ` AND (` + c.differs(c.compare[0]) + ` OR ` + c.differs(c.compare[1]) + `)`
@@ -177,6 +186,19 @@ func TestCheckWrites(t *testing.T) {
 	if err := s.checkWrites(lt, table); err != nil {
 		t.Errorf("checkWrites without updates: %v", err)
 	}
+	// A column of on_insert needs INSERT too, and only for rows to insert.
+	c.onInsert = []insertColumn{{name: "name", literal: "'x'"}}
+	meta.columns[1].insertable = false
+	want = `an apply needs INSERT on table s.t, and the role "w" may not insert into its column "name": grant the role INSERT on the table`
+	if err := s.checkWrites(lt, table); err == nil || err.Error() != want {
+		t.Errorf("checkWrites of a column of on_insert = %v, want %s", err, want)
+	}
+	lt.inserts = 0
+	if err := s.checkWrites(lt, table); err != nil {
+		t.Errorf("checkWrites without inserts: %v", err)
+	}
+	lt.inserts = 1
+	meta.columns[1].insertable = true
 	meta.columns[0].insertable = false
 	want = `an apply needs INSERT on table s.t, and the role "w" may not insert into its column "id": grant the role INSERT on the table`
 	if err := s.checkWrites(lt, table); err == nil || err.Error() != want {

@@ -388,13 +388,21 @@ func adviceFor(err *pgconn.PgError, verb string, table declaration.TableName) st
 }
 
 // checkWrites returns an error when the role may not insert into or update
-// the declared columns that the plan of the table needs to write.
+// the columns that the plan of the table needs to write: the declared
+// columns, and the columns of on_insert, which an insert writes too.
 func (s *Session) checkWrites(lt *loadedTable, table declaration.Table) error {
 	if lt.inserts > 0 {
-		for _, col := range append(append([]column{}, lt.c.key...), lt.c.compare...) {
-			if m, _ := lt.meta.column(col.name); !m.insertable {
+		names := make([]string, 0, len(lt.c.key)+len(lt.c.compare)+len(lt.c.onInsert))
+		for _, col := range slices.Concat(lt.c.key, lt.c.compare) {
+			names = append(names, col.name)
+		}
+		for _, col := range lt.c.onInsert {
+			names = append(names, col.name)
+		}
+		for _, name := range names {
+			if m, _ := lt.meta.column(name); !m.insertable {
 				return fmt.Errorf("an apply needs INSERT on table %s, and the role %q may not insert into its column %q: "+
-					"grant the role INSERT on the table", table.Name, s.role, col.name)
+					"grant the role INSERT on the table", table.Name, s.role, name)
 			}
 		}
 	}
