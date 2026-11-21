@@ -200,69 +200,102 @@ func (c intervalCase) declaredText(t *testing.T, stored string) string {
 	return text
 }
 
+// intervalTexts returns the text of each value of the tables t.c0 to
+// t.c<n-1>, by the id of its row, which is the number of its case.
+func intervalTexts(t *testing.T, db testDB, n int) map[string]string {
+	t.Helper()
+	texts := make(map[string]string)
+	for j := range n {
+		for _, r := range db.Query(t, fmt.Sprintf("SET IntervalStyle = postgres; SELECT id::text, v::text FROM t.c%d", j)) {
+			texts[r[0]] = r[1]
+		}
+	}
+	return texts
+}
+
 // A plan shows an interval whose months, days, or time differ as an update,
 // with both values, and an apply writes the declared value, so that the next
 // plan is empty. An interval with the same parts, written another way, shows
 // no change and keeps its stored text. Both hold for a CSV file and a SQL
-// file, wherever the interval sits.
+// file, wherever the interval sits. The cases of one type are the rows of one
+// table, and the id of each row is the number of its case.
 func TestCompareIntervals(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			var cases []intervalCase
-			for _, c := range intervalCases {
-				if srv.Major >= c.since {
-					cases = append(cases, c)
+			var types []string
+			byType := make(map[string][]int)
+			for i, c := range intervalCases {
+				if srv.Major < c.since {
+					continue
 				}
+				if _, ok := byType[c.typ]; !ok {
+					types = append(types, c.typ)
+				}
+				byType[c.typ] = append(byType[c.typ], i)
 			}
 			for _, format := range []string{"csv", "sql"} {
 				t.Run(format, func(t *testing.T) {
 					db := database(t, srv)
 					db.Exec(t, intervalSetup)
-					files := make(map[string]string, len(cases))
-					for i, c := range cases {
-						db.Exec(t, fmt.Sprintf("CREATE TABLE t.c%d (id integer PRIMARY KEY, v %s); INSERT INTO t.c%d VALUES (1, %s);", i, c.typ, i, c.stored))
-						files[fmt.Sprintf("t/c%d.csv", i)] = "id,v\n1," + c.csv + "\n"
+					files := make(map[string]string, len(types))
+					tables := make([]declaration.Table, len(types))
+					for j, typ := range types {
+						name := fmt.Sprintf("c%d", j)
+						var stored, values []string
+						var csv strings.Builder
+						csv.WriteString("id,v\n")
+						for _, i := range byType[typ] {
+							c := intervalCases[i]
+							stored = append(stored, fmt.Sprintf("(%d, %s)", i, c.stored))
+							values = append(values, fmt.Sprintf("(%d, %s)", i, c.sql))
+							fmt.Fprintf(&csv, "%d,%s\n", i, c.csv)
+						}
+						db.Exec(t, fmt.Sprintf("CREATE TABLE t.%s (id integer PRIMARY KEY, v %s); INSERT INTO t.%s VALUES %s;",
+							name, typ, name, strings.Join(stored, ", ")))
+						files["t/"+name+".csv"] = csv.String()
+						tables[j] = csvTable("t", name, "id", "v")
+						if format == "sql" {
+							tables[j] = sqlTable(t, "t", name, []string{"id", "v"}, sqlStatement{
+								sql:   fmt.Sprintf("INSERT INTO t.%s (id, v) VALUES %s", name, strings.Join(values, ", ")),
+								table: "t." + name,
+								rows:  len(values),
+							})
+						}
 					}
 					dir := t.TempDir()
 					if format == "csv" {
 						dir = writeFiles(t, files)
 					}
-					tables := make([]declaration.Table, len(cases))
-					before := make([]string, len(cases))
-					for i, c := range cases {
-						name := fmt.Sprintf("c%d", i)
-						tables[i] = csvTable("t", name, "id", "v")
-						if format == "sql" {
-							tables[i] = sqlTable(t, "t", name, []string{"id", "v"}, sqlStatement{
-								sql: fmt.Sprintf("INSERT INTO t.%s (id, v) VALUES (1, %s)", name, c.sql), table: "t." + name, rows: 1,
-							})
-						}
-						before[i] = db.Query(t, "SET IntervalStyle = postgres; SELECT v::text FROM t."+name)[0][0]
-					}
+					before := intervalTexts(t, db, len(types))
 
 					s := db.session(t, dir)
-					for i, c := range cases {
-						t.Run(c.name, func(t *testing.T) {
-							var want []string
-							if c.want != "" {
-								want = []string{`~ "1" | ` + c.want}
+					for j, typ := range types {
+						var want []string
+						for _, i := range byType[typ] {
+							if w := intervalCases[i].want; w != "" {
+								want = append(want, fmt.Sprintf(`~ "%d" | %s`, i, w))
 							}
-							checkDiff(t, s, plan.DiffRequest{Table: tables[i], Key: []string{"id"}, Compare: []string{"v"}, Updates: true, Deletes: true}, want...)
+						}
+						t.Run(typ, func(t *testing.T) {
+							checkDiff(t, s, plan.DiffRequest{Table: tables[j], Key: []string{"id"}, Compare: []string{"v"}, Updates: true, Deletes: true}, want...)
 						})
 					}
 
 					a := db.applySession(t, db.Config, dir)
-					reqs := make([]plan.DiffRequest, len(cases))
-					for i := range cases {
-						reqs[i] = request(t, a, tables[i], nil, config.ModeSync)
+					reqs := make([]plan.DiffRequest, len(types))
+					for j := range types {
+						reqs[j] = request(t, a, tables[j], nil, config.ModeSync)
 					}
 					if _, err := applyAll(t.Context(), a, reqs, true); err != nil {
 						t.Fatalf("apply: %v", err)
 					}
-					for i, c := range cases {
-						got := db.Query(t, fmt.Sprintf("SET IntervalStyle = postgres; SELECT v::text FROM t.c%d", i))[0][0]
-						if want := c.declaredText(t, before[i]); got != want {
-							t.Errorf("%s: after the apply, the table holds %q, want %q", c.name, got, want)
+					after := intervalTexts(t, db, len(types))
+					for _, typ := range types {
+						for _, i := range byType[typ] {
+							c, id := intervalCases[i], strconv.Itoa(i)
+							if want := c.declaredText(t, before[id]); after[id] != want {
+								t.Errorf("%s: after the apply, the table holds %q, want %q", c.name, after[id], want)
+							}
 						}
 					}
 					checkEmpty(t, db, dir, reqs)
