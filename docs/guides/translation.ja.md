@@ -226,8 +226,8 @@
 | author（プルリクエストの）, login（GitHub のアカウントの） | 作成者、ログイン名 |
 | bot, app（GitHub App） | ボット、アプリ |
 | expression（ワークフローの） | 式 |
-| value on insert（`kortopi.toml` の `on_insert` の値）、set on insert | 挿入時の値、挿入時に設定する |
+| value that only an insert sets（`kortopi.toml` の `on_insert` の値） | 挿入のときだけ設定する値 |
 | expression（SQL の） | 式 |
 | parameter（SQL の文の） | パラメータ |
 
-<!-- i18n-source: translation.md sha256:551991c9bd9b0cf665d919d1dca6aa9ea0c949e3e10ee85e32388436a2ad1bdb -->
+<!-- i18n-source: translation.md sha256:d8f630102dacca979dcac390b8b90eaec3154099c5c76ee27b658f2ba2f485c0 -->
