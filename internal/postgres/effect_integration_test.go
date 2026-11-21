@@ -22,7 +22,16 @@ import (
 // each conflict.
 func effectOf(t *testing.T, s *Session, reqs []plan.DiffRequest) (steps, conflicts []string) {
 	t.Helper()
+	names, _, got := effects(t, s, reqs)
+	return formatEffects(names, got)
+}
+
+// effects compares the tables, and returns the names of the tables with rows
+// to delete, their numbers of rows to delete, and what Effects says.
+func effects(t *testing.T, s *Session, reqs []plan.DiffRequest) ([]declaration.TableName, []int, plan.Effects) {
+	t.Helper()
 	var names []declaration.TableName
+	var deletes []int
 	for _, req := range reqs {
 		d, err := s.Diff(t.Context(), req)
 		if err != nil {
@@ -30,12 +39,18 @@ func effectOf(t *testing.T, s *Session, reqs []plan.DiffRequest) (steps, conflic
 		}
 		if len(d.Deletes) > 0 {
 			names = append(names, req.Table.Name)
+			deletes = append(deletes, len(d.Deletes))
 		}
 	}
 	got, err := s.Effects(t.Context(), names)
 	if err != nil {
 		t.Fatalf("Effects: %v", err)
 	}
+	return names, deletes, got
+}
+
+// formatEffects returns a line for each step and a line for each conflict.
+func formatEffects(names []declaration.TableName, got plan.Effects) (steps, conflicts []string) {
 	for i, e := range got.Tables {
 		for _, st := range e.Steps {
 			steps = append(steps, formatStep(names[i], st))
@@ -45,6 +60,72 @@ func effectOf(t *testing.T, s *Session, reqs []plan.DiffRequest) (steps, conflic
 		conflicts = append(conflicts, formatConflict(c))
 	}
 	return steps, conflicts
+}
+
+// effectAndApply does what effectOf does, in a session of an apply, and
+// then deletes the rows to delete of the requests, in their order, and
+// commits. Through a plain connection, it checks that each table lost the
+// rows that the plan deletes from it and that the effect says that
+// cascades delete, and that each column that SET NULL sets became NULL in as
+// many rows as the effect says.
+func effectAndApply(t *testing.T, db testDB, s *Session, reqs []plan.DiffRequest) (steps, conflicts []string) {
+	t.Helper()
+	names, deletes, got := effects(t, s, reqs)
+	lost := make(map[declaration.TableName]int)
+	nulled := make(map[declaration.TableName]map[string]int)
+	for i, e := range got.Tables {
+		lost[names[i]] += deletes[i]
+		for _, st := range e.Steps {
+			switch {
+			case st.Deletes():
+				lost[st.Table] += st.Rows
+			case st.OnDelete == "SET NULL":
+				if nulled[st.Table] == nil {
+					nulled[st.Table] = make(map[string]int)
+				}
+				for _, c := range st.Set {
+					nulled[st.Table][c] += st.Rows
+				}
+			}
+		}
+	}
+	count := func(table declaration.TableName, where string) int {
+		var n int
+		if _, err := fmt.Sscan(db.Query(t, "SELECT count(*) FROM "+quoteTable(table)+where)[0][0], &n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := make(map[string]int)
+	for table := range lost {
+		before[table.String()] = count(table, "")
+	}
+	for table, cols := range nulled {
+		for c := range cols {
+			before[table.String()+"."+c] = count(table, " WHERE "+quoteIdent(c)+" IS NULL")
+		}
+	}
+	for _, req := range reqs {
+		if _, err := s.Delete(t.Context(), req); err != nil {
+			t.Fatalf("Delete(%s): %v", req.Table.Name, err)
+		}
+	}
+	if err := s.Commit(t.Context()); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	for table, n := range lost {
+		if got := before[table.String()] - count(table, ""); got != n {
+			t.Errorf("table %s lost %d rows, and the plan and its effect say %d", table, got, n)
+		}
+	}
+	for table, cols := range nulled {
+		for c, n := range cols {
+			if got := count(table, " WHERE "+quoteIdent(c)+" IS NULL") - before[table.String()+"."+c]; got != n {
+				t.Errorf("column %s of table %s became NULL in %d rows, and the effect says %d", c, table, got, n)
+			}
+		}
+	}
+	return formatEffects(names, got)
 }
 
 // formatStep returns a step as one line: the table of the rows to delete,

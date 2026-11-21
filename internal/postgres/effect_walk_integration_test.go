@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,8 @@ import (
 
 // A cascade follows a table that references itself, counts a row that two
 // paths reach once, and ends in a cycle of cascades. A subtree that the plan
-// deletes itself is no effect.
+// deletes itself is no effect. The deletions then remove the rows that the
+// effect counts.
 func TestEffectsThroughTreesDiamondsAndCycles(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -50,14 +52,14 @@ func TestEffectsThroughTreesDiamondsAndCycles(t *testing.T) {
 				"m/a.csv":     "id\n2\n",
 				"m/root.csv":  "id\n",
 			})
-			s := db.session(t, dir)
+			s := db.applySession(t, db.Config, dir)
 			reqs := []plan.DiffRequest{
 				request(t, s, csvTable("m", "a", "id"), nil, config.ModeSync),
 				request(t, s, csvTable("m", "cat", "id", "parent_id"), nil, config.ModeSync),
 				request(t, s, csvTable("m", "root", "id"), nil, config.ModeSync),
 				request(t, s, csvTable("m", "topic", "id"), nil, config.ModeSync),
 			}
-			steps, conflicts := effectOf(t, s, reqs)
+			steps, conflicts := effectAndApply(t, db, s, reqs)
 			checkLines(t, "steps", steps, []string{
 				// t.d 1 references the deleted rows of t.b and t.c: it counts
 				// once, under the first foreign key.
@@ -84,7 +86,8 @@ func TestEffectsThroughTreesDiamondsAndCycles(t *testing.T) {
 
 // A foreign key joins on its own columns: a composite key, a unique key that
 // is not the primary key, a referencing table that is partitioned, and a
-// foreign key that references a partitioned table.
+// foreign key that references a partitioned table. The deletions then remove
+// and change the rows that the effect counts.
 func TestEffectsOfKeysAndPartitions(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -107,8 +110,8 @@ func TestEffectsOfKeysAndPartitions(t *testing.T) {
 					FOREIGN KEY (event_id, event_at) REFERENCES t.events ON DELETE CASCADE);
 				INSERT INTO t.event_tag VALUES (1, 1, '2025-05-01'), (2, 2, '2026-05-01'), (3, 3, '2026-06-01');
 			`)
-			s := db.session(t, writeFiles(t, map[string]string{"m/region.csv": "id,country,code\n2,jp,kansai\n3,us,kanto\n"}))
-			steps, conflicts := effectOf(t, s, []plan.DiffRequest{
+			s := db.applySession(t, db.Config, writeFiles(t, map[string]string{"m/region.csv": "id,country,code\n2,jp,kansai\n3,us,kanto\n"}))
+			steps, conflicts := effectAndApply(t, db, s, []plan.DiffRequest{
 				request(t, s, csvTable("m", "region", "id", "country", "code"), []string{"country", "code"}, config.ModeSync),
 			})
 			checkLines(t, "steps", steps, []string{
@@ -264,6 +267,84 @@ func TestEffectsOnLargeTables(t *testing.T) {
 				(SELECT count(*) FROM t.line_event WHERE line_id IS NULL)::text`); !slices.Equal(got[0], []string{"500", "25000", "100000"}) {
 				t.Errorf("rows after the apply: %v, want 500 orders, 25000 lines, and 100000 events without a line", got)
 			}
+		})
+	}
+}
+
+// NO ACTION, RESTRICT, and a NO ACTION that waits for the commit are alike
+// for the effect. A referencing row that the plan deletes too, in the same
+// statement, is no reason for the deletion to fail, and the deletion
+// succeeds. A declared row that stays and references a row to delete makes
+// the deletion fail, at the deletion or at the commit, and nothing changes.
+func TestEffectsOfNoActionAndRestrict(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
+			for _, action := range []string{"NO ACTION", "RESTRICT", "NO ACTION DEFERRABLE INITIALLY DEFERRED"} {
+				t.Run(action, func(t *testing.T) {
+					db := database(t, srv)
+					db.Exec(t, `CREATE SCHEMA m;
+						CREATE TABLE m.node (id int PRIMARY KEY, parent_id int REFERENCES m.node ON DELETE `+action+`);
+						INSERT INTO m.node VALUES (1, NULL), (2, 1), (3, 2), (4, 1);`)
+					// The subtree of row 2 goes as a whole.
+					s := db.applySession(t, db.Config, writeFiles(t, map[string]string{"m/node.csv": "id,parent_id\n1,\n4,1\n"}))
+					steps, conflicts := effectAndApply(t, db, s, []plan.DiffRequest{request(t, s, csvTable("m", "node", "id", "parent_id"), nil, config.ModeSync)})
+					checkLines(t, "steps", steps, nil)
+					checkLines(t, "conflicts", conflicts, nil)
+
+					// Row 4 stays, and references row 1, which goes.
+					before := dump(t, db, "m.node")
+					s = db.applySession(t, db.Config, writeFiles(t, map[string]string{"m/node.csv": "id,parent_id\n4,1\n"}))
+					req := request(t, s, csvTable("m", "node", "id", "parent_id"), nil, config.ModeSync)
+					steps, conflicts = effectOf(t, s, []plan.DiffRequest{req})
+					checkLines(t, "steps", steps, []string{
+						"m.node 1 " + strings.TrimSuffix(action, " DEFERRABLE INITIALLY DEFERRED") + " m.node.node_parent_id_fkey(parent_id) -> m.node: 1",
+					})
+					checkLines(t, "conflicts", conflicts, nil)
+					_, err := s.Delete(t.Context(), req)
+					if err == nil {
+						err = s.Commit(t.Context())
+					}
+					if err == nil || !strings.Contains(err.Error(), "node_parent_id_fkey") {
+						t.Errorf("apply: %v, want the error of the foreign key", err)
+					}
+					if err := s.Close(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					if got := dump(t, db, "m.node"); !slices.Equal(got, before) {
+						t.Errorf("rows: %v, want %v", got, before)
+					}
+				})
+			}
+		})
+	}
+}
+
+// When SET NULL changes a column that another foreign key references, the
+// action ON UPDATE of that key follows, which the walk does not count: the
+// step names the key, and its effect is not known.
+func TestEffectsThatAnUpdateFollows(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA m; CREATE SCHEMA t;
+				CREATE TABLE m.kind (code text PRIMARY KEY);
+				INSERT INTO m.kind VALUES ('keep'), ('gone');
+				CREATE TABLE t.slot (id int PRIMARY KEY, kind text UNIQUE REFERENCES m.kind ON DELETE SET NULL);
+				CREATE TABLE t.usage (id int PRIMARY KEY, slot_kind text REFERENCES t.slot (kind) ON UPDATE CASCADE);
+				CREATE TABLE t.note (id int PRIMARY KEY, kind text REFERENCES m.kind ON DELETE SET NULL);
+				INSERT INTO t.slot VALUES (1, 'gone'), (2, 'keep');
+				INSERT INTO t.usage VALUES (1, 'gone');
+				INSERT INTO t.note VALUES (1, 'gone');
+			`)
+			s := db.session(t, writeFiles(t, map[string]string{"m/kind.csv": "code\nkeep\n"}))
+			steps, conflicts := effectOf(t, s, []plan.DiffRequest{request(t, s, csvTable("m", "kind", "code"), nil, config.ModeSync)})
+			checkLines(t, "steps", steps, []string{
+				"m.kind 1 SET NULL t.note.note_kind_fkey(kind) -> m.kind set kind: 1",
+				"m.kind 1 SET NULL t.slot.slot_kind_fkey(kind) -> m.kind set kind then ON UPDATE of t.usage.usage_slot_kind_fkey: 1",
+			})
+			checkLines(t, "conflicts", conflicts, nil)
 		})
 	}
 }
