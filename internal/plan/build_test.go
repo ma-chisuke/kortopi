@@ -490,6 +490,16 @@ func TestBuildErrors(t *testing.T) {
 			want:     `table a.t has no column "code" yet, and no row can be matched by a key column that waits for the schema change: apply the schema first, or name another key with key in data/kortopi.toml`,
 		},
 		{
+			// The key column that the file declares in another case has its
+			// error, and the key column before it keeps its own.
+			name:     "chosen key with an unknown column and a column in another case",
+			table:    csvTable(tableT, "id", "Code"),
+			info:     with(existing(pk, "id", "code"), unique([]string{"code"})),
+			settings: config.Table{Key: []string{"zone", "Code"}},
+			want: `data/a/t.csv: column "Code" is not a column of table a.t, but column "code" is, whose name differs only in white space or case: write the name as the table has it` + "\n" +
+				`data/kortopi.toml: key of table a.t names column "zone", which the table does not have: correct the key`,
+		},
+		{
 			name:     "chosen key column that the table does not have",
 			table:    csvTable(tableT, "code", "name"),
 			info:     with(existing(pk, "id", "code", "name"), unique([]string{"code"})),
@@ -872,6 +882,18 @@ func TestBuildNoPending(t *testing.T) {
 			},
 			settings: map[declaration.TableName]config.Table{tableT: {Key: []string{"code"}}},
 			want:     missingColumn("a.t", "code"),
+		},
+		{
+			// The key column before the one that the table lacks keeps its
+			// error.
+			name:   "a key with an unknown column and a column that the table lacks",
+			tables: []declaration.Table{csvTable(tableT, "code", "name")},
+			infos: map[declaration.TableName]TableInfo{
+				tableT: with(infos[tableT], func(i *TableInfo) { i.UniqueKeys = [][]string{{"name"}} }),
+			},
+			settings: map[declaration.TableName]config.Table{tableT: {Key: []string{"zone", "code"}}},
+			want: missingColumn("a.t", "code") + "\n" +
+				filepath.FromSlash(`data/kortopi.toml: key of table a.t names column "zone", which the table does not have: correct the key`),
 		},
 	}
 	for _, tt := range tests {

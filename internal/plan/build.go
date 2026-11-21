@@ -433,14 +433,18 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		return nil, errs
 	}
 
+	// reported is true when the error of a declared column says what is
+	// wrong with a key column: the key names the column as the file does.
+	// The key gets no second error for it, and no check that needs all of
+	// its columns.
+	reported := false
 	for _, name := range key {
 		if _, ok := c.byName[name]; ok {
 			continue
 		}
 		if c.misnamed[name] || c.missing[name] {
-			// The error of the column says it all: the key names the column
-			// as the file does.
-			return nil, nil
+			reported = true
+			continue
 		}
 		if c.declared[name] {
 			errs = append(errs, fmt.Errorf("table %s has no column %q yet, and no row can be matched by a key column that waits for the schema change: apply the schema first, or name another key with key in %s",
@@ -450,7 +454,7 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 				c.settingsFile, c.table.Name, name))
 		}
 	}
-	if len(errs) > 0 {
+	if len(errs) > 0 || reported {
 		return nil, errs
 	}
 
