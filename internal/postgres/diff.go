@@ -171,6 +171,15 @@ func (s *Session) prepare(meta *tableMeta, req plan.DiffRequest) ([]tempColumn, 
 	if c.compare, err = requestColumns(meta, table, req.Compare); err != nil {
 		return nil, nil, err
 	}
+	for i, col := range c.compare {
+		// An interval compares by its months, its days, and its time, which
+		// its text tells apart and its equality does not (ADR-0040). A key
+		// column keeps the equality of its type, as the unique index of the
+		// key does.
+		if m, _ := meta.column(col.name); m.interval {
+			c.compare[i].eq = textEquality
+		}
+	}
 	if c.notNull, err = requestColumns(meta, table, req.NotNull); err != nil {
 		return nil, nil, err
 	}
