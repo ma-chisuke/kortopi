@@ -39,7 +39,7 @@ PostgreSQL は引用符のない名前を小文字にするので、`CREATE TABL
 別のテーブルを継承するテーブルは、パーティションではない。kortopi はそれぞれを `ONLY` で読み書きするので、両方を、それぞれの行で宣言できる。
 
 kortopi の管理する列は、ファイルが挙げる列である。kortopi はその列を比べて更新し、テーブルのほかの列には手を出さない。
-新しい行では、ファイルが挙げない列のそれぞれに既定値が入る。
+新しい行では、ファイルが挙げない列のそれぞれに既定値が入る。ただし `kortopi.toml` が `on_insert` で値を与える列には、その値が入る（[kortopi.toml](#kortopitoml)）。
 
 kortopi はファイルをパスの順に読み、最初の誤りで止まる。
 誤りを直して、もう一度計画を立てればよい。
@@ -154,10 +154,12 @@ kortopi は、検索パスを `pg_catalog` にしてファイルを読むから�
 - `'a' || 'b'` や `1 + 2` などの演算子
 - 副問い合わせ・列の参照・パラメータ・`COLLATE`・`CASE`・`DEFAULT`
 
-振られる ID や既定値のあるタイムスタンプのように、データベースに値を入れさせたい列は、ファイルから外す。それが列に合うかどうかは [kortopi export](export.ja.md#最初の書き出しのあとに直すこと) が示す。`NOT NULL` で既定値のない列や、ほかの行が外部キーなしで持つ ID には合わない。
+振られる ID や既定値のあるタイムスタンプのように、データベースに値を入れさせたい列は、ファイルから外す。それが列に合うかどうかは [kortopi export](export.ja.md#最初の書き出しのあとに直すこと) が示す。ほかの行が外部キーなしで持つ ID には合わない。
+`NOT NULL` で既定値のない列には、新しい行で値が要る。その列を宣言するか、`kortopi.toml` の `on_insert` で値を与える（[kortopi.toml](#kortopitoml)）。
 
 日付や時刻の値の中の `now`・`today`・`tomorrow`・`yesterday` は、大文字と小文字を問わずエラーである。PostgreSQL はこれらの語を読んだ時点として読むので、値が計画ごとに変わってしまうからである。
 日付や時刻そのものを書く。
+`kortopi.toml` の `on_insert` の値は、これらの語を持ってよい。kortopi はその値を比べないからである（[kortopi.toml](#kortopitoml)）。
 kortopi は、2か所でこれらを見つける。
 
 - SQL ファイルでは、日付や時刻の型へのキャストの下の文字列から、読み込む処理が見つける。`'now'::timestamptz`・`date 'today'`・`'{2026-04-01,tomorrow}'::date[]` などである。
@@ -237,6 +239,23 @@ mode = "insert"
 
   列の順番は、計画がキーを表示する順番と、行を並べる順番を決める。
   キーの値を変えると、更新ではなく削除と挿入になる。データベースが生成する ID にとって何が起きるかは、[kortopi export](export.ja.md#生成される-id-の代わりの自然キー) が示す。
+- `on_insert` は、kortopi が行を挿入するときにだけ設定する値を、テーブルの列に与える。新しい行には値が要るが、宣言で管理すべきでない列に向く。アプリケーションが書く行の作成時刻のように、`NOT NULL` で既定値のない列がその例である。
+
+  ```toml
+  [tables."facility.rooms"]
+  on_insert = { created_at = "now", created_by = "kortopi", sort_order = "0", note = "" }
+  ```
+
+  列ごとに1行を書いた `[tables."facility.rooms".on_insert]` の節も、同じ意味である。
+
+  - 値は文字列である。PostgreSQL は、CSV ファイルの欄を読むときと同じく、列の型で値を読む。`"now"` は行を挿入するトランザクションの時刻であり、整数の列の `"0"` は 0 であり、`""` は NULL ではなく空文字列である。`sort_order = 0` のように文字列でない値はエラーである。NULL は書けず、値が SQL になることはない。
+  - 宣言では拒まれる `now`・`today`・`tomorrow`・`yesterday` の各単語も書ける。
+  - kortopi がテーブルに挿入するどの行も、この値を得る。kortopi はこうした列を比べも更新もしない。すでにある行は持っている値を保ち、計画はその列の変更を示さない。
+  - 列は、テーブルが持つとおりの名前で書く。テーブルのファイルはその列を宣言してはならず、その列は照合キーの列・生成列・`GENERATED ALWAYS` の識別列であってはならない。
+  - テーブルにない列は、宣言した列と同じく、スキーマの変更を待つ（[kortopi plan](plan.ja.md#スキーマの変更を待つテーブルと列)）。
+  - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、それぞれの値を列の型で読む。列の読めない値があれば、計画は止まる（[on_insert の値](#on_insert-の値)）。
+
+  スキーマを変えられるなら、列の既定値のほうが適している。既定値は kortopi の挿入に限らず、あらゆる挿入に効くからである。
 - ほかの設定はエラーであり、`key = []` もエラーである。
 - どのファイルも宣言していないテーブルの設定はエラーである。綴りを誤った名前のテーブルが、既定の設定のまま残らないようにするためである。[kortopi export](export.ja.md) はこれを検査しない。最初の書き出しで、`key` がテーブルの行を並べられるようにするためである。
 
@@ -351,6 +370,12 @@ kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": wr
 kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key, mode, and on_insert
 ```
 
+### 文字列でない on_insert の値
+
+```text
+kortopi: data/kortopi.toml: table "facility.rooms": on_insert gives column "sort_order" an integer, not a string: write the value as a string, which PostgreSQL reads by the type of the column, as in sort_order = "0"
+```
+
 ### キーの列のないファイル
 
 ```text
@@ -401,6 +426,23 @@ kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a uniqu
 
 列とは違う照合順序や、既定でない演算子クラスを使う一意インデックスは、計画が比べるとおりには行を照合できない。列そのものに一意インデックスを作るか、別のキーを指定する。
 
+### on_insert の値
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives column "created_at" the value "soon", which the type of the column does not read: invalid input syntax for type timestamp with time zone: "soon": write the value as a CSV file writes a value of the column
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to column "created_at", which data/facility/rooms.csv declares too: a declared column is compared and updated, and a column of on_insert is set only when a row is inserted: remove the column from one of the two
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to column "name", which is a column of the match key: each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "Sort_Order", which is not a column of the table, but column "sort_order" is, whose name differs only in white space or case: write the name as the table has it
+```
+
+PostgreSQL は、挿入する行がないときも含めて、計画のたびに `on_insert` の各値を読む。そのため、列が読めない値は、それを書いたプルリクエストの計画を止める。
+生成列と `GENERATED ALWAYS` の識別列もエラーである。どちらも挿入で値を受け取らないからである。
+テーブルにない列はスキーマの変更を待ち、`--no-pending` があればエラーになる。
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "floor", which does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
+```
+
 ### 2つの行が持つキー
 
 ```text
@@ -419,7 +461,7 @@ kortopi: data/facility/room_types.csv: column "name" of table facility.room_type
 kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 ```
 
-どの行にも値を書いてその列を宣言するか、スキーマを変える道具でその列に既定値を与える。
+どの行にも値を書いてその列を宣言するか、`kortopi.toml` の `on_insert` でその列に値を与える（[kortopi.toml](#kortopitoml)）か、スキーマを変える道具でその列に既定値を与える。
 
 ### CSV ファイルの中の現在の時刻を表す語
 
@@ -433,10 +475,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の10個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
+最後の11個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
-- キーの列のないファイル・大小だけが違う名前・`--no-pending` があるときの綴りを誤った名前・パーティションとそのパーティションテーブル・行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
+- 次の誤りは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。キーの列のないファイル・大小だけが違う名前・`--no-pending` があるときの綴りを誤った名前・パーティションとそのパーティションテーブル・行を照合できないキー・`on_insert` の値である。
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:ce6799867d769a3784956f2a8c42331476f7622e7cf2e689c1ff8166e1c56c6c -->
+<!-- i18n-source: declaration.md sha256:83b56e39aab62fbc4a5ea0e8f1f681f5321198ce145b1ae597b53589e3e34a22 -->

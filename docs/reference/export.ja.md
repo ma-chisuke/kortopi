@@ -78,7 +78,7 @@ wrote data/facility/rooms.csv (2 rows)
 Exported 3 tables with 7 rows.
 ```
 
-各テーブルはファイルを1つ得る。ファイルには、生成列を除くテーブルのすべての列をテーブルの列の順に書き、行は主キーで並べる。
+各テーブルはファイルを1つ得る。ファイルには、生成列と `kortopi.toml` の `on_insert` が挙げる列を除くテーブルのすべての列をテーブルの列の順に書き、行は主キーで並べる。
 
 ```csv
 id,room_type,note
@@ -100,7 +100,7 @@ No changes. The database matches the declaration.
 
 - 行を自然キーで照合し、しかもその照合がテーブルに合っているなら、データベースが割り当てる ID を除く（[生成される ID の代わりの自然キー](#生成される-id-の代わりの自然キー)）。この例の `catalog/plans.csv` は `id,code,name,price` で始まる。`id` は環境ごとに生成される UUID なので、その列を除き、行を `code` で照合する。
 - 行を変えた時刻のように、データベースやほかのプログラムの設定する列は、既定値があれば除く。新しい行はその既定値を得る。
-- 行を作った時刻をアプリケーションが書く場合のように、`NOT NULL` で既定値のない列は残す。新しい行がその列の値を得られず、計画はそうした列で止まる（[宣言のファイル](declaration.ja.md#挿入する行が値を得られない列)）。ファイルに残した列は、ほかの列と同じく管理される。データベースと違う値は更新になる。kortopi には、挿入のときだけ設定する列はない。
+- 行を作った時刻をアプリケーションが書く場合のように、`NOT NULL` で既定値のない列には、新しい行で値が要る。値がなければ、計画はそうした列で止まる（[宣言のファイル](declaration.ja.md#挿入する行が値を得られない列)）。その列はファイルから除き、`kortopi.toml` の `on_insert` で `created_at = "now"` のように値を与える。そうすれば、新しい行はその値を得て、kortopi はその列を比べない（[宣言のファイル](declaration.ja.md#kortopitoml)）。ファイルに残した列は、ほかの列と同じく管理される。データベースと違う値は更新になる。
 - `GENERATED ALWAYS` の識別列は、照合キーに含まれない限り除く。更新ではその列を変えられないので、計画がそこで止まる。
 
   ```text
@@ -109,7 +109,7 @@ No changes. The database matches the declaration.
 
 ファイルから列を除くには、[書き出しのあとで列を除く](#書き出しのあとで列を除く)に従う。
 
-次に、テーブルの設定を `kortopi.toml` に書く（[宣言のファイル](declaration.ja.md#kortopitoml)）。自然キーで照合するテーブルの `key` と、宣言にない行を失うべきテーブルの `mode` である。
+次に、テーブルの設定を `kortopi.toml` に書く（[宣言のファイル](declaration.ja.md#kortopitoml)）。自然キーで照合するテーブルの `key`、宣言にない行を失うべきテーブルの `mode`、除いた列に新しい行で値が要るテーブルの `on_insert` の値である。
 
 ```toml
 [tables."catalog.plans"]
@@ -137,6 +137,25 @@ pro,Pro,20.00
 ```
 
 これで計画は、この宣言の計画がこの先使う設定のもとで、変更を見つけない。
+
+最初の書き出しの前に書いた設定は、その書き出しにもう効く。新しいファイルは `on_insert` が挙げる列を除くので、ファイルと設定は初めから食い違わない。
+
+```toml
+[tables."facility.rooms"]
+mode = "upsert"
+on_insert = { created_at = "now", created_by = "kortopi", sort_order = "0", note = "" }
+```
+
+```sh
+kortopi export --dir data --table facility.rooms
+```
+
+```csv
+name,capacity
+annex,10
+hall,80
+lobby,30
+```
 
 ### 書き出しのあとで列を除く
 
@@ -273,7 +292,7 @@ kortopi: name the tables to export with --table <schema>.<table>, or every table
 
 ### 行と列
 
-新しいファイルには、生成列を除くテーブルのすべての列を、テーブルの列の順に書く。
+新しいファイルには、生成列と `kortopi.toml` の `on_insert` が挙げる列を除くテーブルのすべての列を、テーブルの列の順に書く。
 行は、テーブルの照合キーで並べる。`kortopi.toml` の `key` か、なければ主キーである。
 照合順序を持つ列は照合順序 `"C"`、つまりバイトの順で並べるので、`B` は `a` より前に来る。ほかの列は、その型の順序で並べる。そのため、同じ行を2回書き出せば、どのサーバーでも同じファイルになる。
 順序のない型の列は、そのテキストで並べる。
@@ -444,4 +463,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:929102a09b9eb575973560c78ecd31a13da0ff3661169a505c57e17822e3f6b5 -->
+<!-- i18n-source: export.md sha256:6b3eb2b3ae58ad79193a87a94c05155a74dd8ea8fddddd1a0a3e980f3a55a0ac -->

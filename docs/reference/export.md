@@ -78,7 +78,7 @@ wrote data/facility/rooms.csv (2 rows)
 Exported 3 tables with 7 rows.
 ```
 
-Each table gets a file, with every column of the table but the generated ones, in the order of the table, and with its rows sorted by the primary key:
+Each table gets a file, with every column of the table but the generated ones and those that `on_insert` in `kortopi.toml` names, in the order of the table, and with its rows sorted by the primary key:
 
 ```csv
 id,room_type,note
@@ -100,7 +100,7 @@ Before the first apply, go through each file:
 
 - Remove the IDs that the database assigns, when the rows should match by a natural key, and when matching by it suits the table ([A natural key in place of a generated ID](#a-natural-key-in-place-of-a-generated-id)). In the example, `catalog/plans.csv` starts with `id,code,name,price`, and `id` is a UUID that each environment generates: remove the column, and match the rows by `code`.
 - Remove a column that the database or other programs set, such as the time a row was changed, when the column has a default: a new row then gets the default.
-- Keep a column that is `NOT NULL` and has no default, such as the time a row was created when the application writes it. A new row would get no value for it, and a plan stops on such a column ([Declaration files](declaration.md#a-column-that-the-rows-to-insert-would-lack)). Kept in the file, the column is managed as any other: a value that differs from the database is an update. kortopi has no column that is set on insert only.
+- A column that is `NOT NULL` and has no default, such as the time a row was created when the application writes it, needs a value in a new row, or a plan stops on it ([Declaration files](declaration.md#a-column-that-the-rows-to-insert-would-lack)). Remove it from the file, and give it a value in `on_insert` of `kortopi.toml`, such as `created_at = "now"`: a new row then gets the value, and kortopi never compares the column ([Declaration files](declaration.md#kortopitoml)). Kept in the file, the column is managed as any other: a value that differs from the database is an update.
 - Remove an identity column that is `GENERATED ALWAYS` unless it is part of the match key. A plan stops on it, because an update cannot change it:
 
   ```text
@@ -109,7 +109,7 @@ Before the first apply, go through each file:
 
 To remove columns from a file, follow [Drop columns after an export](#drop-columns-after-an-export).
 
-Then write the settings of the tables in `kortopi.toml` ([Declaration files](declaration.md#kortopitoml)): the `key` of a table that matches by a natural key, and the `mode` of a table that should lose the rows that the declaration lacks:
+Then write the settings of the tables in `kortopi.toml` ([Declaration files](declaration.md#kortopitoml)): the `key` of a table that matches by a natural key, the `mode` of a table that should lose the rows that the declaration lacks, and the values of `on_insert` of a table whose new rows need a value in a column that you removed:
 
 ```toml
 [tables."catalog.plans"]
@@ -137,6 +137,25 @@ pro,Pro,20.00
 ```
 
 A plan now finds no change, with the settings that a plan of this declaration will use from here on.
+
+Settings that you write before the first export count at that export already: a new file leaves out the columns that `on_insert` names, so the file and the settings agree from the start.
+
+```toml
+[tables."facility.rooms"]
+mode = "upsert"
+on_insert = { created_at = "now", created_by = "kortopi", sort_order = "0", note = "" }
+```
+
+```sh
+kortopi export --dir data --table facility.rooms
+```
+
+```csv
+name,capacity
+annex,10
+hall,80
+lobby,30
+```
 
 ### Drop columns after an export
 
@@ -273,7 +292,7 @@ Each file declares one table, in either format.
 
 ### Rows and columns
 
-A new file holds every column of its table but the generated ones, in the order of the table.
+A new file holds every column of its table but the generated ones and those that `on_insert` in `kortopi.toml` names, in the order of the table.
 The rows are sorted by the match key of the table: the `key` of `kortopi.toml`, or else the primary key.
 A column with a collation is sorted in the collation `"C"`, the order of its bytes, so `B` comes before `a`, and other columns in the order of their types: two exports of the same rows give the same file on every server.
 A column whose type has no ordering is sorted by its text.

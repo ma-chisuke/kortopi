@@ -39,7 +39,7 @@ Declare one of the two, never both ([A partition and its partitioned table](#a-p
 A table that inherits from another is no partition: kortopi reads and writes each of the two with `ONLY`, so both may be declared, each with its own rows.
 
 The columns that a file names are the columns that kortopi manages: it compares and updates them, and leaves the other columns of the table alone.
-A new row gets the default of every column that the file does not name.
+A new row gets the default of every column that the file does not name, or the value that `kortopi.toml` gives the column in `on_insert` ([kortopi.toml](#kortopitoml)).
 
 kortopi reads the files in the sorted order of their paths and stops at the first mistake.
 Fix it, and run the plan again.
@@ -154,10 +154,12 @@ Everything else is an error, because a plan must not change the database and mus
 - operators, such as `'a' || 'b'` and `1 + 2`;
 - subqueries, column references, parameters, `COLLATE`, `CASE`, and `DEFAULT`.
 
-To let the database fill a column, such as a generated ID or a timestamp with a default, leave the column out of the file. [kortopi export](export.md#what-to-edit-after-a-first-export) says when that suits a column: not for a column that is `NOT NULL` without a default, and not for an ID that other rows hold without a foreign key.
+To let the database fill a column, such as a generated ID or a timestamp with a default, leave the column out of the file. [kortopi export](export.md#what-to-edit-after-a-first-export) says when that suits a column: not for an ID that other rows hold without a foreign key.
+A column that is `NOT NULL` without a default needs a value in a new row: declare it, or give it a value with `on_insert` in `kortopi.toml` ([kortopi.toml](#kortopitoml)).
 
 The words `now`, `today`, `tomorrow`, and `yesterday`, in any case, are errors in a date or time value, because PostgreSQL reads them as the moment of reading, and the value would change from one plan to the next.
 Write the date or time itself.
+A value of `on_insert` in `kortopi.toml` may hold them, because kortopi never compares it ([kortopi.toml](#kortopitoml)).
 kortopi finds them in two places:
 
 - In a SQL file, the reader finds them in a string under a cast to a date or time type, such as `'now'::timestamptz`, `date 'today'`, or `'{2026-04-01,tomorrow}'::date[]`.
@@ -236,6 +238,23 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
 
   Their order decides the order in which the plan prints the key and sorts the rows.
   A changed value of the key is a deletion and an insertion, not an update: [kortopi export](export.md#a-natural-key-in-place-of-a-generated-id) says what follows for an ID that the database generates.
+- `on_insert` gives columns of the table values that kortopi sets when it inserts a row, and at no other time. It suits a column that a new row needs a value for and that the declaration should not manage, such as the time a row was created, which is `NOT NULL` without a default when the application writes it:
+
+  ```toml
+  [tables."facility.rooms"]
+  on_insert = { created_at = "now", created_by = "kortopi", sort_order = "0", note = "" }
+  ```
+
+  A section `[tables."facility.rooms".on_insert]` with a line for each column is the same.
+
+  - A value is a string, which PostgreSQL reads by the type of its column, as it reads a field of a CSV file: `"now"` is the time of the transaction that inserts the row, `"0"` in an integer column is 0, and `""` is the empty string, not NULL. A value of another kind, such as `sort_order = 0`, is an error. NULL cannot be written, and a value is never SQL.
+  - The words `now`, `today`, `tomorrow`, and `yesterday`, which a declaration refuses, are allowed.
+  - Every row that kortopi inserts into the table gets the values. kortopi never compares or updates such a column: a row that exists keeps what it holds, and a plan shows no change in the column.
+  - A column is named exactly as the table has it. The file of the table must not declare it, and it must not be a column of the match key, a generated column, or an identity column that is `GENERATED ALWAYS`.
+  - A column that the table lacks waits for the schema change, as a declared column does ([kortopi plan](plan.md#tables-and-columns-that-wait-for-a-schema-change)).
+  - A plan reads every value by the type of its column before it loads any row, also when there is no row to insert, and stops on a value that the column does not read ([A value of on_insert](#a-value-of-on_insert)).
+
+  Where you can change the schema, a default of the column serves better: it applies to every insert, not only to those of kortopi.
 - Any other setting is an error, and so is `key = []`.
 - Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults. [kortopi export](export.md) does not check this, so that a `key` can sort the rows of a table at its first export.
 
@@ -350,6 +369,12 @@ kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": wr
 kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key, mode, and on_insert
 ```
 
+### A value of on_insert that is not a string
+
+```text
+kortopi: data/kortopi.toml: table "facility.rooms": on_insert gives column "sort_order" an integer, not a string: write the value as a string, which PostgreSQL reads by the type of the column, as in sort_order = "0"
+```
+
 ### A file without the columns of the key
 
 ```text
@@ -400,6 +425,23 @@ kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a uniqu
 
 A unique index that uses another collation than its column, or an operator class that is not the default, cannot match rows as a plan compares them. Create a unique index on the column itself, or name another key.
 
+### A value of on_insert
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives column "created_at" the value "soon", which the type of the column does not read: invalid input syntax for type timestamp with time zone: "soon": write the value as a CSV file writes a value of the column
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to column "created_at", which data/facility/rooms.csv declares too: a declared column is compared and updated, and a column of on_insert is set only when a row is inserted: remove the column from one of the two
+kortopi: data/kortopi.toml: on_insert of table facility.rooms gives a value to column "name", which is a column of the match key: each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "Sort_Order", which is not a column of the table, but column "sort_order" is, whose name differs only in white space or case: write the name as the table has it
+```
+
+PostgreSQL reads each value of `on_insert` when a plan runs, also when there is no row to insert, so a value that the column does not read stops the plan of the pull request that writes it.
+A generated column and an identity column that is `GENERATED ALWAYS` are errors too, because they take no value in an insert.
+A column that the table lacks waits for the schema change; with `--no-pending`, it is an error:
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "floor", which does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
+```
+
 ### A key that two rows hold
 
 ```text
@@ -418,7 +460,7 @@ kortopi: data/facility/room_types.csv: column "name" of table facility.room_type
 kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 ```
 
-Declare the column with a value for every row, or give it a default with the tool that changes your schema.
+Declare the column with a value for every row, give it a value with `on_insert` in `kortopi.toml` ([kortopi.toml](#kortopitoml)), or give it a default with the tool that changes your schema.
 
 ### A word for the current time in a CSV file
 
@@ -432,8 +474,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last ten mistakes need the database, so kortopi reports them after it connects:
+The last eleven mistakes need the database, so kortopi reports them after it connects:
 
-- A file without the columns of the key, a name in another case, a misspelled name with `--no-pending`, a partition and its partitioned table, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
+- A file without the columns of the key, a name in another case, a misspelled name with `--no-pending`, a partition and its partitioned table, a key that cannot match rows, and a value of `on_insert`, are reported for every table at once, before any row is loaded.
 - A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
 - A column that the rows to insert would lack is reported for every table at once, after the tables are compared.

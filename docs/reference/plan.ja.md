@@ -316,6 +316,27 @@ kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_t
 - このフラグは、`--format sql`・`--exit-code`・`--schema` と組み合わせて使える。`--schema` は、検査するテーブルを絞る。
 - apply には、このフラグはない。apply は、データベースにないテーブルや列があれば必ず止まり、何も変えない（[kortopi apply](apply.ja.md#データベースにないテーブルや列)）。`kortopi apply --no-pending` は、そう告げるエラーになる。
 
+### 挿入のときだけ設定する値
+
+設定が `on_insert` で列に値を与えるテーブル（[宣言のファイル](declaration.ja.md#kortopitoml)）は、挿入する行があるとき、その値を1行で示す。
+
+```text
+facility.rooms (upsert, key: name)
+  on insert: created_at="now"  created_by="kortopi"  note=""  sort_order="0"
+  + name=annex  capacity=10
+  + name=hall  capacity=80
+  ~ name=lobby  capacity: 20 -> 30
+  2 to insert, 1 to update
+
+Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
+```
+
+- 値は、PostgreSQL が読んだ値ではなく、`kortopi.toml` に書いたとおりの文字列を、常に二重引用符で囲んで出す。`now` は `"now"` のままなので、同じ設定の2つの計画は同じ行を出す。apply は、挿入するすべての行にこれらの値を与える。
+- この行は、適用待ちの列の行のあと、行の前に置く。挿入する行のないテーブルには、この行を出さない。
+- kortopi はこれらの列を比べない。そのため変更として示すことはなく、すでにある行は持っている値を保つ。
+- テーブルにない `on_insert` の列は、宣言した列と同じく `column <name>: known after the schema is applied` として示す。
+- 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、それぞれの値を列の型で読む。読む先は、ロールバックするセーブポイントの中の一時テーブルである。これらの列への権限は要らない。
+
 ### 削除する行を参照する行
 
 テーブルの削除する行の下に、計画はそれを指すすべての外部キーを、テーブルごとに1回だけ示す。
@@ -428,6 +449,16 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - 削除は最後に、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
 - 名前はすべて二重引用符で囲む。PostgreSQL のある版でそのまま書ける名前が、別の版ではキーワードでありうるからである。ふつうのテーブルには適用と同じく `ONLY` を付け、パーティションテーブルには付けない。
 - スキーマの変更を待つテーブルには文を書かない。スキーマの変更を待つ列は、そのテーブルの文から除く。
+- `on_insert` の値を持つテーブルの `INSERT` は、宣言した列のあとにその列を挙げ、すべての行にその値を与える。文の前には、2行のコメントを置く。
+
+  ```sql
+  -- facility.rooms: 2 to insert, 1 to update
+  -- on insert: created_at="now"  created_by="kortopi"  note=""  sort_order="0"
+  -- PostgreSQL reads the values of on_insert when the script runs, in the settings of its session: a value such as now is the time of the transaction that runs the script.
+  INSERT INTO "facility"."rooms" ("name", "capacity", "created_at", "created_by", "note", "sort_order") VALUES
+    ('annex', '10', 'now', 'kortopi', '', '0'),
+    ('hall', '80', 'now', 'kortopi', '', '0');
+  ```
 
 することのない計画は、1行になる。
 
@@ -500,6 +531,10 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 "code" OPERATOR("pg_catalog".=) 'pro'::"pg_catalog"."text"
 ```
 
+`on_insert` の値は、計画が出力した値ではなく、`kortopi.toml` に書いた文字列である（[挿入のときだけ設定する値](#挿入のときだけ設定する値)）。
+PostgreSQL はそれを、スクリプトの実行時に、実行するセッションの設定で読む。`now` は計画の時刻ではなく、そのトランザクションの時刻になる。また、オフセットのないタイムスタンプのように意味が設定に左右される値は、apply とは違う値として読まれることがある。apply は、計画が固定する設定でその値を読むからである。
+こうした値は、どのセッションでも同じに読めるように書く。タイムスタンプにはオフセットを付け、日付は `YYYY-MM-DD` で書く。
+
 リテラルの読み方を変える設定のうち3つは、どんなリテラルにも運べない。ASCII でないテキストの `client_encoding`、`money` の `lc_monetary`、文書全体でなく断片である `xml` の値の `xmloption` である。
 スクリプトは、計画が値を読んだときと同じに、それらを `SET LOCAL` で固定する。
 kortopi のテストを動かすサーバーには C と en_US のロケールしかなく、どちらも `money` を同じに書く。そのため、テストが示すのは、`lc_monetary` の固定がそこで害にならないことだけである。
@@ -531,7 +566,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
-2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
+2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言が挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 5. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
@@ -567,4 +602,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:e20493217df088579a476a51ae734c736f489bbb4af9a5e731e0e43c045b36c8 -->
+<!-- i18n-source: plan.md sha256:ed628e62d6810a48d6507a272e9934adb1471ea70f65767a0225c0ec6cea0daa -->
