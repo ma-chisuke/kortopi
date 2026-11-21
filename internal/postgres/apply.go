@@ -230,13 +230,19 @@ func sortedNames(loaded map[declaration.TableName]*loadedTable) []declaration.Ta
 	return names
 }
 
-// Commit makes the changes of the apply lasting.
+// Commit makes the changes of the apply lasting. When the apply deleted rows,
+// it first checks that the deletions deleted and changed through foreign
+// keys every row that Effects counted (ADR-0039); otherwise it commits
+// nothing.
 func (s *Session) Commit(ctx context.Context) error {
 	switch {
 	case !s.apply:
 		return errNotApply
 	case s.closed || s.committed:
 		return errors.New("the session has ended: there is nothing to commit")
+	}
+	if err := s.checkEffect(ctx); err != nil {
+		return err
 	}
 	if err := s.tx.Commit(ctx); err != nil {
 		return commitError(err)

@@ -698,6 +698,64 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 	return edges, nil
 }
 
+// checkEffect checks, after the deletions of an apply, that every row that
+// Effects counted as deleted or changed through a foreign key is gone from
+// the snapshot of the transaction: the transaction deleted it, or wrote a new
+// version of it. A row that is still there was deleted, or pointed at
+// another row, by another transaction after the snapshot, so the deletions
+// did not do what the output of the apply says. It returns ErrConflict then.
+func (s *Session) checkEffect(ctx context.Context) error {
+	if s.effect == "" || !s.deletesChecked {
+		return nil
+	}
+	rows, err := s.tx.Query(ctx, `SELECT DISTINCT x.via, n.nspname::pg_catalog.text, c.relname::pg_catalog.text, c.relkind = 'p'
+		FROM `+s.effect+` AS x
+		JOIN pg_catalog.pg_class AS c ON c.oid = x.via
+		JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+		WHERE x.kind OPERATOR(pg_catalog.<>) '`+kindBlocking+`'
+		ORDER BY 2, 3`)
+	if err != nil {
+		return fmt.Errorf("read the rows that the deletions reached: %w", err)
+	}
+	type reached struct {
+		oid         uint32
+		name        declaration.TableName
+		partitioned bool
+	}
+	var tables []reached
+	for rows.Next() {
+		var r reached
+		if err := rows.Scan(&r.oid, &r.name.Schema, &r.name.Name, &r.partitioned); err != nil {
+			rows.Close()
+			return fmt.Errorf("read the rows that the deletions reached: %w", err)
+		}
+		tables = append(tables, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the rows that the deletions reached: %w", err)
+	}
+	for _, t := range tables {
+		from := quoteTable(t.name)
+		if !t.partitioned {
+			from = "ONLY " + from
+		}
+		var left int64
+		// The array of identities makes PostgreSQL look the rows up by them.
+		if err := s.tx.QueryRow(ctx, "SELECT pg_catalog.count(*) FROM "+from+" AS "+walkRowAlias+" JOIN "+s.effect+" AS x ON x.rel OPERATOR(pg_catalog.=) "+
+			walkRowAlias+".tableoid AND x.tid OPERATOR(pg_catalog.=) "+walkRowAlias+".ctid AND x.kind OPERATOR(pg_catalog.<>) '"+kindBlocking+"' "+
+			"WHERE "+walkRowAlias+".ctid OPERATOR(pg_catalog.=) ANY (ARRAY(SELECT y.tid FROM "+s.effect+" AS y WHERE y.via OPERATOR(pg_catalog.=) $1 "+
+			"AND y.kind OPERATOR(pg_catalog.<>) '"+kindBlocking+"'))", t.oid).Scan(&left); err != nil {
+			return fmt.Errorf("check the rows of table %s that the deletions reached: %w", t.name, err)
+		}
+		if left > 0 {
+			return fmt.Errorf("the deletions did not delete or change %d %s of table %s that the plan counted: %w",
+				left, plural(left, "row", "rows"), t.name, ErrConflict)
+		}
+	}
+	return nil
+}
+
 // sortSteps sorts the steps of an effect by level, then by the referencing
 // table, the name of the foreign key, and the referenced table.
 func sortSteps(steps []plan.Step) {
