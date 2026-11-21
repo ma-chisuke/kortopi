@@ -21,6 +21,7 @@ The files themselves are described in [Declaration files](declaration.md), and t
 
 A value prints in a plan as PostgreSQL prints it as text, in the settings of the next section.
 A value that the type of its column takes for equal to the stored value is no change, also when the declaration writes it otherwise, and an apply does not write it ([Values that the type takes for equal](#values-that-the-type-takes-for-equal)).
+An interval is the exception: it is equal only when its months, its days, and its time are, although its type takes `1 mon` for `30 days` ([Intervals](#intervals)).
 
 ## The settings of the session
 

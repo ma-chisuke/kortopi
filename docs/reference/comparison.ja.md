@@ -21,6 +21,7 @@ kortopi は、ファイルのテキストをデータベースと比べること
 
 計画は値を、次の節の設定のもとで PostgreSQL がテキストとして出力するとおりに表示する。
 列の型が保存されている値と等しいとみなす宣言の値は、宣言が別の書き方をしていても変更にならず、適用もその値を書かない（[型が等しいとみなす値](#型が等しいとみなす値)）。
+期間は例外である。型は `1 mon` を `30 days` と等しいとみなすが、期間は月数・日数・時間がどれも等しいときにだけ等しい（[期間](#期間)）。
 
 ## セッションの設定
 
@@ -199,4 +200,4 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 
 これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0040](../adr/ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:3c142911f02b9cb2786c27ba9ae59ea87d90d34e36531164181d30be104483d0 -->
+<!-- i18n-source: comparison.md sha256:688404abc5b0af5d6344297c3e857765fce6642aaf107a173113239b45bd7982 -->
