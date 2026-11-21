@@ -295,13 +295,14 @@ func (c *check) onInsert(ctx context.Context, db Database, s config.Table) (valu
 	for _, v := range s.OnInsert {
 		col, ok := c.byName[v.Column]
 		switch {
+		case slices.Contains(key, v.Column):
+			// Also for a key column that the file declares: the file must
+			// keep it, so on_insert is where it goes.
+			errs = append(errs, OnInsertKeyError(c.settingsFile, c.table.Name, v.Column))
 		case c.declared[v.Column]:
 			errs = append(errs, fmt.Errorf("%s gives a value to column %q, which %s declares too: "+
 				"a declared column is compared and updated, and a column of on_insert is set only when a row is inserted: "+
 				"remove the column from one of the two", where, v.Column, c.file))
-		case slices.Contains(key, v.Column):
-			errs = append(errs, fmt.Errorf("%s gives a value to column %q, which is a column of the match key: "+
-				"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert", where, v.Column))
 		case !ok:
 			if near := c.nearColumns(v.Column); len(near) > 0 {
 				errs = append(errs, fmt.Errorf("%s names column %q, which is not a column of the table, but %s is, "+
@@ -340,6 +341,15 @@ func (c *check) onInsert(ctx context.Context, db Database, s config.Table) (valu
 			"write the value as a CSV file writes a value of the column", where, r.Column, strconv.Quote(values[i].Value), r.Reason))
 	}
 	return values, pending, errs, nil
+}
+
+// OnInsertKeyError is the error of a column of the match key that the
+// settings of the table name in on_insert (ADR-0035). An export gives it
+// too, before it writes a file without the key.
+func OnInsertKeyError(settingsFile string, table declaration.TableName, column string) error {
+	return fmt.Errorf("%s: on_insert of table %s gives a value to column %q, which is a column of the match key: "+
+		"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert",
+		settingsFile, table, column)
 }
 
 // kinds returns whether the mode of a table allows updates and deletes.

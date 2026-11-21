@@ -127,6 +127,14 @@ func TestBuildOnInsertErrors(t *testing.T) {
 				"add the column to the file, or name another key with key in " + settingsFile + "\n" + inKey("id"),
 		},
 		{
+			// The file must keep a key column, so the error is that of the
+			// key, which says to remove the column from on_insert.
+			name:     "a column of the primary key that the file declares too",
+			table:    csvTable(tableT, "id", "name"),
+			settings: config.Table{OnInsert: insertValues("id", "1")},
+			want:     inKey("id"),
+		},
+		{
 			name:     "a column of the chosen key",
 			table:    csvTable(tableT, "id", "name"),
 			settings: config.Table{Key: []string{"code"}, OnInsert: insertValues("code", "x")},
