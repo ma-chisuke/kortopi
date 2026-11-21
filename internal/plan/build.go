@@ -335,7 +335,7 @@ func (c *check) settle(chosen []string) (columns, []error) {
 				c.missing[name] = true
 				errs = append(errs, fmt.Errorf("%s: column %s of table %s does not exist in the database, and without --no-pending it would wait for the schema change: "+
 					"correct the name, or apply the schema change that adds the column",
-					c.file, strconv.Quote(name), FormatTable(c.table.Name)))
+					c.file, strconv.Quote(name), c.table.Name))
 				continue
 			}
 			cols.pending = append(cols.pending, name)

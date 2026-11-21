@@ -816,6 +816,7 @@ func TestBuildNoPending(t *testing.T) {
 	}
 	// a.t has the columns id, name, and sort_order; b.u and c.v do not exist.
 	infos := map[declaration.TableName]TableInfo{tableT: existing([]string{"id"}, "id", "name", "sort_order")}
+	tableWithSpace := declaration.TableName{Schema: "a", Name: "t v"}
 	tests := []struct {
 		name     string
 		tables   []declaration.Table
@@ -837,6 +838,16 @@ func TestBuildNoPending(t *testing.T) {
 			name:   "a column with a space inside its name",
 			tables: []declaration.Table{csvTable(tableT, "id", "sort order")},
 			want:   missingColumn("a.t", "sort order"),
+		},
+		{
+			// The table is named as in the other errors of its columns.
+			name:   "a column of a table whose name holds a space",
+			tables: []declaration.Table{csvTable(tableWithSpace, "id", "floor", "total")},
+			infos: map[declaration.TableName]TableInfo{
+				tableWithSpace: with(existing([]string{"id"}, "id", "total"), func(i *TableInfo) { i.Columns[1].Generated = true }),
+			},
+			want: missingColumn("a.t v", "floor") + "\n" +
+				filepath.FromSlash(`data/a/t v.csv: column "total" of table a.t v is generated, so the database computes its value: remove the column from the file`),
 		},
 		{
 			name:   "columns and a table",
