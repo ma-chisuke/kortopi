@@ -82,7 +82,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 8. `--allow-delete` があれば、参照するテーブルから参照されるテーブルへの順に、宣言にない行を削除する。
 9. コミットし、書いたものを出力する。
 
-どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガーかルールが文のすることを変えたので、apply は止まる。
+どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガー、計画のあとに作られたルール、外部キーのカスケードのどれかが文のすることを変えたので、apply は止まる。
 apply の文を書き換えるルールは、それより前に計画を止める。行数の確認では、すべてのルールを捉えられないからである（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
 計画と書き込みは1つのスナップショットから来るので、出力した計画が、apply の書き込むものである。
 その間に別のトランザクションが同じ行を変えれば、apply は失敗し、もう一度実行するよう求める。
@@ -386,7 +386,7 @@ kortopi: update table app.t: could not serialize access due to concurrent update
 ### 文を変えるトリガーやルール
 
 ```text
-kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops
+kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops
 ```
 
 ### 自己矛盾する宣言
@@ -403,4 +403,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:ec2ad3b08d456e4da9ff59db177dba59bf0b17d6fa71209f3bbfa71d893ad24c -->
+<!-- i18n-source: apply.md sha256:5c1c92195972f479d49131a3ef6ff76c3698115600200dfd455f3f75d462fa1f -->

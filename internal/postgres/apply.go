@@ -327,7 +327,7 @@ func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepa
 	}
 	if got := int(tag.RowsAffected()); got != want {
 		return 0, fmt.Errorf("%s table %s changed %d %s, but the plan has %d: "+
-			"a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops",
+			"a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops",
 			verb, table, got, plural(int64(got), "row", "rows"), want)
 	}
 	return want, nil

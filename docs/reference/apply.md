@@ -82,7 +82,7 @@ An apply refuses a session whose `session_replication_role` is not `origin`, bec
 8. With `--allow-delete`, from referencing tables to referenced ones, it deletes the rows that the declaration lacks.
 9. It commits, and prints what it wrote.
 
-Each statement must change as many rows as the plan shows; otherwise a trigger or a rule changed what it did, and the apply stops.
+Each statement must change as many rows as the plan shows; otherwise a trigger, a rule created after the plan, or the cascade of a foreign key changed what it did, and the apply stops.
 A rule that would rewrite the statements of an apply stops the plan before that, because the count of rows does not catch every rule ([Declaration files](declaration.md#a-table-with-a-rule)).
 Because the plan and the writes come from one snapshot, the printed plan is what the apply writes.
 When another transaction changes the same rows in the meantime, the apply fails and asks you to run it again.
@@ -386,7 +386,7 @@ kortopi: update table app.t: could not serialize access due to concurrent update
 ### A trigger or a rule that changes a statement
 
 ```text
-kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops
+kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops
 ```
 
 ### A declaration that contradicts itself
