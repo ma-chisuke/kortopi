@@ -196,6 +196,11 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | level (of a cascade) | 段 |
 | effect (of deletions, through foreign keys) | 削除の波及 |
 | declared row in the way (of the deletions) | 削除とぶつかる宣言した行 |
+| walk (that follows the foreign keys of the deletions) | たどる処理 |
+| block (the lines of the effect of a table in a plan) | まとまり |
+| step (of the walk: one foreign key at one level) | ステップ |
+| not known (the effect of a step) | 分からない |
+| identity (of a row: `tableoid` and `ctid`; not an identity column) | 行の識別子 |
 | trigger, rule (of PostgreSQL) | トリガー、ルール |
 | set-based statement | 集合単位の文 |
 | phase (of an apply) | 段階 |

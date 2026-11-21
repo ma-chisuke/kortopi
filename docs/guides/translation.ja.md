@@ -196,6 +196,11 @@
 | level（カスケードの） | 段 |
 | effect（外部キーを通じた削除の） | 削除の波及 |
 | declared row in the way（削除の） | 削除とぶつかる宣言した行 |
+| walk（削除の外部キーをたどる処理） | たどる処理 |
+| block（計画で、テーブルの削除の波及を示す行の集まり） | まとまり |
+| step（たどる処理の、1つの段の1つの外部キー） | ステップ |
+| not known（ステップの波及が） | 分からない |
+| identity（行の。`tableoid` と `ctid` であり、identity column とは別） | 行の識別子 |
 | trigger, rule（PostgreSQL の） | トリガー、ルール |
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
@@ -253,4 +258,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:5f4e23560ddeae1d30165b4509f9939291d3187c1e06370ec4fe8a738d819da5 -->
+<!-- i18n-source: translation.md sha256:269f4e979fbe908285dc3b189f7a0adce66036dc9306e9aa5b2eba66dac28052 -->
