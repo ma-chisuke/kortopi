@@ -86,7 +86,7 @@ What the reference says about the equality of other types:
 - Good, because a change of the months, the days, or the time of an interval shows in the plan with both values, and an apply writes it.
 - Good, because the comparison is exact on every version from 15 to 18, and needs no expression of its own for an array, a range, a multirange, or a domain.
 - Good, because a declared key that the table cannot hold stops the plan with the keys, instead of a plan that shows nothing, or an apply that fails on the unique index with an error that blames another transaction.
-- Bad, because a declaration that writes an interval in another split of parts than the database stores shows one update, the first time it is planned with this version. The release notes say so:
+- Bad, because a declaration that writes an interval in another split of parts than the database stores shows one update, the first time it is planned with this version. The pull request of this change marks it as breaking in its title, with `!` after the type. GitHub generates the notes of a release from the titles of its pull requests, and the maintainer adds this text to them:
 
   ```text
   An interval now compares by its months, days, and time: `1 mon` no longer equals `30 days`, nor `1 day` `24 hours`. A declaration that writes an interval in another split of parts than the database stores shows one update, which an apply writes. Such an interval in a match key stops the plan with the keys.

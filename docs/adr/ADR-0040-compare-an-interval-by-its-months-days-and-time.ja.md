@@ -86,7 +86,7 @@ ADR-0023 は、テストで固めた振る舞いとして「`1 day` と `24 hour
 - 良い点：期間の月数・日数・時間の変更は、2つの値とともに計画に現れ、適用はそれを書く。
 - 良い点：比べ方は 15〜18 のどのバージョンでも厳密であり、配列・範囲・複数範囲・ドメインのために独自の式を要しない。
 - 良い点：テーブルが持てない宣言のキーは、キーを示して計画を止める。何も示さない計画にも、一意インデックスで失敗してほかのトランザクションのせいにするエラーを出す適用にもならない。
-- 悪い点：データベースが持つのとは違う部分の分け方で期間を書いた宣言は、このバージョンで初めて計画を立てたときに更新を1つ示す。リリースノートには、次の文を書く。
+- 悪い点：データベースが持つのとは違う部分の分け方で期間を書いた宣言は、このバージョンで初めて計画を立てたときに更新を1つ示す。この変更のプルリクエストは、タイトルの種類の後ろに `!` を付けて、互換性を壊す変更であることを示す。GitHub はリリースノートをプルリクエストのタイトルから生成し、メンテナーがそこに次の文を加える。
 
   ```text
   An interval now compares by its months, days, and time: `1 mon` no longer equals `30 days`, nor `1 day` `24 hours`. A declaration that writes an interval in another split of parts than the database stores shows one update, which an apply writes. Such an interval in a match key stops the plan with the keys.
@@ -134,4 +134,4 @@ ADR-0023 は、テストで固めた振る舞いとして「`1 day` と `24 hour
 - [日付と時刻の関数：`extract`](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT)
 - 利用者向けのリファレンス：[docs/reference/comparison.ja.md](../reference/comparison.ja.md)
 
-<!-- i18n-source: ADR-0040-compare-an-interval-by-its-months-days-and-time.md sha256:e30bcddbce6219e54f9170b81b5be8f48583d9e333df3cb5e7a3453aefd4405e -->
+<!-- i18n-source: ADR-0040-compare-an-interval-by-its-months-days-and-time.md sha256:6d32024d2a350fb5218ff99378f364009a24242d662ebf8454ebb87114d714b3 -->
