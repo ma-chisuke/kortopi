@@ -221,5 +221,10 @@
 | module cache（Go の） | モジュールキャッシュ |
 | sign, signature | 署名する、署名 |
 | administrator（リポジトリの） | 管理者 |
+| commit message, subject（コミットメッセージの） | コミットメッセージ、件名 |
+| title（プルリクエストの） | タイトル |
+| author（プルリクエストの）, login（GitHub のアカウントの） | 作成者、ログイン名 |
+| bot, app（GitHub App） | ボット、アプリ |
+| expression（ワークフローの） | 式 |
 
-<!-- i18n-source: translation.md sha256:af5bf61b7badf056a1d0ff037a008ce82952d0e764fc83d43fd863f8f252ed4a -->
+<!-- i18n-source: translation.md sha256:b5702fcecdc137e88987e9c494ab04ae7eb7823eb44992090b97ab43694b0b60 -->

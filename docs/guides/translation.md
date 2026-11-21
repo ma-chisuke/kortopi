@@ -221,3 +221,8 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | module cache (of Go) | モジュールキャッシュ |
 | sign, signature | 署名する、署名 |
 | administrator (of a repository) | 管理者 |
+| commit message, subject (of a commit message) | コミットメッセージ、件名 |
+| title (of a pull request) | タイトル |
+| author (of a pull request), login (of an account on GitHub) | 作成者、ログイン名 |
+| bot, app (a GitHub App) | ボット、アプリ |
+| expression (in a workflow) | 式 |
