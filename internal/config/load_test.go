@@ -498,6 +498,18 @@ func TestCheckDeclared(t *testing.T) {
 		t.Errorf("CheckDeclared() = %v, want %q", err, want)
 	}
 
+	// Values of on_insert are settings like any other: for a table that no
+	// file declares, they are an error too.
+	dir = writeSettings(t, "[tables.\"facility.room\"]\non_insert = { created_at = \"now\" }\n")
+	if s, err = config.Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	err = s.CheckDeclared(declared)
+	want = filepath.Join(dir, config.FileName) + `: table "facility.room" has settings, but no file declares it: correct the name, or remove its settings`
+	if err == nil || err.Error() != want {
+		t.Errorf("CheckDeclared() of on_insert = %v, want %q", err, want)
+	}
+
 	var none *config.Settings
 	if err := none.CheckDeclared(nil); err != nil {
 		t.Errorf("nil.CheckDeclared() = %v, want nil", err)
