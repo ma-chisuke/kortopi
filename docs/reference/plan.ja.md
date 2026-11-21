@@ -183,6 +183,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - 接続を1つ開く。`PGAPPNAME` が別の値を設定しない限り、`application_name` は `kortopi` にする。
 - すべてを分離レベル `REPEATABLE READ` の1つのトランザクションで実行し、最後にロールバックする。そのため、どのテーブルも1つのスナップショットと比べる。
 - 値の読み方を変える設定を固定する（[値の比べ方](comparison.ja.md#セッションの設定)）。
+- どの行を読み込むよりも前に、存在するテーブルの `on_insert` の値ごとに、セーブポイントの中でその列だけの一時テーブルを作って値を挿入する。そのあと、セーブポイントをロールバックする（[挿入のときだけ設定する値](#挿入のときだけ設定する値)）。
 - 宣言したテーブルごとに、セーブポイントの中で一時テーブルを作って宣言の行を読み込む。本物のテーブルと比べ終えたら、セーブポイントをロールバックする。そのため、次のテーブルへ移る前に一時テーブルは消えている。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
 
@@ -602,4 +603,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:017245aa56d4afa567c074908837fbff9dd7307f40593785e030243dab281f86 -->
+<!-- i18n-source: plan.md sha256:a36d1e2600d8c82da672d35e156ebb07207e69763e7d1b6f2258d0faca69c564 -->

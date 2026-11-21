@@ -183,6 +183,7 @@ In the database, a plan does the following and nothing else:
 - It opens one connection, with `application_name` set to `kortopi` unless `PGAPPNAME` sets another.
 - It runs everything in one transaction at the isolation level `REPEATABLE READ`, so all tables are compared against one snapshot, and rolls the transaction back at the end.
 - It pins the settings that change how values are read ([How values are compared](comparison.md#the-settings-of-the-session)).
+- For each value of `on_insert` of a table that exists, before it loads any row, it creates a temporary table of that column alone inside a savepoint, inserts the value into it, and rolls the savepoint back ([Values that only an insert sets](#values-that-only-an-insert-sets)).
 - For each declared table, it creates a temporary table inside a savepoint, loads the declared rows into it, compares them with the real table, and rolls the savepoint back, so the temporary table is gone before the next table.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
 
