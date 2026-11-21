@@ -427,6 +427,21 @@ kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a uniqu
 
 列とは違う照合順序や、既定でない演算子クラスを使う一意インデックスは、計画が比べるとおりには行を照合できない。列そのものに一意インデックスを作るか、別のキーを指定する。
 
+### ルールを持つテーブル
+
+```text
+kortopi: table facility.rooms has rule "rooms_log" ON INSERT, and kortopi does not write through rules, because a rule makes the statements of an apply write other rows than the plan shows: replace the rule with a trigger, or leave the table out of the declaration
+kortopi: table facility.rooms has rule "rooms_soft_delete" ON DELETE, and kortopi does not write through rules, because a rule makes the statements of an apply write other rows than the plan shows: replace the rule with a trigger, give the table mode upsert in [tables."facility.rooms"] of data/kortopi.toml, which deletes no row, or leave the table out of the declaration
+```
+
+PostgreSQL のルールは、文を実行する前に別の文へ書き換える。kortopi はルールを通して書かない。
+挿入の `DO ALSO` のルールは、kortopi が挿入する行について何も書かない。`DO INSTEAD` のルールは、別の行を書きながら、計画どおりの行数を報告することがある。そのため apply はこれに気付けない。
+トリガーなら、アプリケーションの行と同じく、kortopi が書く各行について発動する。
+
+- ルールを数えるのは、そのテーブルを宣言していて、テーブルのモードが書く種類の文をルールが書き換え、ルールが有効なときである。`INSERT` はどのモードでも、`UPDATE` は `upsert` と `sync` で、`DELETE` は `sync` で、`--allow-delete` がなくても数える。
+- `ALTER TABLE ... DISABLE RULE` で無効にしたルールと、`ENABLE REPLICA RULE` でレプリカでだけ発動するルールは数えない。宣言したパーティションテーブルのパーティションのルールと、宣言したテーブルの上のビューのルールも数えない。
+- ルールを持つテーブルも、ほかのテーブルと同じように書き出せる。
+
 ### on_insert の値
 
 ```text
@@ -476,10 +491,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の11個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
+最後の12個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
-- 次の誤りは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。キーの列のないファイル・大小だけが違う名前・`--no-pending` があるときの綴りを誤った名前・パーティションとそのパーティションテーブル・行を照合できないキー・`on_insert` の値である。
+- 次の誤りは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。キーの列のないファイル・大小だけが違う名前・`--no-pending` があるときの綴りを誤った名前・パーティションとそのパーティションテーブル・行を照合できないキー・ルールを持つテーブル・`on_insert` の値である。
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:2d08627c9c5adeff934fc7857f73c4ab9813a8b240a9c71bcb45cfd45d1ea7d7 -->
+<!-- i18n-source: declaration.md sha256:7674cfa79af39dd2a871935f3baf909f4cafd69589fc11ddfa3f5cec9c5f340b -->

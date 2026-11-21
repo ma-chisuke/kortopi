@@ -426,6 +426,21 @@ kortopi: data/kortopi.toml: key ("code") of table facility.room_types is a uniqu
 
 A unique index that uses another collation than its column, or an operator class that is not the default, cannot match rows as a plan compares them. Create a unique index on the column itself, or name another key.
 
+### A table with a rule
+
+```text
+kortopi: table facility.rooms has rule "rooms_log" ON INSERT, and kortopi does not write through rules, because a rule makes the statements of an apply write other rows than the plan shows: replace the rule with a trigger, or leave the table out of the declaration
+kortopi: table facility.rooms has rule "rooms_soft_delete" ON DELETE, and kortopi does not write through rules, because a rule makes the statements of an apply write other rows than the plan shows: replace the rule with a trigger, give the table mode upsert in [tables."facility.rooms"] of data/kortopi.toml, which deletes no row, or leave the table out of the declaration
+```
+
+A rule of PostgreSQL rewrites a statement into others before it runs, and kortopi does not write through it.
+A rule `DO ALSO` on inserts writes nothing for the rows that kortopi inserts, and a rule `DO INSTEAD` can report the number of rows that the plan expects while it writes others, so an apply could not tell.
+A trigger fires for each row that kortopi writes, as for the rows of your application.
+
+- A rule counts when its table is declared, it rewrites a kind of statement that the mode of the table writes, and it is enabled: `INSERT` in every mode, `UPDATE` in `upsert` and `sync`, and `DELETE` in `sync`, also without `--allow-delete`.
+- A rule that is disabled, with `ALTER TABLE ... DISABLE RULE`, or that fires only on a replica, with `ENABLE REPLICA RULE`, does not count, and neither does a rule of a partition of a declared partitioned table, or of a view over a declared table.
+- An export of a table with a rule works as for any table.
+
 ### A value of on_insert
 
 ```text
@@ -475,8 +490,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last eleven mistakes need the database, so kortopi reports them after it connects:
+The last twelve mistakes need the database, so kortopi reports them after it connects:
 
-- A file without the columns of the key, a name in another case, a misspelled name with `--no-pending`, a partition and its partitioned table, a key that cannot match rows, and a value of `on_insert`, are reported for every table at once, before any row is loaded.
+- A file without the columns of the key, a name in another case, a misspelled name with `--no-pending`, a partition and its partitioned table, a key that cannot match rows, a table with a rule, and a value of `on_insert`, are reported for every table at once, before any row is loaded.
 - A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
 - A column that the rows to insert would lack is reported for every table at once, after the tables are compared.

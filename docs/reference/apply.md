@@ -83,6 +83,7 @@ An apply refuses a session whose `session_replication_role` is not `origin`, bec
 9. It commits, and prints what it wrote.
 
 Each statement must change as many rows as the plan shows; otherwise a trigger or a rule changed what it did, and the apply stops.
+A rule that would rewrite the statements of an apply stops the plan before that, because the count of rows does not catch every rule ([Declaration files](declaration.md#a-table-with-a-rule)).
 Because the plan and the writes come from one snapshot, the printed plan is what the apply writes.
 When another transaction changes the same rows in the meantime, the apply fails and asks you to run it again.
 

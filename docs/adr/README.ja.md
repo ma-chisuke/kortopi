@@ -42,6 +42,7 @@
 | [ADR-0034](ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) | `--no-pending` で、データベースにないすべての名前で計画を止められるようにする | accepted | 2026-11-21 |
 | [ADR-0035](ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.ja.md) | 挿入のときだけ設定する値を、設定に書けるようにする | accepted | 2026-11-21 |
 | [ADR-0036](ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.ja.md) | データベースはそれぞれ1つの接点に登録し、バイナリを1つにするかデータベースごとに分けるかは2つ目のデータベースが来たときに決める | accepted | 2026-11-21 |
+| [ADR-0038](ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) | apply がルールを通して書くことになる、宣言したテーブルのルールで止まる | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.ja.md) | issue は、必須の欄を持つフォームで書く | accepted | 2026-11-21 |
 
-<!-- i18n-source: README.md sha256:afcd21beccb9b5703155581465279b624cf6813199a148e6c66323b8d08f286d -->
+<!-- i18n-source: README.md sha256:1d446923572d4066b66fd2d99f8cec24274fa8ce79f373a1e095499af1e6d06d -->

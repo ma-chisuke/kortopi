@@ -75,6 +75,7 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 			continue
 		}
 		errs = append(errs, declaredTwice(decl.Dir, dt, info.PartitionOf, declared)...)
+		errs = append(errs, ruleErrors(settingsFile, dt.Name, info.Rules, updates, deletes)...)
 		c := &check{table: dt, file: dt.Path(decl.Dir), settingsFile: settingsFile, info: info, noPending: opts.NoPending}
 		cols, tableErrs := c.settle(s.Key)
 		values, pendingValues, valueErrs, err := c.onInsert(ctx, db, s)
@@ -151,6 +152,41 @@ func declaredTwice(dir string, t *declaration.Table, partitionOf []declaration.T
 		errs = append(errs, fmt.Errorf("table %s is %s, and both tables are declared, %s: "+
 			"the rows of a partition are rows of its partitioned table too, so these rows would be declared twice: declare only one of the two tables",
 			t.Name, PartitionPhrase(partitionOf, i), files))
+	}
+	return errs
+}
+
+// ruleErrors returns an error for each rule of a table that rewrites a kind
+// of statement that the mode of the table writes: an insert in every mode,
+// an update when updates is true, and a deletion when deletes is true
+// (ADR-0038). Such a rule changes what the statements of an apply write, and
+// a rule that adds statements, such as DO ALSO, does not change the number
+// of rows that they report, so an apply could not tell. A rule on a kind of
+// statement that the mode never writes cannot fire, and is no mistake.
+func ruleErrors(settingsFile string, name declaration.TableName, rules []Rule, updates, deletes bool) []error {
+	var errs []error
+	for _, r := range rules {
+		other := ""
+		switch r.Event {
+		case RuleOnInsert:
+		case RuleOnUpdate:
+			if !updates {
+				continue
+			}
+			other = fmt.Sprintf(", give the table mode %s in [tables.%s] of %s, which updates no row",
+				config.ModeInsert, strconv.Quote(name.String()), settingsFile)
+		case RuleOnDelete:
+			if !deletes {
+				continue
+			}
+			other = fmt.Sprintf(", give the table mode %s in [tables.%s] of %s, which deletes no row",
+				config.ModeUpsert, strconv.Quote(name.String()), settingsFile)
+		default:
+			continue
+		}
+		errs = append(errs, fmt.Errorf("table %s has rule %q ON %s, and kortopi does not write through rules, "+
+			"because a rule makes the statements of an apply write other rows than the plan shows: "+
+			"replace the rule with a trigger%s, or leave the table out of the declaration", name, r.Name, r.Event, other))
 	}
 	return errs
 }

@@ -567,7 +567,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
-2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
+2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないこと、apply の文を書き換えるルールをどのテーブルも持たないこと（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）も検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言も `on_insert` も挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 5. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
@@ -601,6 +601,6 @@ esac
 
 `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:6abef0903bce2a11f019bc8080e91b485ffc973101f8de2281928887b63b37dc -->
+<!-- i18n-source: plan.md sha256:4ff21927ead5cef8c8357cbd17c008824cdc186b92be4b960ab874204ecfe1d2 -->

@@ -83,6 +83,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.plans TO deployer;
 9. コミットし、書いたものを出力する。
 
 どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガーかルールが文のすることを変えたので、apply は止まる。
+apply の文を書き換えるルールは、それより前に計画を止める。行数の確認では、すべてのルールを捉えられないからである（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
 計画と書き込みは1つのスナップショットから来るので、出力した計画が、apply の書き込むものである。
 その間に別のトランザクションが同じ行を変えれば、apply は失敗し、もう一度実行するよう求める。
 
@@ -388,4 +389,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:27b89f7d07c4d81fbafe88e29aa8a37ac35accda729989a7762a41295ca4b843 -->
+<!-- i18n-source: apply.md sha256:e2e5cb3f24237a7a91b923f0375d7cb725b383aff2124bda27b9934d6f5365fe -->
