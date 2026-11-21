@@ -139,8 +139,10 @@ After the fact:
 - The golden test `TestWrite` in `internal/script` confirms the comments of the plan as SQL.
 - Integration tests against PostgreSQL 15 to 18 in `make check-all`, in `internal/postgres`:
   - `TestEffectsOfEveryAction`: a cascade three levels deep into 50,000 rows, `SET NULL` with and without a column list, `SET DEFAULT`, `NO ACTION`, `RESTRICT`, and tables that the role may not read at the first and the second level;
-  - `TestEffectsThroughTreesDiamondsAndCycles`: a tree, a diamond, and a cycle;
+  - `TestEffectsThroughTreesDiamondsAndCycles`: a tree, a diamond, and a cycle, with the rows that the deletions then remove, counted through a plain connection;
   - `TestEffectsOfKeysAndPartitions` and `TestReferences`: composite keys, a unique key that is not the primary key, and partitioned tables;
+  - `TestEffectsOfNoActionAndRestrict`: `NO ACTION`, `RESTRICT`, and a `NO ACTION` deferred to the commit, with a subtree that goes as a whole and a declared row that stays;
+  - `TestEffectsThatAnUpdateFollows`: a `SET NULL` of a column that another foreign key references;
   - `TestReferencesAcrossCollationsAndPartitions`: collations, and a foreign key to a partition;
   - `TestEffectsOfRowsThatThePlanChanges`: rows that the plan deletes or moves, and declared rows in the way, also rows to insert and rows that a cascade reaches;
   - `TestEffectsOfColumnsThatTheRoleMayNotRead`: privileges;

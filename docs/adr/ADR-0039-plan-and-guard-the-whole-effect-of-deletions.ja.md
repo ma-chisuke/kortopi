@@ -139,8 +139,10 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - `internal/script` のゴールデンテスト `TestWrite` が、SQL としての計画のコメントを確かめる。
 - `make check-all` の PostgreSQL 15 から 18 に対する結合テストで、`internal/postgres` の次のものが確かめる。
   - `TestEffectsOfEveryAction`：50,000 行への3段のカスケード、列の一覧の有無それぞれの `SET NULL`、`SET DEFAULT`、`NO ACTION`、`RESTRICT`、1段目と2段目のロールの読めないテーブル。
-  - `TestEffectsThroughTreesDiamondsAndCycles`：木・ひし形・循環。
+  - `TestEffectsThroughTreesDiamondsAndCycles`：木・ひし形・循環。そのあと削除が消す行を、素の接続で数える。
   - `TestEffectsOfKeysAndPartitions` と `TestReferences`：複合キー・主キーでない一意キー・パーティションテーブル。
+  - `TestEffectsOfNoActionAndRestrict`：`NO ACTION`・`RESTRICT`・コミットまで遅らせた `NO ACTION`。まとめて消える部分木と、残る宣言した行を使う。
+  - `TestEffectsThatAnUpdateFollows`：別の外部キーが参照する列の `SET NULL`。
   - `TestReferencesAcrossCollationsAndPartitions`：照合順序と、パーティションを指す外部キー。
   - `TestEffectsOfRowsThatThePlanChanges`：計画が削除するか変える行と、削除とぶつかる宣言した行。挿入する行と、カスケードが着く行も含む。
   - `TestEffectsOfColumnsThatTheRoleMayNotRead`：権限。
@@ -180,4 +182,4 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - [トランザクションの分離](https://www.postgresql.org/docs/current/transaction-iso.html)：`REPEATABLE READ` と直列化の失敗について
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#削除がほかの行にすること) と [docs/reference/apply.ja.md](../reference/apply.ja.md#削除の安全策)
 
-<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:76ebd5110a998dd545b48bce8103f17fba513ad501ee86ac51cd4ec2e7146ec2 -->
+<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:097aef1aa8bfd0bbedcd0a27584f193992a751945032ddd219cdb716759169a6 -->
