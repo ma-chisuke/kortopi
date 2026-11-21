@@ -435,7 +435,7 @@ kortopi: table facility.rooms has rule "rooms_soft_delete" ON DELETE, and kortop
 ```
 
 PostgreSQL のルールは、文を実行する前に別の文へ書き換える。kortopi はルールを通して書かない。
-挿入の `DO ALSO` のルールは、kortopi が挿入する行について何も書かない。`DO INSTEAD` のルールは、別の行を書きながら、計画どおりの行数を報告することがある。そのため apply はこれに気付けない。
+`DO INSTEAD` のルールは、テーブルを元のままにしながら、計画どおりの行数を報告することがある。条件付きのルールは、書き込みから行を外す。`DO ALSO` のルールは、`serial` の列の次の値のような `NEW` の値をもう一度評価する。そのため apply は、何を書いたかを知りえない。
 トリガーなら、アプリケーションの行と同じく、kortopi が書く各行について発動する。
 
 - ルールを数えるのは、そのテーブルを宣言していて、テーブルのモードが書く種類の文をルールが書き換え、ルールが有効なときである。`INSERT` はどのモードでも、`UPDATE` は `upsert` と `sync` で、`DELETE` は `sync` で、`--allow-delete` がなくても数える。
@@ -497,4 +497,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:7674cfa79af39dd2a871935f3baf909f4cafd69589fc11ddfa3f5cec9c5f340b -->
+<!-- i18n-source: declaration.md sha256:7e02912fdf1d449027672568a58a07cf994bb64660073a3636e0d0da19b0ba0e -->

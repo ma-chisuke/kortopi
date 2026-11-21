@@ -434,7 +434,7 @@ kortopi: table facility.rooms has rule "rooms_soft_delete" ON DELETE, and kortop
 ```
 
 A rule of PostgreSQL rewrites a statement into others before it runs, and kortopi does not write through it.
-A rule `DO ALSO` on inserts writes nothing for the rows that kortopi inserts, and a rule `DO INSTEAD` can report the number of rows that the plan expects while it writes others, so an apply could not tell.
+A rule `DO INSTEAD` can report the number of rows that the plan expects while the table stays as it was, a conditional rule takes rows away from the write, and a rule `DO ALSO` evaluates the values of `NEW` again, such as the next value of a `serial` column, so an apply could not tell what it wrote.
 A trigger fires for each row that kortopi writes, as for the rows of your application.
 
 - A rule counts when its table is declared, it rewrites a kind of statement that the mode of the table writes, and it is enabled: `INSERT` in every mode, `UPDATE` in `upsert` and `sync`, and `DELETE` in `sync`, also without `--allow-delete`.

@@ -43,5 +43,5 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0035](ADR-0035-let-the-settings-name-values-that-only-an-insert-sets.md) | Let the settings name values that only an insert sets | accepted | 2026-11-21 |
 | [ADR-0036](ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md) | Register each database behind one seam, and decide between one binary and a binary for each database when the second database arrives | accepted | 2026-11-21 |
 | [ADR-0037](ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md) | Write the rows of an apply with the settings of the session, and decide them in the pinned settings | accepted | 2026-11-21 |
-| [ADR-0038](ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md) | Stop on a rule of a declared table that an apply would write through | accepted | 2026-11-21 |
+| [ADR-0038](ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md) | Stop on a rule of a declared table that an apply would write through | accepted | 2026-11-22 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.md) | Write issues through forms with required fields | accepted | 2026-11-21 |

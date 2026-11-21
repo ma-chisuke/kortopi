@@ -7,6 +7,7 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,6 +58,60 @@ CREATE TABLE o.dropped (id integer PRIMARY KEY, name text);
 CREATE RULE gone AS ON INSERT TO o.dropped DO INSTEAD NOTHING;
 DROP RULE gone ON o.dropped;
 `
+
+// What rules do to the writes of an apply, below the check of the plan that
+// keeps them away: the session's statements are run on tables with rules as
+// if the plan had not stopped. A rule DO ALSO on each kind of statement
+// writes a row of the log for each row that the write takes, because its
+// action runs with the tables and conditions of the write, but an
+// expression that NEW stands for is evaluated again: the default of a
+// serial column gives the log another number than the table. A rule DO
+// INSTEAD that updates another table reports the planned count of rows
+// while the declared table stays as it was.
+func TestWritesThroughRules(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA o;
+				CREATE TABLE o.log (what text, id integer, n bigint);
+				CREATE TABLE o.items (id integer PRIMARY KEY, name text NOT NULL, n bigserial);
+				INSERT INTO o.items (id, name) VALUES (10, 'ten'), (20, 'twenty');
+				CREATE RULE items_insert AS ON INSERT TO o.items DO ALSO INSERT INTO o.log VALUES ('insert', NEW.id, NEW.n);
+				CREATE RULE items_update AS ON UPDATE TO o.items DO ALSO INSERT INTO o.log VALUES ('update', NEW.id, NULL);
+				CREATE RULE items_delete AS ON DELETE TO o.items DO ALSO INSERT INTO o.log VALUES ('delete', OLD.id, NULL);
+				CREATE TABLE o.other (id integer PRIMARY KEY, name text NOT NULL);
+				INSERT INTO o.other VALUES (1, 'one');
+				CREATE TABLE o.instead (id integer PRIMARY KEY, name text NOT NULL);
+				INSERT INTO o.instead VALUES (1, 'one');
+				CREATE RULE instead_update AS ON UPDATE TO o.instead DO INSTEAD UPDATE o.other SET name = NEW.name WHERE id = OLD.id;
+			`)
+			dir := writeFiles(t, map[string]string{
+				"o/items.csv":   "id,name\n1,one\n2,two\n10,TEN\n",
+				"o/instead.csv": "id,name\n1,ONE\n",
+			})
+			s := db.applySession(t, db.Config, dir)
+			items := request(t, s, csvTable("o", "items", "id", "name"), nil, config.ModeSync)
+			instead := request(t, s, csvTable("o", "instead", "id", "name"), nil, config.ModeUpsert)
+			got, err := applyAll(t.Context(), s, []plan.DiffRequest{items, instead}, true)
+			if err != nil {
+				t.Fatalf("apply through the rules: %v", err)
+			}
+			if want := (applyResult{inserted: 2, updated: 2, deleted: 1}); got != want {
+				t.Errorf("apply through the rules = %+v, want %+v", got, want)
+			}
+			logs := db.Query(t, `SELECT l.what, l.id, l.n IS NOT DISTINCT FROM i.n FROM o.log AS l LEFT JOIN o.items AS i USING (id) ORDER BY l.what, l.id`)
+			want := [][]string{{"delete", "20", "t"}, {"insert", "1", "f"}, {"insert", "2", "f"}, {"update", "10", "f"}}
+			if !slices.EqualFunc(logs, want, slices.Equal) {
+				t.Errorf("the log of the rules DO ALSO = %v, want %v", logs, want)
+			}
+			// The rule DO INSTEAD changed the other table, not the declared one.
+			if rows := dump(t, db, "o.instead", "o.other"); !slices.Equal(rows, []string{"o.instead (1,one)", "o.other (1,ONE)"}) {
+				t.Errorf("the tables of the rule DO INSTEAD = %v", rows)
+			}
+		})
+	}
+}
 
 // The catalogs report the rules that can rewrite a statement of an apply,
 // and a plan of a table with such a rule on a kind of statement that its
