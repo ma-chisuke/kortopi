@@ -22,15 +22,16 @@ import (
 // with the kinds of change that the mode of the table allows (ADR-0013).
 //
 // Mistakes in the declaration or the settings are reported together, one error
-// for each, before the database loads any row. A column that the rows to
-// insert of a table would lack, NOT NULL and without a default, shows only
-// with the difference; such mistakes of all tables are reported together
-// after the comparison. An error of the database stops the build at once.
-// The contract does not tie such an error to one table, so Build cannot tell
-// an error in the rows of one table, after which the next table could still
-// be compared, from an error of the session, such as a broken connection,
-// which would repeat for every table that follows.
-func Build(ctx context.Context, decl *declaration.Declaration, settings *config.Settings, db Database) (*Plan, error) {
+// for each, before the database loads any row. With opts.NoPending, a declared
+// table or column that the database does not have is such a mistake. A column
+// that the rows to insert of a table would lack, NOT NULL and without a
+// default, shows only with the difference; such mistakes of all tables are
+// reported together after the comparison. An error of the database stops the
+// build at once. The contract does not tie such an error to one table, so
+// Build cannot tell an error in the rows of one table, after which the next
+// table could still be compared, from an error of the session, such as a
+// broken connection, which would repeat for every table that follows.
+func Build(ctx context.Context, decl *declaration.Declaration, settings *config.Settings, db Database, opts Options) (*Plan, error) {
 	if len(decl.Tables) == 0 {
 		return &Plan{}, nil
 	}
@@ -62,12 +63,16 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		if !info.Exists {
 			if err := nearTable(dt.Path(decl.Dir), dt.Name, info); err != nil {
 				errs = append(errs, err)
+			} else if opts.NoPending {
+				errs = append(errs, fmt.Errorf("%s: table %s does not exist in the database, and without --no-pending it would wait for the schema change: "+
+					"correct the name, or apply the schema change that adds the table",
+					dt.Path(decl.Dir), FormatTable(dt.Name)))
 			}
 			tables[i].PendingTable = true
 			continue
 		}
 		errs = append(errs, declaredTwice(decl.Dir, dt, info.PartitionOf, declared)...)
-		c := &check{table: dt, file: dt.Path(decl.Dir), settingsFile: settingsFile, info: info}
+		c := &check{table: dt, file: dt.Path(decl.Dir), settingsFile: settingsFile, info: info, noPending: opts.NoPending}
 		cols, tableErrs := c.settle(s.Key)
 		if len(tableErrs) > 0 {
 			errs = append(errs, tableErrs...)
@@ -277,6 +282,9 @@ type check struct {
 	file         string
 	settingsFile string
 	info         TableInfo
+	// noPending makes a declared column that the table does not have a
+	// mistake instead of a column that waits for the schema change.
+	noPending bool
 	// byName holds the columns of the table, and declared the declared
 	// columns.
 	byName   map[string]ColumnInfo
@@ -287,6 +295,10 @@ type check struct {
 	// that is missing or that waits for the schema change.
 	misnamed   map[string]bool
 	misnamedAs map[string]bool
+	// missing holds, with noPending, the other declared columns that the
+	// table does not have. Their error too is reported once, not again as a
+	// key column that waits for the schema change.
+	missing map[string]bool
 }
 
 // settle decides the match key of the table and sorts its declared columns
@@ -299,7 +311,7 @@ func (c *check) settle(chosen []string) (columns, []error) {
 		c.byName[col.Name] = col
 	}
 	c.declared = make(map[string]bool, len(c.table.Columns))
-	c.misnamed, c.misnamedAs = make(map[string]bool), make(map[string]bool)
+	c.misnamed, c.misnamedAs, c.missing = make(map[string]bool), make(map[string]bool), make(map[string]bool)
 	var errs []error
 	var cols columns
 	for _, name := range c.table.Columns {
@@ -317,6 +329,13 @@ func (c *check) settle(chosen []string) (columns, []error) {
 				}
 				errs = append(errs, fmt.Errorf("%s: column %s is not a column of table %s, but %s is, whose name differs only in white space or case: write the name as the table has it",
 					c.file, strconv.Quote(name), c.table.Name, alternatives("column", near)))
+				continue
+			}
+			if c.noPending {
+				c.missing[name] = true
+				errs = append(errs, fmt.Errorf("%s: column %s of table %s does not exist in the database, and without --no-pending it would wait for the schema change: "+
+					"correct the name, or apply the schema change that adds the column",
+					c.file, strconv.Quote(name), FormatTable(c.table.Name)))
 				continue
 			}
 			cols.pending = append(cols.pending, name)
@@ -418,7 +437,7 @@ func (c *check) chosenKey(key []string) ([]string, []error) {
 		if _, ok := c.byName[name]; ok {
 			continue
 		}
-		if c.misnamed[name] {
+		if c.misnamed[name] || c.missing[name] {
 			// The error of the column says it all: the key names the column
 			// as the file does.
 			return nil, nil

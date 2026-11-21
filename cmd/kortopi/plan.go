@@ -130,7 +130,7 @@ func makePlan(ctx context.Context, o planOptions, connect connectFunc, sql *byte
 			p, err = nil, closeErr
 		}
 	}()
-	p, err = plan.Build(ctx, decl, settings, db)
+	p, err = plan.Build(ctx, decl, settings, db, plan.Options{})
 	if err != nil || sql == nil {
 		return p, err
 	}

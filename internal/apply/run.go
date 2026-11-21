@@ -34,7 +34,9 @@ import (
 // to write.
 func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Settings, db Database, opts Options) (*Result, error) {
 	rec := &recorder{Database: db, requests: make(map[declaration.TableName]plan.DiffRequest)}
-	p, err := plan.Build(ctx, decl, settings, rec)
+	// An apply has no --no-pending: it always stops on the tables and columns
+	// that the database does not have, with the errors of pending (ADR-0034).
+	p, err := plan.Build(ctx, decl, settings, rec, plan.Options{})
 	if err != nil {
 		return nil, err
 	}
