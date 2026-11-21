@@ -257,7 +257,7 @@ func TestOnInsertMistakes(t *testing.T) {
 			code, stdout, stderr = e.command(t, "plan", "--dir", pending, "--exit-code")
 			checkRun(t, code, stdout, stderr, exitChanges, lines(
 				"facility.rooms (upsert, key: name)",
-				"  column floor: known after the schema is applied",
+				"  column floor of on_insert in kortopi.toml: known after the schema is applied",
 				`  on insert: created_at="now"  created_by="kortopi"  sort_order="0"`,
 				"  + name=annex  capacity=10",
 				"  1 to insert, 0 to update",
@@ -271,7 +271,8 @@ func TestOnInsertMistakes(t *testing.T) {
 				"correct the name, or apply the schema change that adds the column\n")
 			code, stdout, stderr = e.command(t, "apply", "--dir", pending)
 			checkRun(t, code, stdout, stderr, exitError, "",
-				`kortopi: table facility.rooms has no column "floor" yet: apply the schema change first, and then the rows`+"\n"+
+				"kortopi: "+filepath.Join(pending, "kortopi.toml")+`: on_insert of table facility.rooms names column "floor", which the table does not have yet: `+
+					"apply the schema change first, and then the rows\n"+
 					"kortopi: nothing was changed\n")
 
 			// A column that on_insert names in another case, and one that the

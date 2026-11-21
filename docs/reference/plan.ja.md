@@ -334,7 +334,7 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - 値は、PostgreSQL が読んだ値ではなく、`kortopi.toml` に書いたとおりの文字列を、常に二重引用符で囲んで出す。`now` は `"now"` のままなので、同じ設定の2つの計画は同じ行を出す。apply は、挿入するすべての行にこれらの値を与える。
 - この行は、適用待ちの列の行のあと、行の前に置く。挿入する行のないテーブルには、この行を出さない。
 - kortopi はこれらの列を比べない。そのため変更として示すことはなく、すでにある行は持っている値を保つ。
-- テーブルにない `on_insert` の列は、宣言した列と同じく `column <name>: known after the schema is applied` として示す。
+- テーブルにない `on_insert` の列は、宣言した列と同じくスキーマの変更を待つ。その行は、名前の出どころを `column floor of on_insert in kortopi.toml: known after the schema is applied` のように示す。
 - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、それぞれの値を列の型で読む。値ごとに、ロールバックする専用のセーブポイントの中で、その列だけを持つ一時テーブルを作り、値を挿入する。一時テーブルの列は、テーブルの列から型を受け継ぐ。そのため、ほかの列が値や既定値を得ることはない。また、ロールには、型を読むためにこれらの列に対する `SELECT` が要る。宣言した列と同じである（[セッションに要るもの](#セッションに要るもの)）。
 
 ### 削除する行を参照する行
@@ -602,4 +602,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:e30bcde1b15ddd3c35330eb1b363de70e34d1dbb2770810a1049aecf019c040d -->
+<!-- i18n-source: plan.md sha256:e213030a69d03d6100713ea36fc2e7f9340342e021d2314fc3878b8879213373 -->

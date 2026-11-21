@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
+	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
@@ -190,6 +191,10 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 		for _, c := range t.PendingColumns {
 			comment(b, fmt.Sprintf("%s: column %s is known after the schema is applied; the statements leave it out.",
 				plan.FormatTable(t.Name), plan.FormatName(c)))
+		}
+		for _, c := range t.PendingOnInsert {
+			comment(b, fmt.Sprintf("%s: column %s of on_insert in %s is known after the schema is applied; the statements leave it out.",
+				plan.FormatTable(t.Name), plan.FormatName(c), config.FileName))
 		}
 	}
 }

@@ -349,6 +349,17 @@ func TestRun(t *testing.T) {
 				`table z.parent has no column "name" yet: apply the schema change first, and then the rows`,
 		},
 		{
+			// The error names the settings file, from which the column comes.
+			name: "a column of on_insert that waits for the schema change",
+			settings: config.New(map[declaration.TableName]config.Table{
+				parent: {Mode: config.ModeSync, OnInsert: []config.InsertValue{{Column: "floor", Value: "1"}}}, child: {Mode: config.ModeSync},
+			}),
+			db:      &fakeDB{diffs: full},
+			opts:    all,
+			want:    diffs,
+			wantErr: `kortopi.toml: on_insert of table z.parent names column "floor", which the table does not have yet: apply the schema change first, and then the rows`,
+		},
+		{
 			name:     "a column that the rows to insert lack",
 			settings: sync,
 			db: &fakeDB{diffs: full, extra: map[declaration.TableName][]plan.ColumnInfo{

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -41,7 +42,7 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	if err != nil {
 		return nil, err
 	}
-	if err := pending(p); err != nil {
+	if err := pending(p, filepath.Join(decl.Dir, config.FileName)); err != nil {
 		return nil, err
 	}
 	if opts.Planned != nil {
@@ -156,8 +157,9 @@ func write(ctx context.Context, statement func(context.Context, plan.DiffRequest
 
 // pending returns an error for each table and column that the database does
 // not have yet. An apply cannot write them: the schema change comes first
-// (ADR-0007, ADR-0016).
-func pending(p *plan.Plan) error {
+// (ADR-0007, ADR-0016). A column of on_insert gets an error that names the
+// settings file, which names it (ADR-0035).
+func pending(p *plan.Plan, settingsFile string) error {
 	var errs []error
 	for i := range p.Tables {
 		t := &p.Tables[i]
@@ -166,6 +168,10 @@ func pending(p *plan.Plan) error {
 		}
 		for _, c := range t.PendingColumns {
 			errs = append(errs, fmt.Errorf("table %s has no column %q yet: apply the schema change first, and then the rows", t.Name, c))
+		}
+		for _, c := range t.PendingOnInsert {
+			errs = append(errs, fmt.Errorf("%s: on_insert of table %s names column %q, which the table does not have yet: "+
+				"apply the schema change first, and then the rows", settingsFile, t.Name, c))
 		}
 	}
 	return errors.Join(errs...)

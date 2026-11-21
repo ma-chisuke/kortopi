@@ -272,6 +272,13 @@ kortopi: table billing.discounts does not exist in the database yet: apply the s
 kortopi: nothing was changed
 ```
 
+`on_insert` が挙げ、テーブルにない列には、設定ファイルを挙げるエラーを出す。
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "floor", which the table does not have yet: apply the schema change first, and then the rows
+kortopi: nothing was changed
+```
+
 ### 上限を超える削除
 
 ```text
@@ -381,4 +388,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:5430203db63cf0228611b5f99201d8e1fa4b54c7a04cd1e83a31d1b56bb29550 -->
+<!-- i18n-source: apply.md sha256:27b89f7d07c4d81fbafe88e29aa8a37ac35accda729989a7762a41295ca4b843 -->

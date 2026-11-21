@@ -272,6 +272,13 @@ kortopi: table billing.discounts does not exist in the database yet: apply the s
 kortopi: nothing was changed
 ```
 
+A column that `on_insert` names and the table lacks gets an error that names the settings file:
+
+```text
+kortopi: data/kortopi.toml: on_insert of table facility.rooms names column "floor", which the table does not have yet: apply the schema change first, and then the rows
+kortopi: nothing was changed
+```
+
 ### More deletions than the limit
 
 ```text

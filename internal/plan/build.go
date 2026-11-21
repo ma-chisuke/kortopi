@@ -88,9 +88,7 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		tables[i].Key = cols.key
 		tables[i].Compare = cols.compare
 		tables[i].PendingColumns = cols.pending
-		if len(pendingValues) > 0 {
-			tables[i].PendingColumns = slices.Concat(cols.pending, pendingValues)
-		}
+		tables[i].PendingOnInsert = pendingValues
 		tables[i].OnInsert = values
 		requests[i] = DiffRequest{
 			Table:    *dt,

@@ -241,7 +241,7 @@ func TestRender(t *testing.T) {
 			plan: &Plan{Tables: []Table{
 				{
 					Name: name("facility", "rooms"), Mode: config.ModeUpsert,
-					Key: []string{"name"}, Compare: []string{"capacity"}, PendingColumns: []string{"floor"},
+					Key: []string{"name"}, Compare: []string{"capacity"}, PendingColumns: []string{"floor"}, PendingOnInsert: []string{"wing", "by who"},
 					OnInsert: []config.InsertValue{
 						{Column: "Created By", Value: "kortopi"}, {Column: "created_at", Value: "now"},
 						{Column: "note", Value: ""}, {Column: "sort_order", Value: "0"}, {Column: "tag", Value: "say \"hi\"\t"},
@@ -452,6 +452,7 @@ func TestEmpty(t *testing.T) {
 		{name: "pending table", plan: &Plan{Tables: []Table{{PendingTable: true}}}, want: false},
 		{name: "pending table without rows", plan: &Plan{Tables: []Table{{PendingTable: true, DeclaredRows: 0}}}, want: false},
 		{name: "pending column", plan: &Plan{Tables: []Table{unchangedTable("a", "t"), {PendingColumns: []string{"c"}}}}, want: false},
+		{name: "pending column of on_insert", plan: &Plan{Tables: []Table{unchangedTable("a", "t"), {PendingOnInsert: []string{"c"}}}}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

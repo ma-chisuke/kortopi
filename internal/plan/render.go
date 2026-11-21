@@ -72,7 +72,7 @@ func (p *Plan) Empty() bool {
 
 // unchanged reports whether a table has nothing to show.
 func (t *Table) unchanged() bool {
-	return !t.PendingTable && len(t.PendingColumns) == 0 && !t.Diff.changes()
+	return !t.PendingTable && len(t.PendingColumns) == 0 && len(t.PendingOnInsert) == 0 && !t.Diff.changes()
 }
 
 // changes reports whether the difference has a row to insert, update, or
@@ -112,7 +112,7 @@ func Render(w io.Writer, p *Plan) error {
 		inserts += len(t.Diff.Inserts)
 		updates += len(t.Diff.Updates)
 		deletes += len(t.Diff.Deletes)
-		pendingColumns += len(t.PendingColumns)
+		pendingColumns += len(t.PendingColumns) + len(t.PendingOnInsert)
 		switch {
 		case t.unchanged():
 			unchanged++
@@ -172,6 +172,9 @@ func writeTable(b *strings.Builder, t *Table) error {
 
 	for _, c := range t.PendingColumns {
 		fmt.Fprintf(b, "  column %s: %s\n", FormatName(c), pendingMark)
+	}
+	for _, c := range t.PendingOnInsert {
+		fmt.Fprintf(b, "  column %s of on_insert in %s: %s\n", FormatName(c), config.FileName, pendingMark)
 	}
 	if len(t.Diff.Inserts) > 0 && len(t.OnInsert) > 0 {
 		fmt.Fprintf(b, "  on insert: %s\n", FormatInsertValues(t.OnInsert))

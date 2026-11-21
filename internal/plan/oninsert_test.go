@@ -51,7 +51,7 @@ func TestBuildOnInsert(t *testing.T) {
 	}
 	want := Table{
 		Name: tableT, Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
-		PendingColumns: []string{"floor", "wing"}, OnInsert: values,
+		PendingColumns: []string{"floor"}, PendingOnInsert: []string{"wing"}, OnInsert: values,
 	}
 	if len(p.Tables) != 2 || !reflect.DeepEqual(p.Tables[0], want) || !p.Tables[1].PendingTable || p.Tables[1].OnInsert != nil {
 		t.Errorf("plan tables = %+v, want [%+v] and the pending table b.u", p.Tables, want)

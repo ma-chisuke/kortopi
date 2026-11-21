@@ -220,7 +220,7 @@ func TestWrite(t *testing.T) {
 				{Name: tn("billing", "discounts"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 2},
 				{
 					Name: tn("billing", "plans"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
-					PendingColumns: []string{"floor", "wing"}, Diff: plan.TableDiff{Inserts: inserts("1")},
+					PendingColumns: []string{"floor", "wing"}, PendingOnInsert: []string{"created by"}, Diff: plan.TableDiff{Inserts: inserts("1")},
 				},
 				{Name: tn("billing", "taxes"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 1},
 			}},

@@ -232,8 +232,12 @@ type Table struct {
 	PendingTable bool
 	DeclaredRows int
 	// PendingColumns holds the declared columns that the table does not have
-	// yet, and then the columns of on_insert that it does not have yet.
+	// yet.
 	PendingColumns []string
+	// PendingOnInsert holds the columns of on_insert that the table does not
+	// have yet (ADR-0035). They wait for the schema change as the pending
+	// columns do, and the output says that they come from the settings.
+	PendingOnInsert []string
 	// OnInsert holds the values that the inserts of the table give the new
 	// rows, as the settings write them, for the columns that the table has
 	// (ADR-0035). They are not compared.
