@@ -195,8 +195,10 @@ func pending(p *plan.Plan, settingsFile string) error {
 // NULL and SET DEFAULT change, each row once, as the plan counted them.
 //
 // A step whose effect is not known stops the apply: a table that the role may
-// not read, under CASCADE, SET NULL, or SET DEFAULT, at any depth, and a
-// change that an action ON UPDATE of another foreign key would follow.
+// not read, under CASCADE, SET NULL, or SET DEFAULT, at any depth, a change
+// that an action ON UPDATE of another foreign key would follow, and, under
+// any action, a foreign key whose triggers are disabled, since PostgreSQL
+// would neither run its action nor check it.
 func checkDeletes(p *plan.Plan, limit int) error {
 	var errs, direct []string
 	var deletes, cascaded, changed int
@@ -212,7 +214,7 @@ func checkDeletes(p *plan.Plan, limit int) error {
 		direct = append(direct, rows(n)+" of "+t.Name.String())
 		for j := range t.Effect.Steps {
 			step := &t.Effect.Steps[j]
-			if !step.Deletes() && !step.Changes() {
+			if !step.Deletes() && !step.Changes() && step.Unknown != plan.TriggersDisabled {
 				continue
 			}
 			if step.Unknown != plan.Known {
@@ -279,6 +281,12 @@ func unknownEffect(table declaration.TableName, step *plan.Step) string {
 			"and foreign key %q of table %s references a column that it sets, so its action ON UPDATE follows, "+
 			"which kortopi does not count for the limit on deletions: change or remove the rows of %s that reference the rows to delete first",
 			table, step.Table, step.Constraint, step.OnDelete, from, step.OnUpdate, step.OnUpdateTable, step.Table)
+	}
+	if step.Unknown == plan.TriggersDisabled && !step.Deletes() && !step.Changes() {
+		return fmt.Sprintf("the deletion of rows of %s reaches rows of %s through foreign key %q, ON DELETE %s%s, "+
+			"and the triggers that check the foreign key are disabled, so the deletion would not fail and would leave rows that reference rows that are gone: "+
+			"enable the triggers of table %s and of its partitions, or remove those rows first",
+			table, step.Table, step.Constraint, step.OnDelete, from, step.References)
 	}
 	// why says what keeps the rows from being counted, and fix what makes
 	// them countable.

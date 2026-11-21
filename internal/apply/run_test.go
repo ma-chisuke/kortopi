@@ -417,6 +417,23 @@ func TestRun(t *testing.T) {
 				"which kortopi does not count for the limit on deletions: change or remove the rows of b.tags that reference the rows to delete first",
 		},
 		{
+			// PostgreSQL neither runs nor checks a foreign key whose triggers
+			// are disabled, so NO ACTION and RESTRICT stop the apply too.
+			name:     "a foreign key whose triggers are disabled, under every action",
+			settings: sync,
+			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{parent: {Deletes: deletesOf(1)}}, effects: map[declaration.TableName]plan.Effect{
+				parent: {Steps: []plan.Step{
+					unknownStep(1, "b.audit", "audit_parent", "NO ACTION", plan.NoTableSelect),
+					unknownStep(1, "b.flags", "flags_parent", "RESTRICT", plan.TriggersDisabled),
+				}},
+			}},
+			opts: all,
+			want: diffs,
+			wantErr: `the deletion of rows of z.parent reaches rows of b.flags through foreign key "flags_parent", ON DELETE RESTRICT, ` +
+				"and the triggers that check the foreign key are disabled, so the deletion would not fail and would leave rows that reference rows that are gone: " +
+				"enable the triggers of table z.parent and of its partitions, or remove those rows first",
+		},
+		{
 			name:     "a cascade into a table that the role may not read, without deletions",
 			settings: sync,
 			db: &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{parent: {Inserts: rowsOf(1), Deletes: deletesOf(1)}}, effects: map[declaration.TableName]plan.Effect{
