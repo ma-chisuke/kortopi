@@ -84,26 +84,26 @@ type Session interface {
 var ErrNoDialect = errors.New("this build of kortopi supports no database: " +
 	"build kortopi again without the build tags that leave a database out, kortopi_no_<database>")
 
-// Registry holds the dialects of a build. Each dialect registers itself
-// when the program starts, in a file of the command that a build tag can
-// leave out. The zero value is an empty registry.
+// Registry holds the dialects of a build. The command builds it once, when
+// it starts, from the dialects that its build tags keep, and nothing changes
+// it afterwards. The zero value is an empty registry.
 type Registry struct {
 	dialects []Dialect
 }
 
-// Register adds d to r. A registration file of the command calls it in the
-// initializer of a blank variable, which runs when the program starts:
-// the linter of this repository allows no init function. The result has no
-// use but that. Register panics when r holds a dialect of the same name,
-// which is a mistake of the build.
-func (r *Registry) Register(d Dialect) struct{} {
-	for _, other := range r.dialects {
-		if other.Name() == d.Name() {
-			panic(fmt.Sprintf("dialect %s is registered twice", d.Name()))
+// NewRegistry returns a registry that holds dialects, in their order. Two
+// dialects of the same name are an error: a mistake of the build.
+func NewRegistry(dialects ...Dialect) (*Registry, error) {
+	r := &Registry{}
+	for _, d := range dialects {
+		for _, other := range r.dialects {
+			if other.Name() == d.Name() {
+				return nil, fmt.Errorf("this build of kortopi holds the dialect %s twice: build kortopi again with each dialect once", d.Name())
+			}
 		}
+		r.dialects = append(r.dialects, d)
 	}
-	r.dialects = append(r.dialects, d)
-	return struct{}{}
+	return r, nil
 }
 
 // Choose returns the dialect that a command works with. A build that holds

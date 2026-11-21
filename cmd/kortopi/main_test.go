@@ -21,7 +21,18 @@ func noConnect(t *testing.T) *dialect.Registry {
 	d.opened = func(context.Context) {
 		t.Error("the command connected to the database, want no connection")
 	}
-	return d.registry()
+	return d.registry(t)
+}
+
+// buildDialects returns the registry of the databases of this build, as
+// main builds it.
+func buildDialects(t *testing.T) *dialect.Registry {
+	t.Helper()
+	r, err := newRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // runTest runs kortopi with args and the dialects, and returns the exit

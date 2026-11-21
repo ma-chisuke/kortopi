@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"testing"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
@@ -186,7 +187,11 @@ func (*fakeDialect) Name() string {
 }
 
 func (*fakeDialect) Parser() declaration.SQLParser {
-	d, err := dialects.Choose()
+	r, err := newRegistry()
+	if err != nil {
+		return failingParser{err: err}
+	}
+	d, err := r.Choose()
 	if err != nil {
 		return failingParser{err: err}
 	}
@@ -206,10 +211,13 @@ func (f *fakeDialect) Open(ctx context.Context, opts dialect.Options) (dialect.S
 }
 
 // registry returns a registry that holds only f.
-func (f *fakeDialect) registry() *dialect.Registry {
-	var r dialect.Registry
-	r.Register(f)
-	return &r
+func (f *fakeDialect) registry(t *testing.T) *dialect.Registry {
+	t.Helper()
+	r, err := dialect.NewRegistry(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // failingParser is the parser of a build without a dialect, which fails on

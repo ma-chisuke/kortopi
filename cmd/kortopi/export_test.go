@@ -190,7 +190,7 @@ func TestRunExport(t *testing.T) {
 			fd := &fakeDialect{session: tt.session, err: tt.connectErr}
 			var stdout, stderr strings.Builder
 			args := append([]string{"export", "--dir", dir}, tt.args...)
-			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
+			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 			replace := func(s string) string {
 				return strings.ReplaceAll(strings.ReplaceAll(s, "DIR/", dir+string(filepath.Separator)), "DIR", dir)
@@ -237,7 +237,7 @@ func TestRunExportInterrupted(t *testing.T) {
 	}
 	fd := &fakeDialect{session: s}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"export", "--dir", dir, "--schema", "facility"}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
+	code := run(ctx, []string{"export", "--dir", dir, "--schema", "facility"}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 	want := "kortopi: interrupted: the export was stopped\n" +
 		"kortopi: export table facility.types into " + filepath.Join(dir, "facility", "types.csv") + ": context canceled\n" +
@@ -334,7 +334,7 @@ func TestRunPlanSQL(t *testing.T) {
 
 			dir := writeFiles(t, twoTables)
 			fd := &fakeDialect{session: tt.session}
-			code, stdout, stderr := runTest(t, append([]string{"plan", "--dir", dir}, tt.args...), fd.registry())
+			code, stdout, stderr := runTest(t, append([]string{"plan", "--dir", dir}, tt.args...), fd.registry(t))
 			if want := strings.ReplaceAll(tt.wantStdout, "DIR", dir); code != tt.wantCode || stdout != want || stderr != tt.wantStderr {
 				t.Errorf("kortopi plan = %d, stdout\n%s\nstderr\n%s\nwant %d, stdout\n%s\nstderr\n%s", code, stdout, stderr, tt.wantCode, want, tt.wantStderr)
 			}

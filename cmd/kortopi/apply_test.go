@@ -264,7 +264,7 @@ func TestRunApply(t *testing.T) {
 			fd := &fakeDialect{session: tt.session, err: tt.connectErr}
 			var stdout, stderr strings.Builder
 			args := append([]string{"apply", "--dir", dir}, tt.args...)
-			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
+			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 			if code != tt.wantCode {
 				t.Errorf("kortopi apply exit status = %d, want %d (stderr %q)", code, tt.wantCode, stderr.String())
@@ -308,7 +308,7 @@ func TestRunApplyInterrupted(t *testing.T) {
 	}}
 	fd := &fakeDialect{session: s}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
+	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 	if code != exitError {
 		t.Errorf("kortopi apply exit status = %d, want %d", code, exitError)
@@ -343,7 +343,7 @@ func TestRunApplyInterruptedUnknownOutcome(t *testing.T) {
 	}}
 	fd := &fakeDialect{session: s}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry()})
+	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 	if want := "kortopi: " + unknown.Error() + "\n"; code != exitError || stderr.String() != want || stdout.String() != planOfGold {
 		t.Errorf("kortopi apply = %d, stdout %q, stderr %q, want %d, the plan, stderr %q", code, stdout.String(), stderr.String(), exitError, want)
@@ -416,7 +416,7 @@ func TestRunApplyWriteError(t *testing.T) {
 			fd := &fakeDialect{session: tt.session}
 			var stderr strings.Builder
 			stdout := &failAfter{n: tt.writes}
-			code := run(t.Context(), []string{"apply", "--dir", dir}, env{stdout: stdout, stderr: &stderr, dialects: fd.registry()})
+			code := run(t.Context(), []string{"apply", "--dir", dir}, env{stdout: stdout, stderr: &stderr, dialects: fd.registry(t)})
 			if code != tt.wantCode || stderr.String() != tt.wantStderr {
 				t.Errorf("kortopi apply = %d, stderr %q, want %d, %q", code, stderr.String(), tt.wantCode, tt.wantStderr)
 			}

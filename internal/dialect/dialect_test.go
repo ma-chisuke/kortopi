@@ -43,9 +43,9 @@ func TestChoose(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var r Registry
-			for _, d := range tt.dialects {
-				r.Register(d)
+			r, err := NewRegistry(tt.dialects...)
+			if err != nil {
+				t.Fatalf("NewRegistry() = %v", err)
 			}
 			d, err := r.Choose()
 			switch {
@@ -61,25 +61,29 @@ func TestChoose(t *testing.T) {
 }
 
 // A build without a dialect gets ErrNoDialect, which a command can tell
-// apart.
+// apart, from an empty registry or from the zero value.
 func TestChooseNoDialect(t *testing.T) {
 	t.Parallel()
 
-	var r Registry
-	if _, err := r.Choose(); !errors.Is(err, ErrNoDialect) {
-		t.Errorf("Choose() of an empty registry = %v, want ErrNoDialect", err)
+	empty, err := NewRegistry()
+	if err != nil {
+		t.Fatalf("NewRegistry() = %v", err)
+	}
+	for _, r := range []*Registry{empty, {}} {
+		if _, err := r.Choose(); !errors.Is(err, ErrNoDialect) {
+			t.Errorf("Choose() of an empty registry = %v, want ErrNoDialect", err)
+		}
 	}
 }
 
-func TestRegisterTwice(t *testing.T) {
+// Two dialects of one name are a mistake of the build, which the command
+// reports when it starts.
+func TestNewRegistryTwice(t *testing.T) {
 	t.Parallel()
 
-	var r Registry
-	r.Register(named("first"))
-	defer func() {
-		if recover() == nil {
-			t.Error("Register() of a second dialect named first did not panic")
-		}
-	}()
-	r.Register(named("first"))
+	r, err := NewRegistry(named("first"), named("second"), named("first"))
+	want := "this build of kortopi holds the dialect first twice: build kortopi again with each dialect once"
+	if r != nil || err == nil || err.Error() != want {
+		t.Errorf("NewRegistry() of a name twice = %v, %v, want the error %q", r, err, want)
+	}
 }

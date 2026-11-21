@@ -7,6 +7,17 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
 
+// The build with no tags holds PostgreSQL, and only it, so that a command
+// uses it with no flag and no setting (ADR-0036).
+func TestNewRegistry(t *testing.T) {
+	t.Parallel()
+
+	d, err := buildDialects(t).Choose()
+	if err != nil || d.Name() != "postgres" {
+		t.Errorf("the dialect of this build = %v, %v, want postgres", d, err)
+	}
+}
+
 // A build without a dialect fails every command that needs a database with
 // one error, before it reads a file, and still prints its version and its
 // help (ADR-0036).

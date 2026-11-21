@@ -13,18 +13,13 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
-
-// dialects holds the databases that this build supports. Each registers
-// itself, when the program starts, in a file of its own that a build tag can
-// leave out, such as dialect_postgres.go (ADR-0036). Nothing else changes
-// it.
-var dialects dialect.Registry
 
 // version is the release version. The release build sets it with -ldflags;
 // a build with `go install` takes it from the module information instead.
@@ -69,6 +64,11 @@ const (
 )
 
 func main() {
+	dialects, err := newRegistry()
+	if err != nil {
+		printError(os.Stderr, err)
+		os.Exit(exitError)
+	}
 	// An interrupt cancels the context, so that the transaction is rolled back
 	// and the connection closed. A second interrupt ends the process at once.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -76,9 +76,20 @@ func main() {
 		<-ctx.Done()
 		stop()
 	}()
-	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, dialects: &dialects})
+	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, dialects: dialects})
 	stop()
 	os.Exit(code)
+}
+
+// newRegistry returns the registry of the databases that this build
+// supports (ADR-0036). Each dialect has two files in this package, such as
+// dialect_postgres.go and dialect_postgres_off.go, of which its build tag
+// chooses one: the first returns the dialect, the second none. A second
+// dialect adds its call here.
+func newRegistry() (*dialect.Registry, error) {
+	return dialect.NewRegistry(slices.Concat(
+		postgresDialects(),
+	)...)
 }
 
 // env is what a command takes from outside: where it writes, and the
