@@ -62,11 +62,11 @@ func TestRun(t *testing.T) {
 		{name: "another unknown flag of plan", args: []string{"plan", "--tables"}, wantCode: exitError, wantStderr: "kortopi: flag provided but not defined: --tables\n"},
 		{
 			name: "apply takes no --no-pending", args: []string{"apply", "--no-pending"}, wantCode: exitError,
-			wantStderr: "kortopi: flag provided but not defined: --no-pending: an apply always stops on names that wait for a schema change, and only a plan takes --no-pending\n",
+			wantStderr: "kortopi: flag provided but not defined: --no-pending: an apply always stops on names that wait for a schema change, and only a plan takes --no-pending: remove --no-pending, or run kortopi plan --no-pending before the apply\n",
 		},
 		{
 			name: "export takes no --no-pending", args: []string{"export", "--table", "a.b", "--no-pending=true"}, wantCode: exitError,
-			wantStderr: "kortopi: flag provided but not defined: --no-pending: an export always stops on names that the database lacks, and only a plan takes --no-pending\n",
+			wantStderr: "kortopi: flag provided but not defined: --no-pending: an export always stops on names that the database lacks, and only a plan takes --no-pending: remove --no-pending\n",
 		},
 	}
 	for _, tt := range tests {
@@ -169,11 +169,11 @@ func TestFlagOutput(t *testing.T) {
 		},
 		{
 			name: "no pending given to apply", args: []string{"apply", "--no-pending"}, wantCode: exitError,
-			wantStderr: "kortopi: flag provided but not defined: --no-pending: an apply always stops on names that wait for a schema change, and only a plan takes --no-pending\n\n" + applyUsage,
+			wantStderr: "kortopi: flag provided but not defined: --no-pending: an apply always stops on names that wait for a schema change, and only a plan takes --no-pending: remove --no-pending, or run kortopi plan --no-pending before the apply\n\n" + applyUsage,
 		},
 		{
 			name: "no pending given to export", args: []string{"export", "--no-pending"}, wantCode: exitError,
-			wantStderr: "kortopi: flag provided but not defined: --no-pending: an export always stops on names that the database lacks, and only a plan takes --no-pending\n\n" + exportUsage,
+			wantStderr: "kortopi: flag provided but not defined: --no-pending: an export always stops on names that the database lacks, and only a plan takes --no-pending: remove --no-pending\n\n" + exportUsage,
 		},
 		{
 			name: "limit without deletions", args: []string{"apply", "--max-delete", "5"}, wantCode: exitError,
