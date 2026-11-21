@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -16,6 +17,17 @@ type tableMeta struct {
 	exists bool
 	// partitioned is true for a partitioned table.
 	partitioned bool
+	// partitionOf holds, for a partition, its parent and the ancestors of the
+	// parent up to the root, nearest first.
+	partitionOf []declaration.TableName
+	// partitions holds, for a partitioned table, its partitions at every
+	// depth, nearest first.
+	partitions []declaration.TableName
+	// nearNames and nearSchemas hold, for a table that does not exist, the
+	// tables and the schemas whose names differ from the named ones only in
+	// white space or case.
+	nearNames   []declaration.TableName
+	nearSchemas []string
 	// rowSecurity is true when row-level security applies to the role of
 	// the session: its policies would hide rows from a plan.
 	rowSecurity bool
@@ -74,7 +86,11 @@ type columnMeta struct {
 
 // info returns what the plan needs to know about the table.
 func (m *tableMeta) info() plan.TableInfo {
-	info := plan.TableInfo{Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys}
+	info := plan.TableInfo{
+		Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys, PartitionOf: m.partitionOf,
+		Partitions: m.partitions,
+		NearNames:  m.nearNames, NearSchemas: m.nearSchemas,
+	}
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
 			Name: c.name, NotNull: c.notNull, Generated: c.generated, IdentityAlways: c.identityAlways, HasDefault: c.hasDefault,
@@ -110,7 +126,8 @@ var relationKinds = map[string]string{
 // key, and its unique keys. A name that belongs to a relation other than an
 // ordinary or a partitioned table is an error. Names are matched exactly, as
 // they are written.
-func (s *Session) Describe(ctx context.Context, names []declaration.TableName) (map[declaration.TableName]plan.TableInfo, error) {
+func (s *Session) Describe(ctx context.Context, names []declaration.TableName) (_ map[declaration.TableName]plan.TableInfo, err error) {
+	defer s.explainWait(ctx, &err)
 	metas, err := s.describe(ctx, names)
 	if err != nil {
 		return nil, err
@@ -156,6 +173,9 @@ func (s *Session) describe(ctx context.Context, names []declaration.TableName) (
 	if err != nil {
 		return nil, err
 	}
+	if err := s.readNearNames(ctx, metas); err != nil {
+		return nil, err
+	}
 	if len(byOID) == 0 {
 		return metas, nil
 	}
@@ -183,7 +203,19 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'INSERT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'UPDATE'),
-			c.relkind IN ('r', 'p') AND pg_catalog.has_table_privilege(c.oid, 'DELETE')
+			c.relkind IN ('r', 'p') AND pg_catalog.has_table_privilege(c.oid, 'DELETE'),
+			ARRAY(SELECT ARRAY[an.nspname::pg_catalog.text, ac.relname::pg_catalog.text]
+				FROM pg_catalog.pg_partition_ancestors(c.oid::pg_catalog.regclass) WITH ORDINALITY AS pa(relid, n)
+				JOIN pg_catalog.pg_class AS ac ON ac.oid = pa.relid
+				JOIN pg_catalog.pg_namespace AS an ON an.oid = ac.relnamespace
+				WHERE c.relispartition AND pa.relid <> c.oid
+				ORDER BY pa.n),
+			ARRAY(SELECT ARRAY[partns.nspname::pg_catalog.text, pc.relname::pg_catalog.text]
+				FROM pg_catalog.pg_partition_tree(c.oid::pg_catalog.regclass) AS pt
+				JOIN pg_catalog.pg_class AS pc ON pc.oid = pt.relid
+				JOIN pg_catalog.pg_namespace AS partns ON partns.oid = pc.relnamespace
+				WHERE c.relkind = 'p' AND pt.relid <> c.oid
+				ORDER BY pt.level, partns.nspname COLLATE pg_catalog."C", pc.relname COLLATE pg_catalog."C")
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 		JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 		JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
@@ -206,8 +238,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var typeName []string
 		var collatable *bool
 		var typ *uint32
+		var partitionOf, partitions [][]string
 		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
-			&selectable, &insertable, &updatable, &deletable); err != nil {
+			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
@@ -229,6 +262,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.schemaUsage = schemaUsage
 		m.deletable = deletable
 		m.oid = oid
+		m.partitionOf, m.partitions = tableNames(partitionOf), tableNames(partitions)
 		byOID[oid] = m
 		if column != nil {
 			col := columnMeta{
@@ -249,6 +283,100 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		return nil, errors.Join(errs...)
 	}
 	return byOID, nil
+}
+
+// readNearNames fills in, for each named table that does not exist, the
+// tables whose schema and name equal the named ones once the white space
+// around the named ones is trimmed and case is folded, or else the schemas
+// that equal its schema so. When the named schema exists as it is written,
+// only its own tables count, and no other schema does: a table that waits for
+// the schema change may well be added to a schema that exists. It is one
+// query, and only when a named table does not exist. Both sides fold in the
+// collation "C", which folds the case of ASCII letters only, as PostgreSQL
+// folds a name that is not quoted.
+func (s *Session) readNearNames(ctx context.Context, metas map[declaration.TableName]*tableMeta) error {
+	var missing []*tableMeta
+	var schemas, tables []string
+	for _, m := range metas {
+		if !m.exists {
+			missing = append(missing, m)
+			schemas = append(schemas, strings.TrimSpace(m.name.Schema))
+			tables = append(tables, strings.TrimSpace(m.name.Name))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	rows, err := s.tx.Query(ctx, `SELECT r.i, n.nspname::pg_catalog.text, c.relname::pg_catalog.text
+		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) WITH ORDINALITY AS r(nspname, relname, i)
+		JOIN pg_catalog.pg_namespace AS n
+			ON pg_catalog.lower(n.nspname::pg_catalog.text COLLATE pg_catalog."C") = pg_catalog.lower(r.nspname COLLATE pg_catalog."C")
+		LEFT JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relkind IN ('r', 'p')
+			AND pg_catalog.lower(c.relname::pg_catalog.text COLLATE pg_catalog."C") = pg_catalog.lower(r.relname COLLATE pg_catalog."C")
+		ORDER BY r.i, n.nspname COLLATE pg_catalog."C", c.relname COLLATE pg_catalog."C"`, schemas, tables)
+	if err != nil {
+		return fmt.Errorf("look for names that differ only in case: %w", err)
+	}
+	defer rows.Close()
+	// found holds, for each missing table, the schemas and tables of its rows.
+	found := make([][]nearRow, len(missing))
+	for rows.Next() {
+		var i int
+		var n nearRow
+		if err := rows.Scan(&i, &n.schema, &n.table); err != nil {
+			return fmt.Errorf("look for names that differ only in case: %w", err)
+		}
+		found[i-1] = append(found[i-1], n)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("look for names that differ only in case: %w", err)
+	}
+	for i, m := range missing {
+		m.nearNames, m.nearSchemas = nearNames(m.name, found[i])
+	}
+	return nil
+}
+
+// nearRow is a row of the query of readNearNames: a schema whose name
+// equals the named one once case is folded, and a table of it whose name
+// equals the named one so, or nil.
+type nearRow struct {
+	schema string
+	table  *string
+}
+
+// nearNames returns, from the rows that the query found for the named table
+// name, the tables whose names differ from it only in white space or case,
+// or else the schemas that do. When the named schema exists as it is
+// written, only its own tables count, and no schema does.
+func nearNames(name declaration.TableName, found []nearRow) ([]declaration.TableName, []string) {
+	exact := slices.ContainsFunc(found, func(n nearRow) bool { return n.schema == name.Schema })
+	var tables []declaration.TableName
+	var schemas []string
+	for _, n := range found {
+		switch {
+		case n.table != nil && (!exact || n.schema == name.Schema):
+			tables = append(tables, declaration.TableName{Schema: n.schema, Name: *n.table})
+		case n.table == nil && !exact:
+			schemas = append(schemas, n.schema)
+		}
+	}
+	if len(tables) > 0 {
+		return tables, nil
+	}
+	return nil, schemas
+}
+
+// tableNames returns the names of tables that a query gives as pairs of a
+// schema and a name, or nil for none.
+func tableNames(pairs [][]string) []declaration.TableName {
+	var names []declaration.TableName
+	for _, pair := range pairs {
+		if len(pair) == 2 {
+			names = append(names, declaration.TableName{Schema: pair[0], Name: pair[1]})
+		}
+	}
+	return names
 }
 
 // readKeys fills in the primary key and the unique keys of the tables. A

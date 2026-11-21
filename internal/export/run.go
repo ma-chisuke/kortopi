@@ -29,6 +29,9 @@ type Options struct {
 	// Format is the format of a new file. A table that a file declares
 	// already keeps the format of its file.
 	Format declaration.Format
+	// FormatGiven is true when the user named the format, so that a note
+	// can say that a refresh keeps the format of a file all the same.
+	FormatGiven bool
 	// Overwrite lets the export replace the file that declares a table.
 	Overwrite bool
 	// Notes gets what the user should know about a table that is exported
@@ -121,6 +124,15 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	for _, name := range names {
 		info, ok := infos[name]
 		if !ok || !info.Exists {
+			if len(info.NearNames) > 0 {
+				near := make([]string, len(info.NearNames))
+				for i, n := range info.NearNames {
+					near[i] = "table " + plan.FormatTable(n)
+				}
+				errs = append(errs, fmt.Errorf("table %s does not exist, but %s does, whose name differs only in white space or case: write the name as the database has it",
+					plan.FormatTable(name), strings.Join(near, " or ")))
+				continue
+			}
 			errs = append(errs, fmt.Errorf("table %s does not exist: correct the name, or apply the schema first", name))
 			continue
 		}
@@ -133,6 +145,7 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 			}
 		}
 	}
+	errs = append(errs, partitions(decl.Dir, names, infos, declared)...)
 	errs = append(errs, collisions(decl.Dir, jobs)...)
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -191,7 +204,37 @@ func nothingNamed(decl *declaration.Declaration) error {
 	if len(decl.Tables) == 0 {
 		return errors.New(msg)
 	}
-	return fmt.Errorf("%s; to refresh the tables that %s declares, name them with --table or their schemas with --schema, and add --overwrite", msg, decl.Dir)
+	dir := "the data directory " + decl.Dir
+	if decl.Dir == "." || decl.Dir == "" {
+		dir = "the current directory"
+	}
+	var tables, schemas []string
+	for _, t := range decl.Tables {
+		tables = append(tables, "--table "+t.Name.String())
+		if s := "--schema " + t.Name.Schema; !slices.Contains(schemas, s) {
+			schemas = append(schemas, s)
+		}
+	}
+	return fmt.Errorf("%s: to refresh the tables that %s declares, add --overwrite, and name them, as in %s, or name their schemas, as in %s",
+		msg, dir, someFlags(tables, "table", "tables"), someFlags(schemas, "schema", "schemas"))
+}
+
+// maxFlags is the number of flags that a message writes out before it
+// counts the rest.
+const maxFlags = 4
+
+// someFlags joins flags as a command line takes them, and counts those after
+// the first few, as one more table or n more tables.
+func someFlags(flags []string, one, many string) string {
+	if len(flags) <= maxFlags {
+		return strings.Join(flags, " ")
+	}
+	rest := len(flags) - maxFlags
+	noun := many
+	if rest == 1 {
+		noun = one
+	}
+	return fmt.Sprintf("%s, and %d more %s", strings.Join(flags[:maxFlags], " "), rest, noun)
 }
 
 // tablesOf returns the tables that opts name, sorted and each once. A schema
@@ -238,10 +281,18 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 	}
 	j := &job{req: Request{Table: name}}
 	var errs []error
+	// notes are what the user should know about the table, one line each.
+	var notes []string
 	if dt, ok := declared[name]; ok {
 		j.path, j.rel, j.replace = dt.Path(decl.Dir), dt.File, true
 		if !opts.Overwrite {
 			return j, "", []error{fmt.Errorf("%s: table %s is declared in this file already: export with --overwrite to replace the file, or leave the table out", j.path, name)}
+		}
+		// A refresh keeps the format of the file (ADR-0028), whatever
+		// --format asks for.
+		if opts.FormatGiven && opts.Format != dt.Format {
+			notes = append(notes, fmt.Sprintf("note: table %s is declared in %s, so the export keeps the format of that file, %s: --format applies to new files only",
+				name, j.path, formatName(dt.Format)))
 		}
 		if dt.Format == declaration.SQL {
 			if others := othersInFile(decl, dt); others != "" {
@@ -281,8 +332,10 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 		j.path = filepath.Join(decl.Dir, name.Schema, name.Name+ext)
 		for _, part := range []struct{ what, name string }{{"schema", name.Schema}, {"table", name.Name}} {
 			if why := notAFileName(part.name); why != "" {
-				errs = append(errs, fmt.Errorf("table %s cannot get a file of its own: the name of its %s %s, which a file name cannot: export it into a SQL file that you name, or rename the %s",
-					plan.FormatTable(name), part.what, why, part.what))
+				errs = append(errs, fmt.Errorf("table %s cannot get a file of its own: the name of its %s %s, which a file name cannot: "+
+					"declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, "+
+					"and export the table with --overwrite to write its rows into that file, or rename the %s",
+					quotedName(name), part.what, why, part.what))
 			}
 		}
 		for _, c := range info.Columns {
@@ -316,11 +369,87 @@ func prepare(decl *declaration.Declaration, declared map[declaration.TableName]*
 	var note string
 	if len(key) == 0 {
 		key = j.req.Columns
-		note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one with key in [tables.%s] of %s",
-			name, strconv.Quote(name.String()), filepath.Join(decl.Dir, config.FileName))
+		settingsFile := filepath.Join(decl.Dir, config.FileName)
+		switch {
+		case len(info.UniqueKeys) == 1:
+			note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key %s with key in [tables.%s] of %s",
+				name, plan.KeyChoices(info.UniqueKeys), strconv.Quote(name.String()), settingsFile)
+		case len(info.UniqueKeys) > 1:
+			note = fmt.Sprintf("note: table %s has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one of its unique keys, %s, with key in [tables.%s] of %s",
+				name, plan.KeyChoices(info.UniqueKeys), strconv.Quote(name.String()), settingsFile)
+		case len(info.SetAsideKeys) > 0:
+			// The table has keys, but none that can match rows as a plan
+			// compares them (ADR-0023).
+			note = fmt.Sprintf("note: table %s has no key that can match rows, so its rows are sorted by all their columns, and a plan of it fails: %s: "+
+				"give the table a primary key or a unique key whose index uses the collation of each column and its default operator class",
+				name, plan.SetAsidePhrase(info.SetAsideKeys))
+		default:
+			// A match key must be a primary key or a unique key (ADR-0012),
+			// so only a change of the schema lets a plan match the rows.
+			note = fmt.Sprintf("note: table %s has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: "+
+				"a match key must be a primary key or a unique key of the table, so give the table one in the schema",
+				name)
+		}
+	}
+	if note != "" {
+		notes = append(notes, note)
 	}
 	j.req.OrderBy = slices.Clone(key)
-	return j, note, errs
+	return j, strings.Join(notes, "\n"), errs
+}
+
+// formatName names a format of a declaration file, for messages.
+func formatName(f declaration.Format) string {
+	if f == declaration.SQL {
+		return "SQL"
+	}
+	return "CSV"
+}
+
+// partitions returns an error for each exported partition whose partitioned
+// table, at any level, is exported too, or declared in the data directory
+// already, and for each exported partitioned table that has a partition, at
+// any level, that the data directory declares: the rows of a partition are
+// rows of its partitioned table too, so the declaration would hold them
+// twice, and a plan of it would stop.
+func partitions(dir string, names []declaration.TableName, infos map[declaration.TableName]plan.TableInfo,
+	declared map[declaration.TableName]*declaration.Table,
+) []error {
+	var errs []error
+	for _, name := range names {
+		partitionOf := infos[name].PartitionOf
+		for i, parent := range partitionOf {
+			switch {
+			case slices.Contains(names, parent):
+				errs = append(errs, fmt.Errorf("table %s is %s, and the export names both: "+
+					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables",
+					name, plan.PartitionPhrase(partitionOf, i)))
+			case declared[parent] != nil:
+				errs = append(errs, fmt.Errorf("table %s is %s, which %s declares already: "+
+					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: leave table %s out, or remove the declaration of table %s first",
+					name, plan.PartitionPhrase(partitionOf, i), declared[parent].Path(dir), name, parent))
+			}
+		}
+		// A partition that the directory declares, below an exported
+		// partitioned table. A partition that the export names too is
+		// reported above, from the side of the partition.
+		for _, partition := range infos[name].Partitions {
+			if d := declared[partition]; d != nil && !slices.Contains(names, partition) {
+				errs = append(errs, fmt.Errorf("table %s has a partition, table %s, which %s declares already: "+
+					"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: leave table %s out, or remove the declaration of table %s first",
+					name, partition, d.Path(dir), name, partition))
+			}
+		}
+	}
+	return errs
+}
+
+// quotedName writes the name of a table with each part in double quotes,
+// with the escapes of Go, as plan.FormatName quotes a name that it must
+// quote, so that a separator, a space, or a control character in a name
+// that cannot be a file shows without ambiguity.
+func quotedName(name declaration.TableName) string {
+	return strconv.Quote(name.Schema) + "." + strconv.Quote(name.Name)
 }
 
 // notAFileName says why name cannot be a part of a path on every file

@@ -33,23 +33,23 @@ func (r *parseReader) insert(st *parseStmt, stmt *pg.InsertStmt) (declaration.In
 	written := r.text[nameStart:nameEnd]
 	if rel.GetCatalogname() != "" {
 		return none, r.errorf(nameStart,
-			"the table name %s names a database; write only the schema and the table", written)
+			"the table name %s names a database: write only the schema and the table", written)
 	}
 	if rel.GetSchemaname() == "" {
 		return none, r.errorf(nameStart,
-			"the table name %s has no schema; write it with its schema, as <schema>.%s", written, written)
+			"the table name %s has no schema: write it with its schema, as <schema>.%s", written, written)
 	}
 	table := declaration.TableName{Schema: rel.GetSchemaname(), Name: rel.GetRelname()}
 
 	if with := stmt.GetWithClause(); with != nil {
-		return none, r.errorf(int(with.GetLocation()), "%s: WITH is not accepted; write the rows as INSERT ... VALUES without WITH", table)
+		return none, r.errorf(int(with.GetLocation()), "%s: WITH is not accepted: write the rows as INSERT ... VALUES without WITH", table)
 	}
 	if alias := rel.GetAlias(); alias != nil {
-		return none, r.errorf(nameEnd, "%s: the table alias %s is not accepted; remove it", table, alias.GetAliasname())
+		return none, r.errorf(nameEnd, "%s: the table alias %s is not accepted: remove it", table, alias.GetAliasname())
 	}
 	if stmt.GetSelectStmt() == nil {
 		return none, r.errorf(st.find(pg.Token_DEFAULT),
-			"%s: DEFAULT VALUES is not accepted; name the columns and write the rows as VALUES", table)
+			"%s: DEFAULT VALUES is not accepted: name the columns and write the rows as VALUES", table)
 	}
 	columns, err := r.insertColumns(st, table, stmt.GetCols())
 	if err != nil {
@@ -60,7 +60,7 @@ func (r *parseReader) insert(st *parseStmt, stmt *pg.InsertStmt) (declaration.In
 	// OVERRIDING USER VALUE would drop the value of the file.
 	if stmt.GetOverride() == pg.OverridingKind_OVERRIDING_USER_VALUE {
 		return none, r.errorf(st.find(pg.Token_OVERRIDING),
-			"%s: OVERRIDING USER VALUE is not accepted; remove the clause", table)
+			"%s: OVERRIDING USER VALUE is not accepted: remove the clause", table)
 	}
 	values := stmt.GetSelectStmt().GetSelectStmt()
 	if err := r.insertValues(st, table, values); err != nil {
@@ -73,10 +73,10 @@ func (r *parseReader) insert(st *parseStmt, stmt *pg.InsertStmt) (declaration.In
 	}
 	if conflict := stmt.GetOnConflictClause(); conflict != nil {
 		return none, r.errorf(int(conflict.GetLocation()),
-			"%s: ON CONFLICT is not accepted; remove the clause, because the plan decides which rows to insert and update", table)
+			"%s: ON CONFLICT is not accepted: remove the clause, because the plan decides which rows to insert and update", table)
 	}
 	if len(stmt.GetReturningList()) > 0 {
-		return none, r.errorf(st.find(pg.Token_RETURNING), "%s: RETURNING is not accepted; remove the clause", table)
+		return none, r.errorf(st.find(pg.Token_RETURNING), "%s: RETURNING is not accepted: remove the clause", table)
 	}
 	return declaration.Insert{
 		Table:      table,
@@ -126,7 +126,7 @@ func (st *parseStmt) nameSpan(offset, parts int) (start, end int, ok bool) {
 func (r *parseReader) insertColumns(st *parseStmt, table declaration.TableName, cols []*pg.Node) ([]string, error) {
 	if len(cols) == 0 {
 		return nil, r.errorf(st.start,
-			"%s: the INSERT has no column list; name the columns, as pg_dump --column-inserts writes them", table)
+			"%s: the INSERT has no column list: name the columns, as pg_dump --column-inserts writes them", table)
 	}
 	columns := make([]string, 0, len(cols))
 	seen := make(map[string]bool, len(cols))
@@ -135,10 +135,10 @@ func (r *parseReader) insertColumns(st *parseStmt, table declaration.TableName, 
 		name := target.GetName()
 		if len(target.GetIndirection()) > 0 {
 			return nil, r.errorf(int(target.GetLocation()),
-				"%s: the column list sets a part of column %s (a field or an array element); name whole columns", table, name)
+				"%s: the column list sets a part of column %s (a field or an array element): name whole columns", table, name)
 		}
 		if seen[name] {
-			return nil, r.errorf(int(target.GetLocation()), "%s: the column list names column %q twice; name each column once", table, name)
+			return nil, r.errorf(int(target.GetLocation()), "%s: the column list names column %q twice: name each column once", table, name)
 		}
 		seen[name] = true
 		columns = append(columns, name)
@@ -159,18 +159,18 @@ var parseSetOperations = map[pg.SetOperation]struct {
 // insertValues checks that the rows of an INSERT are one plain VALUES list.
 func (r *parseReader) insertValues(st *parseStmt, table declaration.TableName, values *pg.SelectStmt) error {
 	if with := values.GetWithClause(); with != nil {
-		return r.errorf(int(with.GetLocation()), "%s: WITH is not accepted; write the rows as INSERT ... VALUES without WITH", table)
+		return r.errorf(int(with.GetLocation()), "%s: WITH is not accepted: write the rows as INSERT ... VALUES without WITH", table)
 	}
 	if op := values.GetOp(); op != pg.SetOperation_SETOP_NONE {
 		set, ok := parseSetOperations[op]
 		if !ok {
 			set.name = "a set operation"
 		}
-		return r.errorf(st.find(set.token), "%s: %s is not accepted; write the rows as one VALUES list", table, set.name)
+		return r.errorf(st.find(set.token), "%s: %s is not accepted: write the rows as one VALUES list", table, set.name)
 	}
 	if len(values.GetValuesLists()) == 0 {
 		return r.errorf(st.find(pg.Token_SELECT, pg.Token_TABLE),
-			"%s: INSERT ... SELECT is not accepted; write the rows as VALUES", table)
+			"%s: INSERT ... SELECT is not accepted: write the rows as VALUES", table)
 	}
 	clauses := []struct {
 		present bool
@@ -184,7 +184,7 @@ func (r *parseReader) insertValues(st *parseStmt, table declaration.TableName, v
 	}
 	for _, c := range clauses {
 		if c.present {
-			return r.errorf(st.find(c.token), "%s: %s is not accepted after VALUES; remove it", table, c.name)
+			return r.errorf(st.find(c.token), "%s: %s is not accepted after VALUES: remove it", table, c.name)
 		}
 	}
 	return nil
@@ -204,17 +204,17 @@ func (r *parseReader) insertRow(st *parseStmt, table declaration.TableName, colu
 				continue
 			}
 			return r.errorf(at,
-				"%s, column %s: the word %s, which PostgreSQL reads as the current date or time, is not accepted in a value; write the date or time itself, because a plan must not change the database and must give the same result each time",
+				"%s, column %s: the word %s, which PostgreSQL reads as the current date or time, is not accepted in a value: write the date or time itself, because a plan must not change the database and must give the same result each time",
 				table, columns[j], word)
 		}
 		if offset < 0 {
 			offset = r.locate(st, value)
 		}
 		if what == parseDefault {
-			return r.errorf(offset, "%s, column %s: DEFAULT is not accepted as a value; write the value itself", table, columns[j])
+			return r.errorf(offset, "%s, column %s: DEFAULT is not accepted as a value: write the value itself", table, columns[j])
 		}
 		return r.errorf(offset,
-			"%s, column %s: %s is not accepted as a value; write a constant, because a plan must not change the database and must give the same result each time",
+			"%s, column %s: %s is not accepted as a value: write a constant, because a plan must not change the database and must give the same result each time",
 			table, columns[j], what)
 	}
 	return nil

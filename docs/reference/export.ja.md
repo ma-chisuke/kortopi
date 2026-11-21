@@ -14,13 +14,18 @@
 usage: kortopi export [flags]
 
 Write the rows of tables of the database as a declaration: a file for each
-table, <schema>/<table>.csv or .sql in the data directory, which a plan of
-the same rows finds equal. Name the tables with --table or --schema: an
-export never writes every table of a database. A table that a file
-declares already is written again only with --overwrite, into that file,
-in its format, and with its columns. A new file holds every column of its
-table but the generated ones: remove the columns that the declaration
-should not manage. An export only reads the database.
+table, which a plan of the same rows finds equal. An export only reads
+the database.
+
+Name the tables with --table or --schema: an export never writes every
+table of a database.
+
+A table that no file declares gets a new file, <schema>/<table>.csv, or
+.sql with --format sql. It holds every column of the table but the
+generated ones: remove the columns that the declaration should not manage.
+
+A table that a file declares already is written again only with
+--overwrite, into that file, in its format, and with its columns.
 
 flags:
   --dir <path>      the data directory to write into, created if it is
@@ -92,13 +97,16 @@ No changes. The database matches the declaration.
 ファイルが挙げる列は、kortopi の管理する列である。計画はそれを比べ、適用はそれをすべての環境に書く。
 最初の適用の前に、各ファイルを見直す。
 
-- 行を自然キーで照合するなら、データベースが割り当てる ID を除く。この例の `catalog/plans.csv` は `id,code,name,price` で始まる。`id` は環境ごとに生成される UUID なので、その列を除き、行を `code` で照合する。
-- 行を作った時刻や変えた時刻など、データベースやほかのプログラムの設定する列を除く。
+- 行を自然キーで照合し、しかもその照合がテーブルに合っているなら、データベースが割り当てる ID を除く（[生成される ID の代わりの自然キー](#生成される-id-の代わりの自然キー)）。この例の `catalog/plans.csv` は `id,code,name,price` で始まる。`id` は環境ごとに生成される UUID なので、その列を除き、行を `code` で照合する。
+- 行を変えた時刻のように、データベースやほかのプログラムの設定する列は、既定値があれば除く。新しい行はその既定値を得る。
+- 行を作った時刻をアプリケーションが書く場合のように、`NOT NULL` で既定値のない列は残す。新しい行がその列の値を得られず、計画はそうした列で止まる（[宣言のファイル](declaration.ja.md#挿入する行が値を得られない列)）。ファイルに残した列は、ほかの列と同じく管理される。データベースと違う値は更新になる。kortopi には、挿入のときだけ設定する列はない。
 - `GENERATED ALWAYS` の識別列は、照合キーに含まれない限り除く。更新ではその列を変えられないので、計画がそこで止まる。
 
   ```text
   kortopi: data/a/t.csv: column "serial" of table a.t is an identity column that the database always generates, so an update cannot change it: remove the column from the file, or make it part of the match key
   ```
+
+ファイルから列を除くには、[書き出しのあとで列を除く](#書き出しのあとで列を除く)に従う。
 
 次に、テーブルの設定を `kortopi.toml` に書く（[宣言のファイル](declaration.ja.md#kortopitoml)）。自然キーで照合するテーブルの `key` と、宣言にない行を失うべきテーブルの `mode` である。
 
@@ -129,15 +137,53 @@ pro,Pro,20.00
 
 これで計画は、この宣言の計画がこの先使う設定のもとで、変更を見つけない。
 
+### 書き出しのあとで列を除く
+
+CSV ファイルの列の管理をやめるには、見出しの行からだけその名前を除き、`--overwrite` でテーブルをもう一度書き出す。
+書き出しは見出しの行が挙げる列を保ち、すべての行をそのフィールドで書き直す。
+
+```sh
+# facility/rooms.csv: the header was id,room_type,note, and is now id,room_type
+kortopi export --dir data --table facility.rooms --overwrite
+```
+
+書き出し直すまでは、計画は行で止まる。行には、除いた列のフィールドがまだあるからである。
+
+```text
+kortopi: data/facility/rooms.csv:2: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns: remove the extra fields, or write a value that holds a comma in double quotes)
+```
+
+SQL ファイルでは、各 `INSERT` の列の一覧とその行の値が一致していなければならない。そのため、列の一覧だけを直してもうまくいかない。
+テーブルの `INSERT` を1つだけ残し、その列の一覧から列を、その行から値を除き、テーブルのほかの `INSERT` を消す。それから `--overwrite` でテーブルを書き出す。書き出しは、すべての行をその `INSERT` の列で書き直す。
+
+### 生成される ID の代わりの自然キー
+
+`code` のような自然キーで照合すると、生成される ID が違う複数の環境に、1つの宣言で対応できる。
+ただしそのキーの値を変えると、更新ではなく、古い行の削除と新しい行の挿入になる（[ADR-0012](../adr/ADR-0012-match-rows-by-primary-key-or-a-chosen-unique-key.ja.md)）。
+
+- 新しい行は、列の既定値から新しい ID を得る。
+- 別のテーブルの行が外部キーを通じて古い ID を持っていれば、その行が削除を止めるか、キーの `ON DELETE` の動作に従う。計画はそれを削除する行の下に示す。外部キーなしで古い ID を持つ行、たとえば制約のない列や別のサービスにある写しは、kortopi には見えず、何も指さないまま残る。
+- 削除をしないモード `upsert` では古い行が残り、テーブルはその行を古いキーと新しいキーで2つ持つ。
+
+自然キーで照合するのは、外部キーなしで ID を持つ行がないときか、自然キーが決して変わらないときである。
+そうでなければ、宣言に ID を残してそれで照合する。そうすれば、自然キーの変更は行の更新になり、行は ID を保つ。
+
 ### 主キーのないテーブル
 
 主キーがなく、`kortopi.toml` に `key` もないテーブルも書き出せる。そのときは、すべての列で行を並べ、標準エラー出力に注記を出す。
+照合キーはテーブルの主キーか一意キーでなければならない（[宣言のファイル](declaration.ja.md#kortopitoml)）。そのため注記は、テーブルが持つキーを示す。
+テーブルに一意キーがあれば、注記はそれを挙げる。`kortopi.toml` がそのキーを指定すれば、テーブルの計画は動く。
 
 ```text
-note: table misc.tags has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name one with key in [tables."misc.tags"] of data/kortopi.toml
+note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: name its unique key ("label") with key in [tables."misc.labels"] of data/kortopi.toml
 ```
 
-そのテーブルの計画は、`kortopi.toml` がキー、つまりテーブルの一意キーの列を指定するまで失敗する。
+テーブルにどちらのキーもなければ、設定では解決しない。スキーマがテーブルに主キーか一意キーを与えるまで、テーブルの計画は失敗する。
+
+```text
+note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: a match key must be a primary key or a unique key of the table, so give the table one in the schema
+```
+
 最初の書き出しの前にキーを指定してもよい。書き出しは設定を宣言と照らし合わせない。そのため、まだどのファイルも宣言していないテーブルの `key` も、その書き出しで行を並べる。
 
 ## 宣言したテーブルを書き出し直す
@@ -150,7 +196,7 @@ kortopi export --dir data --table facility.room_types --overwrite
 
 書き出し直しは、テーブルを宣言しているファイルを次のように置き換える。
 
-- `--format` の指定にかかわらず、そのファイルの形式で書く。
+- `--format` の指定にかかわらず、そのファイルの形式で書く。`--format` が別の形式を指定していれば、ファイルが自分の形式を保つことを、標準エラー出力の注記が告げる。
 - そのファイルの列で書く。そのため、書き出し直しで、人の除いた列の管理が始まることはない。
 - ファイルが宣言していなかった行も含め、テーブルのすべての行を書く。
 
@@ -177,8 +223,11 @@ kortopi: data/facility/room_types.csv: table facility.room_types is declared in 
 テーブルを宣言しているディレクトリで `--table` も `--schema` もなければ、エラーはそれらを書き出し直す方法を示す。
 
 ```text
-kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database; to refresh the tables that data declares, name them with --table or their schemas with --schema, and add --overwrite
+kortopi: name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: to refresh the tables that the data directory data declares, add --overwrite, and name them, as in --table facility.room_types --table facility.rooms, or name their schemas, as in --schema facility
 ```
+
+エラーは、宣言済みのテーブルとそのスキーマをフラグの形で挙げる。それぞれ4つまでとし、残りは数で示す。
+カレントディレクトリでは「the current directory」と示す。
 
 書き出し直しは、次のファイルを置き換えない。
 
@@ -295,7 +344,7 @@ GRANT SELECT ON facility.room_types, facility.rooms TO reader;
 権限の不足と行単位セキュリティは、計画と同じくエラーである。「a plan」のかわりに「an export」と示す。
 
 ```text
-kortopi: an export needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table
+kortopi: an export needs USAGE on schema "facility" and SELECT on table facility.room_types, and the role "reader" lacks USAGE on the schema: grant the role USAGE on the schema and SELECT on the table, or leave the tables of the schema out of the export
 kortopi: an export needs SELECT on table facility.room_types, and the role "reader" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "reader" sees only the rows that its policies allow, and an export would leave the others out: export as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
 ```
@@ -341,6 +390,20 @@ kortopi: schema "nowhere" does not exist in database "app"
 kortopi: schema "nothing" has no table whose rows can be declared: name another schema, or tables with --table
 ```
 
+データベースのテーブルと空白か大小だけが違う名前のテーブル。
+
+```text
+kortopi: table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case: write the name as the database has it
+```
+
+パーティションを、そのパーティションテーブルと一緒に指定したもの。宣言はその行を二重に持ってしまう。
+
+```text
+kortopi: table facility.events_2026 is a partition of table facility.events, and the export names both: the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables
+```
+
+データのディレクトリがすでにパーティションテーブルを宣言しているパーティションも、同じである。`--table` で、または `--schema` を通じて指定したパーティションテーブルのパーティションを、データのディレクトリがすでに宣言している場合も、同じである。
+
 テーブルでないリレーション。
 
 ```text
@@ -368,7 +431,7 @@ kortopi: tables App.t and app.t would be written to data/App/t.csv and data/app/
 ファイルの名前になれない名前。
 
 ```text
-kortopi: table a/b.t cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: export it into a SQL file that you name, or rename the schema
+kortopi: table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema
 ```
 
 形の誤ったフラグ。
@@ -380,4 +443,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:224df660a0c28ebc74a8287518e6d1aeeaa4bd037f8af92d05dde3eba26ced06 -->
+<!-- i18n-source: export.md sha256:99bf6c1e6cfe2e249ffd0f629183ae1dc138e0492d245d5de0067ffc0de6acf6 -->

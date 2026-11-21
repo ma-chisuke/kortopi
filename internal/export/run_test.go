@@ -95,16 +95,35 @@ func table(cols ...string) plan.TableInfo {
 }
 
 // database is the database of most cases: two tables in facility, one in
-// billing, one without a primary key, and one with a generated column.
+// billing, one without a primary key, one with a generated column, and a
+// partitioned table in part with a partition that has a partition of its
+// own.
 func database() *fakeDB {
 	noKey := table("code", "name")
 	noKey.PrimaryKey = nil
+	uniqueKey := table("label", "note")
+	uniqueKey.PrimaryKey, uniqueKey.UniqueKeys = nil, [][]string{{"label"}}
+	setAside := table("slug", "note")
+	setAside.PrimaryKey, setAside.SetAsideKeys = nil, []plan.SetAsideKey{{Columns: []string{"slug"}, Reason: "its index uses another collation than column \"slug\""}}
+	partition := table("id", "day")
+	partition.PartitionOf = []declaration.TableName{tn("part.events")}
+	subPartition := table("id", "day")
+	subPartition.PartitionOf = []declaration.TableName{tn("part.events_2026"), tn("part.events")}
+	parted := table("id", "day")
+	parted.Partitions = []declaration.TableName{tn("part.events_2026"), tn("part.events_2026_06")}
 	return &fakeDB{infos: map[declaration.TableName]plan.TableInfo{
 		tn("facility.room_types"): table("code", "name", "gen", "capacity"),
 		tn("facility.rooms"):      table("id", "room_type", "note"),
 		tn("billing.plans"):       table("id", "code", "name"),
 		tn("misc.tags"):           noKey,
+		tn("misc.labels"):         uniqueKey,
+		tn("misc.slugs"):          setAside,
 		tn("misc.only_generated"): {Exists: true, Columns: []plan.ColumnInfo{{Name: "gen", Generated: true}}},
+		tn("part.events"):         parted,
+		tn("part.events_2026"):    partition,
+		tn("part.events_2026_06"): subPartition,
+		// A name that does not exist, in another case than a table that does.
+		tn("Billing.plans"): {NearNames: []declaration.TableName{tn("billing.plans")}},
 	}, empty: []string{"nothing"}}
 }
 
@@ -200,8 +219,29 @@ func TestRun(t *testing.T) {
 				"misc/tags.csv": line("misc.tags", csv, "code,name", "code,name"),
 			},
 			wantOut: "wrote DIR/misc/tags.csv (2 rows)\nExported 1 table with 2 rows.\n",
-			wantNotes: `note: table misc.tags has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: ` +
-				`name one with key in [tables."misc.tags"] of DIR/kortopi.toml` + "\n",
+			wantNotes: `note: table misc.tags has neither a primary key nor a unique key, so its rows are sorted by all their columns, and a plan of it fails: ` +
+				`a match key must be a primary key or a unique key of the table, so give the table one in the schema` + "\n",
+		},
+		{
+			name: "a table whose keys cannot match rows",
+			opts: Options{Tables: []declaration.TableName{tn("misc.slugs")}, Format: csv},
+			wantFiles: map[string]string{
+				"misc/slugs.csv": line("misc.slugs", csv, "slug,note", "slug,note"),
+			},
+			wantOut: "wrote DIR/misc/slugs.csv (2 rows)\nExported 1 table with 2 rows.\n",
+			wantNotes: `note: table misc.slugs has no key that can match rows, so its rows are sorted by all their columns, and a plan of it fails: ` +
+				`the unique key ("slug") cannot, because its index uses another collation than column "slug": ` +
+				`give the table a primary key or a unique key whose index uses the collation of each column and its default operator class` + "\n",
+		},
+		{
+			name: "a table with a unique key and without a primary key",
+			opts: Options{Tables: []declaration.TableName{tn("misc.labels")}, Format: csv},
+			wantFiles: map[string]string{
+				"misc/labels.csv": line("misc.labels", csv, "label,note", "label,note"),
+			},
+			wantOut: "wrote DIR/misc/labels.csv (2 rows)\nExported 1 table with 2 rows.\n",
+			wantNotes: `note: table misc.labels has no primary key, so its rows are sorted by all their columns, and a plan of it needs a key: ` +
+				`name its unique key ("label") with key in [tables."misc.labels"] of DIR/kortopi.toml` + "\n",
 		},
 		{
 			name:  "a declared table, replaced in the format and with the columns of its file",
@@ -216,6 +256,21 @@ func TestRun(t *testing.T) {
 				"seed/rooms.sql":          line("facility.rooms", sql, "id,note", "id"),
 			},
 			wantOut: "wrote DIR/facility/room_types.csv (2 rows)\nwrote DIR/seed/rooms.sql (2 rows)\nExported 2 tables with 4 rows.\n",
+		},
+		{
+			name:  "a table of a SQL file, refreshed with --format csv",
+			files: map[string]string{"facility/room_types.csv": "name,code\nSingle,single\n", "seed/rooms.sql": "old\n"},
+			decl: []declaration.Table{
+				{Name: tn("facility.room_types"), Columns: []string{"name", "code"}, Format: csv, File: "facility/room_types.csv"},
+				{Name: tn("facility.rooms"), Columns: []string{"id", "note"}, Format: sql, File: "seed/rooms.sql"},
+			},
+			opts: Options{Schemas: []string{"facility"}, Format: csv, FormatGiven: true, Overwrite: true},
+			wantFiles: map[string]string{
+				"facility/room_types.csv": line("facility.room_types", csv, "name,code", "code"),
+				"seed/rooms.sql":          line("facility.rooms", sql, "id,note", "id"),
+			},
+			wantOut:   "wrote DIR/facility/room_types.csv (2 rows)\nwrote DIR/seed/rooms.sql (2 rows)\nExported 2 tables with 4 rows.\n",
+			wantNotes: "note: table facility.rooms is declared in DIR/seed/rooms.sql, so the export keeps the format of that file, SQL: --format applies to new files only\n",
 		},
 	}
 	for _, tt := range tests {
@@ -314,8 +369,9 @@ func TestRunErrors(t *testing.T) {
 			name: "nothing named, with tables declared",
 			decl: []declaration.Table{rooms, {Name: tn("billing.plans"), Columns: []string{"id"}, Format: sql, File: "seed.sql"}},
 			opts: Options{Format: csv},
-			want: "name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database; " +
-				"to refresh the tables that DIR declares, name them with --table or their schemas with --schema, and add --overwrite",
+			want: "name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: " +
+				"to refresh the tables that the data directory DIR declares, add --overwrite, and name them, as in --table facility.rooms --table billing.plans, " +
+				"or name their schemas, as in --schema facility --schema billing",
 		},
 		{
 			name: "a schema that does not exist",
@@ -336,6 +392,11 @@ func TestRunErrors(t *testing.T) {
 			name: "a table that does not exist",
 			opts: Options{Tables: []declaration.TableName{tn("facility.room")}, Format: csv},
 			want: "table facility.room does not exist: correct the name, or apply the schema first",
+		},
+		{
+			name: "a table in another case than a table that exists",
+			opts: Options{Tables: []declaration.TableName{tn("Billing.plans")}, Format: csv},
+			want: "table Billing.plans does not exist, but table billing.plans does, whose name differs only in white space or case: write the name as the database has it",
 		},
 		{
 			name: "a declared table without --overwrite",
@@ -386,6 +447,28 @@ func TestRunErrors(t *testing.T) {
 			opts: Options{Tables: []declaration.TableName{tn("misc.only_generated")}, Format: csv},
 			want: "table misc.only_generated has no column that a declaration can set",
 		},
+		{
+			name: "a partition and its partitioned table",
+			opts: Options{Tables: []declaration.TableName{tn("part.events"), tn("part.events_2026")}, Format: csv},
+			want: "table part.events_2026 is a partition of table part.events, and the export names both: " +
+				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: export only one of the two tables",
+		},
+		{
+			name: "a partition of a partition whose root a file declares",
+			decl: []declaration.Table{{Name: tn("part.events"), Columns: []string{"id", "day"}, Format: csv, File: "part/events.csv"}},
+			opts: Options{Tables: []declaration.TableName{tn("part.events_2026_06")}, Format: csv},
+			want: "table part.events_2026_06 is a partition of table part.events, through table part.events_2026, which DIR/part/events.csv declares already: " +
+				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: " +
+				"leave table part.events_2026_06 out, or remove the declaration of table part.events first",
+		},
+		{
+			name: "a partitioned table whose partition a file declares",
+			decl: []declaration.Table{{Name: tn("part.events_2026_06"), Columns: []string{"id", "day"}, Format: csv, File: "part/events_2026_06.csv"}},
+			opts: Options{Tables: []declaration.TableName{tn("part.events")}, Format: csv},
+			want: "table part.events has a partition, table part.events_2026_06, which DIR/part/events_2026_06.csv declares already: " +
+				"the rows of a partition are rows of its partitioned table too, so a declaration of both would hold these rows twice: " +
+				"leave table part.events out, or remove the declaration of table part.events_2026_06 first",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -409,6 +492,25 @@ func TestRunErrors(t *testing.T) {
 				t.Errorf("files =\n%v\nwant them unchanged:\n%v", got, before)
 			}
 		})
+	}
+}
+
+// An export that names nothing, in the current directory that declares many
+// tables, says how to refresh them with the flags that it takes, and counts
+// the tables after the first few.
+func TestCheckNamesTheDeclaredTables(t *testing.T) {
+	t.Parallel()
+
+	var tables []declaration.Table
+	for _, name := range []string{"a.t1", "a.t2", "a.t3", "b.t4", "b.t5", "c.t6", "d.t7", "e.t8"} {
+		tables = append(tables, declaration.Table{Name: tn(name), Columns: []string{"id"}, Format: declaration.CSV, File: strings.Replace(name, ".", "/", 1) + ".csv"})
+	}
+	err := Check(&declaration.Declaration{Dir: ".", Tables: tables}, Options{Format: declaration.CSV})
+	want := "name the tables to export with --table <schema>.<table>, or every table of a schema with --schema <name>: an export never writes every table of a database: " +
+		"to refresh the tables that the current directory declares, add --overwrite, and name them, as in --table a.t1 --table a.t2 --table a.t3 --table b.t4, and 4 more tables, " +
+		"or name their schemas, as in --schema a --schema b --schema c --schema d, and 1 more schema"
+	if err == nil || err.Error() != want {
+		t.Errorf("Check() = %v, want\n%s", err, want)
 	}
 }
 
@@ -580,11 +682,11 @@ func TestRunFileRules(t *testing.T) {
 				name("s", "bell\a"): table("id"), name("s", "space "): table("id"),
 			},
 			opts: Options{Schemas: []string{"a/b", `a\b`, "s"}, Format: sql},
-			want: `table a/b.t cannot get a file of its own: the name of its schema holds a path separator, which a file name cannot: export it into a SQL file that you name, or rename the schema` + "\n" +
-				`table a\b.t cannot get a file of its own: the name of its schema holds a path separator` + ", which a file name cannot: export it into a SQL file that you name, or rename the schema\n" +
-				`table s."bell\a" cannot get a file of its own: the name of its table holds a control character` + ", which a file name cannot: export it into a SQL file that you name, or rename the table\n" +
-				`table s."space " cannot get a file of its own: the name of its table ends with a space or a dot` + ", which a file name cannot: export it into a SQL file that you name, or rename the table\n" +
-				`table s."x:y" cannot get a file of its own: the name of its table holds a colon, which a file name cannot: export it into a SQL file that you name, or rename the table`,
+			want: `table "a/b"."t" cannot get a file of its own: the name of its schema holds a path separator` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema` + "\n" +
+				`table "a\\b"."t" cannot get a file of its own: the name of its schema holds a path separator` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the schema` + "\n" +
+				`table "s"."bell\a" cannot get a file of its own: the name of its table holds a control character` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the table` + "\n" +
+				`table "s"."space " cannot get a file of its own: the name of its table ends with a space or a dot` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the table` + "\n" +
+				`table "s"."x:y" cannot get a file of its own: the name of its table holds a colon` + `, which a file name cannot: declare the table in a SQL file of another name, with one INSERT of the table that names the columns to declare, and export the table with --overwrite to write its rows into that file, or rename the table`,
 		},
 		{
 			name: "a column with a line break, in CSV",

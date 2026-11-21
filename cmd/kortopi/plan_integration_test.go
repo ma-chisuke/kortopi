@@ -203,6 +203,18 @@ func TestPlanCommand(t *testing.T) {
 			checkRun(t, code, stdout, stderr, exitError, "",
 				"kortopi: "+filepath.Join(bad, "facility", "room_types.csv")+`:3: column "capacity": invalid input syntax for type integer: "many"`)
 
+			// Names that differ from those of the database only in white
+			// space or case are mistakes, not names that wait for the schema
+			// change, and are reported together.
+			near := writeFiles(t, map[string]string{
+				"facility/room_types.csv": "code, name,capacity\nsingle,Single,1\n",
+				"facility/Rooms.csv":      "id,room_type,note\n101,single,\n",
+			})
+			code, stdout, stderr = e.plan(t, "--dir", near)
+			checkRun(t, code, stdout, stderr, exitError, "",
+				"kortopi: "+filepath.Join(near, "facility", "Rooms.csv")+": table facility.Rooms does not exist, but table facility.rooms does, whose name differs only in white space or case",
+				"kortopi: "+filepath.Join(near, "facility", "room_types.csv")+`: column " name" is not a column of table facility.room_types, but column "name" is`)
+
 			// NULL in a NOT NULL column.
 			null := writeFiles(t, map[string]string{"facility/room_types.csv": "code,name,capacity\nsingle,,1\n"})
 			code, stdout, stderr = e.plan(t, "--dir", null)
@@ -228,10 +240,49 @@ func TestPlanCommandConnectionErrors(t *testing.T) {
 		t.Setenv("PGPASSWORD", wrong)
 		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
 		code, stdout, stderr := e.plan(t, "--dir", dir)
-		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: connect to the database: ", "password authentication failed")
+		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: cannot connect to database ", "password authentication failed")
 		if strings.Contains(stderr, wrong) {
 			t.Errorf("stderr repeats the password:\n%s", stderr)
 		}
+	})
+
+	// With sslmode prefer, the default, the driver first tries TLS, which
+	// the server of the tests refuses: the error shows the cause, not that
+	// refusal.
+	t.Run("wrong password with sslmode prefer", func(t *testing.T) {
+		t.Setenv("PGSSLMODE", "")
+		t.Setenv("PGPASSWORD", "wrong-password-that-must-not-show")
+		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+		code, stdout, stderr := e.plan(t, "--dir", dir)
+		checkRun(t, code, stdout, stderr, exitError, "",
+			"kortopi: cannot connect to database \""+db.Name+"\" as user \""+db.Config.User+"\":\nkortopi:   ", "password authentication failed")
+		for _, not := range []string{"server refused TLS connection", "no password was given", "wrong-password-that-must-not-show"} {
+			if strings.Contains(stderr, not) {
+				t.Errorf("stderr holds %q:\n%s", not, stderr)
+			}
+		}
+	})
+
+	t.Run("no password", func(t *testing.T) {
+		t.Setenv("PGSSLMODE", "")
+		t.Setenv("PGPASSWORD", "")
+		t.Setenv("PGPASSFILE", filepath.Join(t.TempDir(), "none"))
+		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+		code, stdout, stderr := e.plan(t, "--dir", dir)
+		checkRun(t, code, stdout, stderr, exitError, "", "password authentication failed",
+			": no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names\n")
+		if strings.Contains(stderr, "server refused TLS connection") {
+			t.Errorf("stderr holds the refusal of TLS:\n%s", stderr)
+		}
+	})
+
+	t.Run("no database name", func(t *testing.T) {
+		t.Setenv("PGPASSWORD", db.Config.Password)
+		t.Setenv("PGDATABASE", "")
+		e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User}}
+		code, stdout, stderr := e.plan(t, "--dir", dir)
+		checkRun(t, code, stdout, stderr, exitError, "",
+			"kortopi: the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names\n")
 	})
 
 	t.Run("port without a server", func(t *testing.T) {
@@ -250,6 +301,6 @@ func TestPlanCommandConnectionErrors(t *testing.T) {
 		}
 		e := &e2e{db: db, conn: []string{"--host", "127.0.0.1", "--port", free, "--user", db.Config.User, "--dbname", db.Name}}
 		code, stdout, stderr := e.plan(t, "--dir", dir)
-		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: connect to the database: ", "127.0.0.1")
+		checkRun(t, code, stdout, stderr, exitError, "", "kortopi: cannot connect to database ", "\nkortopi:   127.0.0.1:")
 	})
 }

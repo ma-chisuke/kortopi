@@ -153,6 +153,7 @@ apply は、テーブルに対する `INSERT` と `UPDATE` を持つロールで
 - [kortopi plan](docs/reference/plan.ja.md)：フラグ、接続、出力、SQL での計画の出力、終了コード。
 - [kortopi apply](docs/reference/apply.ja.md)：apply に要るものとすること、削除の安全策、エラー。
 - [kortopi export](docs/reference/export.ja.md)：書き出すもの、書き出したあとに直すこと、宣言したテーブルの書き出し直し、エラー。
+- [スクリプトから kortopi を実行する](docs/reference/automation.ja.md)：デプロイのとき、プルリクエストのチェック、定期的なずれの検出、レビューした SQL。
 
 ## どう動くか
 
@@ -201,4 +202,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:b48c94122108fe49c88e625881fd275a63bd8e41115ff792dbe9b7226b423abe -->
+<!-- i18n-source: README.md sha256:472aa9b8190ae779e5f1574d2f912883af10740a3bf2994bf9aef5ecdd06f55d -->

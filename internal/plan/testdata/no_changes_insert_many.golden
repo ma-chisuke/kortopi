@@ -1,0 +1,2 @@
+No changes. There is nothing to apply.
+Tables of mode insert are compared by their keys only, not by their values: app.a, app.b, app.c, app.d, app.f, and 2 more.

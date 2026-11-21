@@ -12,8 +12,45 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
 
-// noChanges is the whole output of a plan that is empty.
+// noChanges is the whole output of a plan that is empty, when no table of the
+// plan has mode insert.
 const noChanges = "No changes. The database matches the declaration.\n"
+
+// noChangesInsert is the first line of a plan that is empty when a table of
+// the plan has mode insert. Such a table gets only its missing rows, so the
+// values of its other rows were not compared, and the plan cannot say that
+// the database matches the declaration (ADR-0031).
+const noChangesInsert = "No changes. There is nothing to apply.\n"
+
+// maxNamed is the number of tables that a line names before it counts the
+// rest.
+const maxNamed = 5
+
+// EmptyLines returns the lines of a plan that is empty, without their line
+// breaks: the sentence that says so, and, when tables of the plan have mode
+// insert, a line that names them, because their values were not compared.
+// The plan as SQL writes the same lines as comments.
+func (p *Plan) EmptyLines() []string {
+	var insert []string
+	if p != nil {
+		for i := range p.Tables {
+			if p.Tables[i].Mode == config.ModeInsert {
+				insert = append(insert, FormatTable(p.Tables[i].Name))
+			}
+		}
+	}
+	if len(insert) == 0 {
+		return []string{strings.TrimSuffix(noChanges, "\n")}
+	}
+	note := "A table of mode insert is compared by its key only, not by its values: "
+	if len(insert) > 1 {
+		note = "Tables of mode insert are compared by their keys only, not by their values: "
+	}
+	if len(insert) > maxNamed {
+		insert = append(insert[:maxNamed], fmt.Sprintf("and %d more", len(insert)-maxNamed))
+	}
+	return []string{strings.TrimSuffix(noChangesInsert, "\n"), note + strings.Join(insert, ", ") + "."}
+}
 
 // pendingMark follows a table or a column that the database does not have yet
 // (ADR-0016).
@@ -51,8 +88,8 @@ func (d *TableDiff) changes() bool {
 // (+), update (~), and delete (-), a line under the rows to delete for each
 // foreign key that points at them, and the counts of the table. A table that
 // the database does not have yet gets one line. Tables without changes get no
-// block, and the summary at the end counts them. An empty plan prints one
-// sentence.
+// block, and the summary at the end counts them. An empty plan prints the
+// lines of EmptyLines.
 //
 // A value prints as the database prints it, and NULL as NULL. A value that
 // could be misread prints in double quotes with the escapes of Go: an empty
@@ -63,7 +100,7 @@ func (d *TableDiff) changes() bool {
 // The output is plain text: no color, and no terminal is detected.
 func Render(w io.Writer, p *Plan) error {
 	if p.Empty() {
-		_, err := io.WriteString(w, noChanges)
+		_, err := io.WriteString(w, strings.Join(p.EmptyLines(), "\n")+"\n")
 		return err
 	}
 

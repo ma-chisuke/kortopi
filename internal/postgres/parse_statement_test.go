@@ -67,11 +67,11 @@ func TestParseInsertsSkipsSettings(t *testing.T) {
 
 func TestParseInsertsRejectsSettings(t *testing.T) {
 	t.Parallel()
-	const standard = "seed.sql:2: standard_conforming_strings must stay on, but this statement sets it %s; write the strings in the standard form, where a backslash is an ordinary character and E'...' holds escapes, and remove the statement"
-	const encoding = "seed.sql:2: client_encoding must stay UTF8, but this statement sets it %s; convert the file to UTF-8 and remove the statement"
-	const zone = "seed.sql:2: TimeZone must stay UTC, but this statement sets it %s; write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement"
-	const dates = "seed.sql:2: DateStyle must stay ISO, MDY, but this statement sets it %s; write dates as YYYY-MM-DD and remove the statement"
-	const intervals = "seed.sql:2: IntervalStyle must stay postgres, but this statement sets it %s; write intervals in the form of the postgres style, such as '1 day 02:00:00', and remove the statement"
+	const standard = "seed.sql:2: standard_conforming_strings must stay on, but this statement sets it %s: write the strings in the standard form, where a backslash is an ordinary character and E'...' holds escapes, and remove the statement"
+	const encoding = "seed.sql:2: client_encoding must stay UTF8, but this statement sets it %s: convert the file to UTF-8 and remove the statement"
+	const zone = "seed.sql:2: TimeZone must stay UTC, but this statement sets it %s: write the offset in each value, as in '2026-04-01 09:00:00+09', and remove the statement"
+	const dates = "seed.sql:2: DateStyle must stay ISO, MDY, but this statement sets it %s: write dates as YYYY-MM-DD and remove the statement"
+	const intervals = "seed.sql:2: IntervalStyle must stay postgres, but this statement sets it %s: write intervals in the form of the postgres style, such as '1 day 02:00:00', and remove the statement"
 	tests := []struct {
 		stmt string
 		want string
@@ -141,7 +141,7 @@ func TestParseInsertsRejectsSettingName(t *testing.T) {
 	parseCheckErrors(t, []parseErrorCase{{
 		name: "a name that is not a constant",
 		src:  "SET a = 1;\nSELECT pg_catalog.set_config('standard_' || 'conforming_strings', 'off', false);\n",
-		want: "seed.sql:2: the name of the setting in pg_catalog.set_config(...) is not a string constant; write the name as a constant, so that kortopi can tell that the statement does not change what the values mean",
+		want: "seed.sql:2: the name of the setting in pg_catalog.set_config(...) is not a string constant: write the name as a constant, so that kortopi can tell that the statement does not change what the values mean",
 	}})
 }
 
@@ -155,12 +155,12 @@ func TestParseInsertsRecoversPanic(t *testing.T) {
 		{
 			name:  "a string",
 			panic: "out of memory",
-			want:  "seed.sql: the SQL reader could not hold the file (panic: out of memory); declare large tables in CSV files, which kortopi loads with COPY without parsing them",
+			want:  "seed.sql: the SQL reader could not hold the file (panic: out of memory): declare large tables in CSV files, which kortopi loads with COPY without parsing them",
 		},
 		{
 			name:  "an error",
 			panic: errors.New("wasm error: unreachable"),
-			want:  "seed.sql: the SQL reader could not hold the file (panic: wasm error: unreachable); declare large tables in CSV files, which kortopi loads with COPY without parsing them",
+			want:  "seed.sql: the SQL reader could not hold the file (panic: wasm error: unreachable): declare large tables in CSV files, which kortopi loads with COPY without parsing them",
 		},
 	}
 	for _, tt := range tests {

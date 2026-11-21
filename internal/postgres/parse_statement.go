@@ -136,7 +136,7 @@ func (r *parseReader) checkSetting(raw *pg.RawStmt, limit int) error {
 				return err
 			}
 			return r.errorf(st.start,
-				"the name of the setting in %s(...) is not a string constant; write the name as a constant, so that kortopi can tell that the statement does not change what the values mean",
+				"the name of the setting in %s(...) is not a string constant: write the name as a constant, so that kortopi can tell that the statement does not change what the values mean",
 				parseSetConfig)
 		}
 		values = args[1:2]
@@ -159,7 +159,7 @@ func (r *parseReader) checkSetting(raw *pg.RawStmt, limit int) error {
 			}
 			how = "to " + strings.Join(texts, ", ")
 		}
-		return r.errorf(st.start, "%s must stay %s, but this statement sets it %s; %s",
+		return r.errorf(st.start, "%s must stay %s, but this statement sets it %s: %s",
 			setting.name, setting.pinned, how, setting.todo)
 	}
 	return nil
@@ -317,15 +317,15 @@ func parseNames(parts []*pg.Node) string {
 func (r *parseReader) rejectStatement(st *parseStmt) error {
 	if c := st.node.GetCopyStmt(); c != nil && c.GetIsFrom() && !c.GetIsProgram() && c.GetFilename() == "" {
 		return r.errorf(st.start,
-			"COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file")
+			"COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file")
 	}
 	kind := r.statementKind(st)
 	if st.node.GetSelectStmt() != nil {
 		return r.errorf(st.start,
-			"%s is not accepted; a SQL declaration holds only INSERT ... VALUES statements, and skips only the calls of pg_catalog.set_config and pg_catalog.setval that a dump writes",
+			"%s is not accepted: a SQL declaration holds only INSERT ... VALUES statements, and skips only the calls of pg_catalog.set_config and pg_catalog.setval that a dump writes",
 			kind)
 	}
-	return r.errorf(st.start, "%s is not accepted; a SQL declaration holds only INSERT ... VALUES statements", kind)
+	return r.errorf(st.start, "%s is not accepted: a SQL declaration holds only INSERT ... VALUES statements", kind)
 }
 
 // parseAlterKinds names an ALTER statement by the kind of object.

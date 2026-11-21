@@ -102,8 +102,17 @@ func TestLoadErrorsCSV(t *testing.T) {
 					name:    "missing field",
 					columns: []string{"id", "n"},
 					csv:     "id,n\n1\n",
-					want:    []string{"s/t.csv:2: missing data for column \"n\""},
-					code:    "22P04",
+					want: []string{"s/t.csv:2: missing data for column \"n\" (hint: the row has fewer fields than the header, which names 2 columns: " +
+						"give the row a field for every column, an empty one for NULL)"},
+					code: "22P04",
+				},
+				{
+					name:    "extra field",
+					columns: []string{"id", "n"},
+					csv:     "id,n\n1,2\n3,4,5\n",
+					want: []string{"s/t.csv:3: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns: " +
+						"remove the extra fields, or write a value that holds a comma in double quotes)"},
+					code: "22P04",
 				},
 				{
 					name:    "header that differs from the declared columns",
@@ -196,7 +205,7 @@ CREATE TABLE s.c (a text, b integer, v text NOT NULL, PRIMARY KEY (a, b));
 // keys of the first ones. The temporary table has no constraints, so the
 // rows load, but an apply of them would fail.
 func TestDiffNotNull(t *testing.T) {
-	const csvCause = `; in a CSV file, an unquoted empty field is NULL: write "" for the empty string`
+	const csvCause = `, and write "" for the empty string, because in a CSV file an unquoted empty field is NULL`
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)

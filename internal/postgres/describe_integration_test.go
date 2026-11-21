@@ -42,8 +42,15 @@ func TestDescribe(t *testing.T) {
 			CREATE SCHEMA "Mixed";
 			CREATE TABLE "Mixed"."Case Table" ("ID" integer PRIMARY KEY, "Name" text);
 			CREATE TABLE s.parted (country text, zip text, city text, PRIMARY KEY (country, zip)) PARTITION BY LIST (country);
-			CREATE TABLE s.parted_jp PARTITION OF s.parted FOR VALUES IN ('jp');
+			CREATE TABLE s.parted_jp PARTITION OF s.parted FOR VALUES IN ('jp') PARTITION BY RANGE (zip);
+			CREATE TABLE s.parted_jp_east PARTITION OF s.parted_jp FOR VALUES FROM ('0') TO ('5');
+			CREATE TABLE s.inherits (extra text) INHERITS (s.no_key);
 			CREATE TABLE s.empty ();
+			CREATE SCHEMA sales;
+			CREATE SCHEMA "Sales";
+			CREATE TABLE "Sales".rooms (id integer);
+			CREATE TABLE s."écart" (id integer);
+			CREATE TABLE s."Écran" (id integer);
 			CREATE DOMAIN s.d_default AS integer DEFAULT 7;
 			CREATE DOMAIN s.d_inner AS integer DEFAULT 5;
 			CREATE DOMAIN s.d_outer AS s.d_inner;
@@ -95,11 +102,45 @@ func TestDescribe(t *testing.T) {
 					Columns:    []plan.ColumnInfo{{Name: "ID", NotNull: true}, {Name: "Name"}},
 					PrimaryKey: []string{"ID"},
 				},
-				name("mixed", "case table"): {},
+				// A name that does not exist names the tables, or else the
+				// schemas, that differ from it only in white space or case.
+				name("mixed", "case table"): {NearNames: []declaration.TableName{name("Mixed", "Case Table")}},
+				name("S", "KEYS"):           {NearNames: []declaration.TableName{name("s", "keys")}},
+				name(" s ", "nothing"):      {NearSchemas: []string{"s"}},
+				name("S", "nothing"):        {NearSchemas: []string{"s"}},
+				// A schema that exists as it is named, next to one in another
+				// case: the table waits for the schema change, also when the
+				// other schema has it.
+				name("sales", "new_table"): {},
+				name("sales", "rooms"):     {},
+				name("Sales", "Rooms"):     {NearNames: []declaration.TableName{name("Sales", "rooms")}},
+				// Only ASCII letters are folded, in both directions.
+				name("s", "Écart"): {},
+				name("s", "écran"): {},
 				name("s", "parted"): {
 					Exists:     true,
 					Columns:    []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
 					PrimaryKey: []string{"country", "zip"},
+					Partitions: []declaration.TableName{name("s", "parted_jp"), name("s", "parted_jp_east")},
+				},
+				// A partition names the partitioned tables above it, nearest
+				// first; a table that inherits from another is no partition.
+				name("s", "parted_jp"): {
+					Exists:      true,
+					Columns:     []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
+					PrimaryKey:  []string{"country", "zip"},
+					PartitionOf: []declaration.TableName{name("s", "parted")},
+					Partitions:  []declaration.TableName{name("s", "parted_jp_east")},
+				},
+				name("s", "parted_jp_east"): {
+					Exists:      true,
+					Columns:     []plan.ColumnInfo{{Name: "country", NotNull: true}, {Name: "zip", NotNull: true}, {Name: "city"}},
+					PrimaryKey:  []string{"country", "zip"},
+					PartitionOf: []declaration.TableName{name("s", "parted_jp"), name("s", "parted")},
+				},
+				name("s", "inherits"): {
+					Exists:  true,
+					Columns: []plan.ColumnInfo{{Name: "a"}, {Name: "b", NotNull: true}, {Name: "extra"}},
 				},
 				name("s", "empty"): {Exists: true},
 				// A column of a domain over a domain with a default gets that

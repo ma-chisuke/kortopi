@@ -105,7 +105,7 @@ func parseApply(args []string) (applyOptions, error) {
 		return applyOptions{}, err
 	}
 	if o.maxDeleteSet && !o.allowDelete {
-		return applyOptions{}, errors.New("flag --max-delete needs --allow-delete: without it, an apply deletes no row; add --allow-delete, or remove --max-delete")
+		return applyOptions{}, errors.New("flag --max-delete needs --allow-delete, without which an apply deletes no row: add --allow-delete, or remove --max-delete")
 	}
 	return o, nil
 }

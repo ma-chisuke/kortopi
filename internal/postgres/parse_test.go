@@ -424,27 +424,27 @@ func TestParseInsertsFileErrors(t *testing.T) {
 		{
 			name: "an earlier rejected statement comes first",
 			src:  "UPDATE s.t SET a = 1;\nINSERT INTO s.t (a) VALUES (1);\nINSERT INTO s.t (a) VALUES (2) x;\n",
-			want: "seed.sql:1: UPDATE is not accepted; a SQL declaration holds only INSERT ... VALUES statements",
+			want: "seed.sql:1: UPDATE is not accepted: a SQL declaration holds only INSERT ... VALUES statements",
 		},
 		{
 			name: "copy from stdin with its data",
 			src:  "SET a = 1;\n\nCOPY public.t (a, b) FROM stdin;\n1\tx\n2\ty\n\\.\n",
-			want: "seed.sql:3: COPY ... FROM stdin is not accepted; write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file",
+			want: "seed.sql:3: COPY ... FROM stdin is not accepted: write the rows as INSERT ... VALUES statements, as pg_dump --column-inserts writes them, or as a CSV file",
 		},
 		{
 			name: "another psql meta-command",
 			src:  "\\connect app\nINSERT INTO s.t (a) VALUES (1);\n",
-			want: `seed.sql:1:1: the psql meta-command \connect is not accepted; a declaration skips only \restrict and \unrestrict`,
+			want: `seed.sql:1:1: the psql meta-command \connect is not accepted: a declaration skips only \restrict and \unrestrict`,
 		},
 		{
 			name: "a meta-command without a space after it",
 			src:  "\\restrictx\n",
-			want: `seed.sql:1:1: the psql meta-command \restrictx is not accepted; a declaration skips only \restrict and \unrestrict`,
+			want: `seed.sql:1:1: the psql meta-command \restrictx is not accepted: a declaration skips only \restrict and \unrestrict`,
 		},
 		{
 			name: "a meta-command at the end of the file",
 			src:  "INSERT INTO s.t (a) VALUES (1);\n\\gexec",
-			want: `seed.sql:2:1: the psql meta-command \gexec is not accepted; a declaration skips only \restrict and \unrestrict`,
+			want: `seed.sql:2:1: the psql meta-command \gexec is not accepted: a declaration skips only \restrict and \unrestrict`,
 		},
 		{
 			name: "a meta-command that does not start the line",
@@ -454,17 +454,17 @@ func TestParseInsertsFileErrors(t *testing.T) {
 		{
 			name: "a meta-command inside a statement",
 			src:  "INSERT INTO s.t (a)\n\\restrict x\nVALUES (1);\n",
-			want: `seed.sql:2: the psql meta-command \restrict stands inside a statement; a declaration accepts it only between statements`,
+			want: `seed.sql:2: the psql meta-command \restrict stands inside a statement: a declaration accepts it only between statements, so move it there or remove it`,
 		},
 		{
 			name: "invalid UTF-8",
 			src:  "INSERT INTO s.t (a) VALUES ('é');\nINSERT INTO s.t (a) VALUES ('\xff');\n",
-			want: "seed.sql:2:30: the file is not valid UTF-8; save it as UTF-8",
+			want: "seed.sql:2:30: the file is not valid UTF-8: save it as UTF-8",
 		},
 		{
 			name: "NUL byte",
 			src:  "INSERT INTO s.t (a) VALUES (1);\x00INSERT INTO s.u (a) VALUES (1);\n",
-			want: "seed.sql:1:32: the file holds a NUL byte; a SQL file must be text",
+			want: "seed.sql:1:32: the file holds a NUL byte, and a SQL file must be text: save it as text",
 		},
 	})
 }

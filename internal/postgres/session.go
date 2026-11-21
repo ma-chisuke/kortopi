@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -122,7 +124,7 @@ func Connect(ctx context.Context, opts Options) (*Session, error) {
 func (o Options) connConfig() (*pgx.ConnConfig, error) {
 	cfg, err := pgx.ParseConfig(o.connString())
 	if err != nil {
-		return nil, fmt.Errorf("read the connection settings: %w", err)
+		return nil, settingsError(err)
 	}
 	// libpq reads these settings as names, and the errors of a connection
 	// repeat them. A connection string there may hold a password, so it is
@@ -138,7 +140,182 @@ func (o Options) connConfig() (*pgx.ConnConfig, error) {
 				f.what, f.what, f.env, f.flag)
 		}
 	}
+	// Without a name, the server would take the name of the user for the
+	// name of the database, and fail on a database that does not exist.
+	if cfg.Database == "" {
+		return nil, errors.New("the name of the database is missing: give it with --dbname or in PGDATABASE, or as dbname in the service that PGSERVICE names")
+	}
 	return cfg, nil
+}
+
+// settingsError turns an error of the driver about the settings of the
+// connection into one that says which setting is wrong. It leaves out the
+// connection string that the driver quotes, which kortopi built from the
+// flags and the user never wrote.
+func settingsError(err error) error {
+	msg := err.Error()
+	var parseErr *pgconn.ParseConfigError
+	if errors.As(err, &parseErr) {
+		// The driver writes "cannot parse `<string>`: <what>", and what it
+		// says after the string holds no backquote.
+		if i := strings.LastIndex(msg, "`: "); i >= 0 {
+			msg = msg[i+len("`: "):]
+		}
+	}
+	switch {
+	case strings.HasPrefix(msg, "invalid port"):
+		return errors.New("read the connection settings: the port is not a number from 1 to 65535: correct PGPORT, or the port of the service that PGSERVICE names")
+	case strings.Contains(msg, "sslmode is invalid"):
+		return errors.New("read the connection settings: the SSL mode is not one that libpq knows: " +
+			"set PGSSLMODE, or sslmode in the service that PGSERVICE names, to disable, allow, prefer, require, verify-ca, or verify-full")
+	case strings.HasPrefix(msg, "invalid connect_timeout"):
+		return errors.New("read the connection settings: the connection timeout is not a whole number of seconds: correct PGCONNECT_TIMEOUT, or connect_timeout in the service that PGSERVICE names")
+	case strings.Contains(msg, "unable to find service"):
+		return errors.New("read the connection settings: the service that PGSERVICE names is not in the service file, PGSERVICEFILE or ~/.pg_service.conf: correct the name of the service")
+	case strings.Contains(msg, "://") || strings.Contains(msg, "="):
+		// The driver repeats some values that it cannot read, and such a
+		// value may be a connection string with a password.
+		return errors.New("read the connection settings: a variable of libpq, or the service file, holds a value that the driver cannot read")
+	}
+	return fmt.Errorf("read the connection settings: %s", msg)
+}
+
+// invalidPassword is the SQLSTATE of PostgreSQL for a password that does not
+// authenticate the user, also when none was given.
+const invalidPassword = "28P01"
+
+// connectFailure is the error of a connection that failed. It keeps the
+// error of the driver, and says what failed in fewer words.
+type connectFailure struct {
+	msg string
+	err error
+}
+
+func (e *connectFailure) Error() string {
+	return e.msg
+}
+
+func (e *connectFailure) Unwrap() error {
+	return e.err
+}
+
+// missingPassword follows the attempt whose password the server refused,
+// when the settings held none.
+const missingPassword = "no password was given: give it in PGPASSWORD, or in the password file, ~/.pgpass or the file that PGPASSFILE names"
+
+// connectError says why a connection failed, as one error of several lines:
+// the first says which database and which user, and each further line is
+// one attempt, indented. The driver tries a host more than once, as libpq
+// does: with sslmode prefer, the default, first with TLS for each address of
+// the host, and then without, so for a server without TLS an attempt says
+// "server refused TLS connection", whatever the cause. When the settings
+// allow an attempt without TLS, such a refusal is left out if a later
+// attempt to the same host failed for another reason; an attempt that says
+// the same as an earlier one is left out too. An attempt whose password the
+// server refused, when the settings held none, says that no password was
+// given. password tells whether the settings held a password, from any
+// source.
+func connectError(err error, password bool) error {
+	var connectErr *pgconn.ConnectError
+	if !errors.As(err, &connectErr) {
+		return fmt.Errorf("connect to the database: %w", err)
+	}
+	plain := connectErr.Config.TLSConfig == nil
+	for _, f := range connectErr.Config.Fallbacks {
+		plain = plain || f.TLSConfig == nil
+	}
+	lines := attemptCauses(attemptsOf(connectErr.Unwrap()), password, plain)
+	msg := fmt.Sprintf("cannot connect to database %q as user %q:\n  %s",
+		connectErr.Config.Database, connectErr.Config.User, strings.Join(lines, "\n  "))
+	return &connectFailure{msg: msg, err: err}
+}
+
+// attemptsOf returns the attempts of a connection that failed, each as an
+// error of one attempt. The driver joins them, and may wrap the joined
+// errors in a message of its own, such as for a host whose name it could not
+// resolve: that message then stands before each attempt.
+func attemptsOf(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var attempts []error
+		for _, e := range joined.Unwrap() {
+			attempts = append(attempts, attemptsOf(e)...)
+		}
+		return attempts
+	}
+	inner := errors.Unwrap(err)
+	if inner == nil {
+		return []error{err}
+	}
+	prefix, wrapped := strings.CutSuffix(err.Error(), inner.Error())
+	attempts := attemptsOf(inner)
+	if !wrapped || len(attempts) < 2 {
+		return []error{err}
+	}
+	for i, a := range attempts {
+		attempts[i] = &prefixedError{prefix: prefix, err: a}
+	}
+	return attempts
+}
+
+// prefixedError is an attempt with the message that the driver wrapped
+// around all attempts.
+type prefixedError struct {
+	prefix string
+	err    error
+}
+
+func (e *prefixedError) Error() string {
+	return e.prefix + e.err.Error()
+}
+
+func (e *prefixedError) Unwrap() error {
+	return e.err
+}
+
+// attemptCauses returns a line for each attempt that says why the
+// connection failed. When plain is true, as with sslmode prefer or allow,
+// whose settings allow an attempt without TLS, a refusal of TLS is left out
+// if a later attempt to the same host failed for another reason: that
+// attempt, the retry without TLS, gives the cause. With sslmode require,
+// every refusal of TLS is a cause and stays. An attempt that says the same as
+// an earlier one is left out. A refused password, when the settings held
+// none, gets missingPassword after it.
+func attemptCauses(attempts []error, password, plain bool) []string {
+	var lines []string
+	for i, a := range attempts {
+		text := strings.ReplaceAll(a.Error(), "\n", " ")
+		if plain && refusedTLS(text) && slices.ContainsFunc(attempts[i+1:], func(later error) bool {
+			return !refusedTLS(later.Error()) && attemptHost(later.Error()) == attemptHost(text)
+		}) {
+			continue
+		}
+		var pgErr *pgconn.PgError
+		if !password && errors.As(a, &pgErr) && pgErr.Code == invalidPassword {
+			text += ": " + missingPassword
+		}
+		if !slices.Contains(lines, text) {
+			lines = append(lines, text)
+		}
+	}
+	return lines
+}
+
+// refusedTLS reports whether the text of an attempt says that the server
+// refused TLS.
+func refusedTLS(text string) bool {
+	return strings.HasSuffix(text, "tls error: server refused TLS connection")
+}
+
+// attemptHost returns the host that the error of one attempt names, as the
+// driver writes it: "address:port (host): ...". The addresses of one host,
+// such as ::1 and 127.0.0.1 of localhost, name the same host.
+func attemptHost(text string) string {
+	end := strings.Index(text, "): ")
+	start := strings.LastIndex(text[:max(end, 0)], " (")
+	if end < 0 || start < 0 {
+		return text
+	}
+	return text[start+2 : end]
 }
 
 // connString returns the fields of o that are set as a connection string of
@@ -183,7 +360,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	}
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("connect to the database: %w", err)
+		return nil, connectError(err, cfg.Password != "")
 	}
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
@@ -280,7 +457,10 @@ func (s *Session) waitForLock(ctx context.Context, database string) error {
 	}
 	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1)", int64(lockKey)); err != nil {
 		_ = tx.Rollback(ctx)
-		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+		if ctx.Err() != nil {
+			return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+		}
+		return waitForLockError(database, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
@@ -402,7 +582,7 @@ func (s *Session) checkTemporary(ctx context.Context) error {
 
 // temporaryError returns ErrTemporaryTables with the database and the reason.
 func (s *Session) temporaryError(reason string) error {
-	return &temporaryTablesError{msg: fmt.Sprintf("cannot create temporary tables in database %q, because %s; "+
+	return &temporaryTablesError{msg: fmt.Sprintf("cannot create temporary tables in database %q, because %s: "+
 		"%s needs a session that can write, on the primary, with the TEMPORARY privilege on the database",
 		s.databaseName, reason, s.needs())}
 }

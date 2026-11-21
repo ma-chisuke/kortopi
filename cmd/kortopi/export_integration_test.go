@@ -105,9 +105,51 @@ func TestExportCommand(t *testing.T) {
 			code, stdout, stderr = e.command(t, "plan", "--dir", dir, "--exit-code")
 			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
 
+			// Columns dropped from the header alone: the rows keep their
+			// fields, so a plan stops on them, and a refresh writes the rows
+			// in the columns of the header.
+			if err := os.WriteFile(filepath.Join(dir, "facility", "rooms.csv"), []byte("id,room_type\n101,single,\n102,twin,corner\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			code, stdout, stderr = e.command(t, "plan", "--dir", dir)
+			checkRun(t, code, stdout, stderr, exitError, "", "kortopi: "+filepath.Join(dir, "facility", "rooms.csv")+
+				":2: extra data after last expected column (hint: the row has more fields than the header, which names 2 columns")
+			code, stdout, stderr = e.command(t, "export", "--dir", dir, "--table", "facility.rooms", "--overwrite")
+			checkRun(t, code, stdout, stderr, exitOK, lines(
+				"wrote "+filepath.Join(dir, "facility", "rooms.csv")+" (2 rows)",
+				"Exported 1 table with 2 rows.",
+			))
+			if got, want := readFile(t, dir, "facility/rooms.csv"), "id,room_type\n101,single\n102,twin\n"; got != want {
+				t.Errorf("rooms.csv after dropping a column =\n%s\nwant\n%s", got, want)
+			}
+			code, stdout, stderr = e.command(t, "plan", "--dir", dir, "--exit-code")
+			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
+
+			// In a SQL file, one INSERT that names the columns to keep is
+			// enough: a refresh writes every row in its columns.
+			sqlDir := filepath.Join(t.TempDir(), "data")
+			if err := os.MkdirAll(filepath.Join(sqlDir, "facility"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sqlDir, "facility", "rooms.sql"), []byte(`INSERT INTO "facility"."rooms" ("id", "room_type") VALUES ('101', 'single');`+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			code, stdout, stderr = e.command(t, "export", "--dir", sqlDir, "--table", "facility.rooms", "--overwrite")
+			checkRun(t, code, stdout, stderr, exitOK, lines(
+				"wrote "+filepath.Join(sqlDir, "facility", "rooms.sql")+" (2 rows)",
+				"Exported 1 table with 2 rows.",
+			))
+			if got, want := readFile(t, sqlDir, "facility/rooms.sql"), `INSERT INTO "facility"."rooms" ("id", "room_type") VALUES ('101', 'single');`+"\n"+
+				`INSERT INTO "facility"."rooms" ("id", "room_type") VALUES ('102', 'twin');`+"\n"; got != want {
+				t.Errorf("rooms.sql after a refresh =\n%s\nwant\n%s", got, want)
+			}
+			code, stdout, stderr = e.command(t, "plan", "--dir", sqlDir, "--exit-code")
+			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
+
 			// The refusals.
 			code, stdout, stderr = e.command(t, "export", "--dir", dir)
-			checkRun(t, code, stdout, stderr, exitError, "", "name them with --table or their schemas with --schema, and add --overwrite")
+			checkRun(t, code, stdout, stderr, exitError, "",
+				"add --overwrite, and name them, as in --table facility.room_types --table facility.rooms, or name their schemas, as in --schema facility")
 			code, stdout, stderr = e.command(t, "export", "--dir", t.TempDir(), "--schema", "nowhere")
 			checkRun(t, code, stdout, stderr, exitError, "", "kortopi: ", "nowhere")
 			code, stdout, stderr = e.command(t, "export", "--dir", t.TempDir(), "--table", "facility.nothing")

@@ -106,6 +106,48 @@ func TestCSVError(t *testing.T) {
 	}
 }
 
+// A row with more or fewer fields than the header gets a hint, from the
+// SQLSTATE and the message of PostgreSQL, that says so and counts the
+// columns of the header. Another error of the same SQLSTATE, or a message
+// in another language, gets none.
+func TestCSVErrorFieldCount(t *testing.T) {
+	s := &Session{dir: "data"}
+	file := filepath.Join("data", "s", "t.csv")
+	three := declaration.Table{Name: declaration.TableName{Schema: "s", Name: "t"}, Format: declaration.CSV, File: "s/t.csv", Columns: []string{"id", "n", "m"}}
+	one := three
+	one.Columns = []string{"id"}
+	tests := []struct {
+		table   declaration.Table
+		message string
+		where   string
+		want    string
+	}{
+		{
+			three, "extra data after last expected column", `COPY kortopi_1, line 2: "1,a,b,c"`,
+			file + ":2: extra data after last expected column (hint: the row has more fields than the header, which names 3 columns: " +
+				"remove the extra fields, or write a value that holds a comma in double quotes)",
+		},
+		{
+			one, "extra data after last expected column", `COPY kortopi_1, line 3: "1,a"`,
+			file + ":3: extra data after last expected column (hint: the row has more fields than the header, which names 1 column: " +
+				"remove the extra fields, or write a value that holds a comma in double quotes)",
+		},
+		{
+			three, `missing data for column "m"`, `COPY kortopi_1, line 4: "1,a"`,
+			file + `:4: missing data for column "m" (hint: the row has fewer fields than the header, which names 3 columns: ` +
+				"give the row a field for every column, an empty one for NULL)",
+		},
+		{three, "unterminated CSV quoted field", `COPY kortopi_1, line 5: "1,""a"`, file + ":5: unterminated CSV quoted field"},
+		{three, `données manquantes pour la colonne « m »`, `COPY kortopi_1, line 4: "1,a"`, file + `:4: données manquantes pour la colonne « m »`},
+	}
+	for _, tt := range tests {
+		err := s.csvError(tt.table, &pgconn.PgError{Code: badCopyFileFormat, Message: tt.message, Where: tt.where})
+		if err.Error() != tt.want {
+			t.Errorf("csvError(%q) =\n%s\nwant\n%s", tt.message, err, tt.want)
+		}
+	}
+}
+
 func TestSQLError(t *testing.T) {
 	ins := declaration.Insert{SQL: "INSERT INTO s.t (a) VALUES\n(1)", Line: 4, TableStart: 12, TableEnd: 15}
 	// "(1)" is the 36th character of "INSERT INTO  pg_temp.x  (a) VALUES\n(1)".

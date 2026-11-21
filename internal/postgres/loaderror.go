@@ -96,7 +96,35 @@ func (s *Session) csvError(table declaration.Table, err error) error {
 		}
 	}
 	e.context = strings.Join(context, "; ")
+	e.hint = fieldCountHint(pgErr, len(table.Columns))
 	return e
+}
+
+// badCopyFileFormat is the SQLSTATE of PostgreSQL for a line of COPY that
+// the format does not allow, such as a row with more or fewer fields than
+// the columns.
+const badCopyFileFormat = "22P04"
+
+// fieldCountHint says what a user needs to know about an error of COPY for a
+// row with more or fewer fields than the header names: the header has
+// columns columns. COPY names neither count, and its messages say "data" and
+// "column" for what a CSV file calls a field. The messages are those of a
+// server whose messages are in English; for another language, or another
+// error, it returns "".
+func fieldCountHint(err *pgconn.PgError, columns int) string {
+	if err.Code != badCopyFileFormat {
+		return ""
+	}
+	header := strconv.Itoa(columns) + " " + plural(int64(columns), "column", "columns")
+	switch {
+	case err.Message == "extra data after last expected column":
+		return "the row has more fields than the header, which names " + header +
+			": remove the extra fields, or write a value that holds a comma in double quotes"
+	case strings.HasPrefix(err.Message, "missing data for column "):
+		return "the row has fewer fields than the header, which names " + header +
+			": give the row a field for every column, an empty one for NULL"
+	}
+	return ""
 }
 
 // sqlError turns an error of a retargeted INSERT statement into an error
