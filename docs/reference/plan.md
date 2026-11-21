@@ -264,6 +264,9 @@ When nothing differs and nothing waits for a schema change, the plan is one line
 No changes. The database matches the declaration.
 ```
 
+A declared value matches when the type of its column takes it for equal to the stored value, such as `1000.00` for a stored `1000.0`, and an apply then leaves the stored value ([Values that the type takes for equal](comparison.md#values-that-the-type-takes-for-equal)).
+An interval is the exception: it matches only when its months, its days, and its time are equal, so `1 mon` against a stored `30 days` is a change ([Intervals](comparison.md#intervals)).
+
 A table of mode `insert` gets only its missing rows, so a plan compares its declared rows with the stored rows by their keys alone, not by their values.
 When the plan has such a table, the empty plan does not say that the database matches, and names those tables instead, up to five of them and then a count of the others:
 

@@ -264,6 +264,9 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 No changes. The database matches the declaration.
 ```
 
+宣言の値は、保存されている `1000.0` に対する `1000.00` のように、列の型が保存されている値と等しいとみなすときに一致する。そのとき、適用は保存されている値に手を付けない（[型が等しいとみなす値](comparison.ja.md#型が等しいとみなす値)）。
+期間は例外であり、月数・日数・時間がどれも等しいときにだけ一致する。そのため、保存されている `30 days` に対する `1 mon` は変更になる（[期間](comparison.ja.md#期間)）。
+
 モード `insert` のテーブルは、欠けている行を得るだけである。そのため計画は、宣言した行と保存されている行をキーだけで比べ、値では比べない。
 計画にそうしたテーブルがあれば、空の計画はデータベースが一致しているとは言わず、代わりにそれらのテーブルを挙げる。挙げるのは5つまでとし、残りは数で示す。
 
@@ -603,4 +606,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:6abef0903bce2a11f019bc8080e91b485ffc973101f8de2281928887b63b37dc -->
+<!-- i18n-source: plan.md sha256:21fbf994de9893c6342bdc1a94e6875dc8d67202aa669724c431dda283cec66d -->

@@ -70,7 +70,13 @@ type columnMeta struct {
 	// collatable is true when the column has a collation.
 	collatable bool
 	typ        uint32
-	eq         equality
+	// eq is the equality of the type, which a unique index of the column
+	// uses: a plan matches the rows by it.
+	eq equality
+	// interval is true when the type is interval or holds one. The equality
+	// of interval takes a month for 30 days and a day for 24 hours, so a plan
+	// compares the values of such a column by their text (ADR-0040).
+	interval bool
 	// ordered is true when the type has a B-tree ordering, which a key
 	// column needs to sort and to match rows.
 	ordered bool
@@ -551,6 +557,13 @@ LEFT JOIN LATERAL (
 // compares its values as jsonb.
 const jsonType = 114
 
+// intervalType is the OID of the type interval. Its equality takes a month
+// for 30 days and a day for 24 hours, so a plan compares its values, and the
+// values of every type that holds one, by their text: under the pinned
+// IntervalStyle postgres, the text of an interval tells its months, its
+// days, and its time apart (ADR-0040).
+const intervalType = 1186
+
 // readEqualities decides for every column of the tables how its values are
 // compared.
 func (s *Session) readEqualities(ctx context.Context, byOID map[uint32]*tableMeta) error {
@@ -590,6 +603,7 @@ func (s *Session) readEqualities(ctx context.Context, byOID map[uint32]*tableMet
 	for _, m := range byOID {
 		for i := range m.columns {
 			m.columns[i].eq = r.comparison(m.columns[i].typ)
+			m.columns[i].interval = r.holdsInterval(m.columns[i].typ)
 			m.columns[i].ordered = r.ordered(m.columns[i].typ)
 			m.columns[i].dateTime = r.dateTime(m.columns[i].typ)
 		}
@@ -601,6 +615,8 @@ func (s *Session) readEqualities(ctx context.Context, byOID map[uint32]*tableMet
 type resolver struct {
 	types map[uint32]*typeMeta
 	done  map[uint32]*equality
+	// intervals holds what holdsInterval found for each type.
+	intervals map[uint32]bool
 }
 
 // comparison returns how the values of type oid are compared: with the
@@ -613,6 +629,39 @@ func (r *resolver) comparison(oid uint32) equality {
 		return equality{kind: compareJSONB}
 	}
 	return textEquality
+}
+
+// holdsInterval reports whether type oid is interval or holds one: as the
+// base type of a domain, the element type of an array, a column of a
+// composite type, or the subtype of a range or of the range of a
+// multirange.
+func (r *resolver) holdsInterval(oid uint32) bool {
+	oid = r.baseType(oid)
+	if oid == intervalType {
+		return true
+	}
+	if found, ok := r.intervals[oid]; ok {
+		return found
+	}
+	if r.intervals == nil {
+		r.intervals = make(map[uint32]bool)
+	}
+	// Mark the type before looking inside it, so that a cycle ends.
+	r.intervals[oid] = false
+	t, ok := r.types[oid]
+	if !ok {
+		return false
+	}
+	inner := slices.Clone(t.fields)
+	if t.elem != 0 {
+		inner = append(inner, t.elem)
+	}
+	if t.inner != 0 {
+		inner = append(inner, t.inner)
+	}
+	found := slices.ContainsFunc(inner, r.holdsInterval)
+	r.intervals[oid] = found
+	return found
 }
 
 // baseType returns the type under the domains of oid.
