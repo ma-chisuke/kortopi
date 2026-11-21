@@ -16,9 +16,11 @@ kortopi は、ファイルのテキストをデータベースと比べること
 - テキストは、列の照合順序のもとで比べる。大文字と小文字を無視する非決定的な照合順序では、`abc` と `ABC` は等しい。
 - `json` は自分の等価性を持たないので、`jsonb` として比べる。
 - `xml` や `point` のように等価性を持たない型は、テキストをバイト単位で比べる。そうした型を含む配列や複合型も同じである。
-- 照合キーの列も同じように比べ、行はキーの型の順に並べる。`integer` のキーなら、`9` は `10` より前に来る。そのため、キーの列の型には等価性と B-tree の順序が要る。`xid` のように、等価性がハッシュの演算子クラスからしか得られない型は、キーの列にできない。
+- 期間は、月数・日数・時間をそれぞれ厳密に比べる。型の等価性は1か月を30日、1日を24時間と数えるので、それでは比べない。`1 mon` と `30 days` は違い、`1 day` と `24 hours` も違う（[期間](#期間)）。
+- 照合キーの列も同じように比べ、行はキーの型の順に並べる。`integer` のキーなら、`9` は `10` より前に来る。そのため、キーの列の型には等価性と B-tree の順序が要る。`xid` のように、等価性がハッシュの演算子クラスからしか得られない型は、キーの列にできない。キーの期間には、独自の決まりがある（[照合キーの期間](#照合キーの期間)）。
 
 計画は値を、次の節の設定のもとで PostgreSQL がテキストとして出力するとおりに表示する。
+列の型が保存されている値と等しいとみなす宣言の値は、宣言が別の書き方をしていても変更にならず、適用もその値を書かない（[型が等しいとみなす値](#型が等しいとみなす値)）。
 
 ## セッションの設定
 
@@ -58,7 +60,7 @@ SQL として出力した計画は、設定の違うセッションでも同じ�
 | `timestamp` | `2026-11-19 09:00` と `2026-11-19T09:00:00`（入力のオフセットは無視する） | `"2026-11-19 09:00:00" -> "2026-11-19 09:00:01"` |
 | `date` | `2026-11-19`・`11/19/2026`・`20261119` | `2026-11-19 -> 2026-11-20` |
 | `time` | `09:00`・`09:00:00.000`・`9:00 AM` | `09:00:00 -> 09:00:01` |
-| `interval` | `1 hour`・`60 minutes`・`PT1H`、`1 day`・`24 hours`・`24:00:00` | `"1 day" -> "2 days"` |
+| `interval` | `1 hour`・`60 minutes`・`PT1H`、`1 year` と `12 mons`、`P1M` と `1 mon` | `"30 days" -> "1 mon"`、`"1 day" -> "24:00:00"` |
 | `boolean` | `true`・`TRUE`・`t`・`yes` | `true -> false` |
 | `uuid` | 大文字でも小文字でも、波かっこがあってもなくても同じ値 | 新しい値を小文字で表示 |
 | `bytea` | `\x6869` と、バイト列として読んだ `hi` | `\x6869 -> \x6870` |
@@ -74,6 +76,77 @@ SQL として出力した計画は、設定の違うセッションでも同じ�
 
 SQL ファイルでは、`date '2026-11-19'` や `'hi'::pg_catalog.bytea` のように列の型へキャストした値は、キャストのない値と同じに読む。
 最後の列の引用符とエスケープは、計画の表示のものである。値は、空白・`=`・引用符を含むときに二重引用符で囲む（[kortopi plan](plan.ja.md#値と名前)）。
+
+## 期間
+
+PostgreSQL は、期間を月数・日数・時間の3つの部分として持つ。
+型 `interval` の等価性は、1か月を30日、1日を24時間として3つを1つの長さにまとめる。しかし、部分が違えば計算の結果も違う。`date '2025-01-31' + interval '1 mon'` は `2025-02-28` になり、`30 days` なら `2025-03-02` になる。
+そこで計画は、2つの期間を固定したスタイル `postgres` でのテキストで比べる。このスタイルは、部分を1つずつ分けて書く。
+2つの期間は、月数・日数・時間がどれも等しいときに等しい。
+
+| 保存されている値 | 宣言の値 | 計画の表示 |
+|---|---|---|
+| `30 days` | `1 mon` | `"30 days" -> "1 mon"` |
+| `24 hours` | `1 day` | `"24:00:00" -> "1 day"` |
+| `-30 days` | `-1 mon` | `"-30 days" -> "-1 mons"` |
+| `0` | `1 mon -30 days` | `"00:00:00" -> "1 mon -30 days"` |
+| `12 mons` | `1 year` | 変更なし |
+| `01:30:00` | `90 minutes` | 変更なし |
+| `1 mon` | `P1M` | 変更なし |
+| `-1 mon +2 days` | `2 days -1 mon` | 変更なし |
+| `infinity` | `infinity` | 変更なし（PostgreSQL 17 から） |
+
+この決まりは、期間がどこにあっても成り立つ。
+
+- 型修飾子のある列では、PostgreSQL が宣言の値を読むときに型修飾子が効く。`interval(0)` の列では、`00:00:00.6` は `00:00:01` になる。`interval day to second` は月数を残すので、この型でも `1 mon` と `30 days` の違いは変更になる。
+- `interval` の上のドメインは、`interval` として比べる。
+- 配列はテキストで比べる：`"{\"30 days\",\"1 day\"}" -> "{\"1 mon\",\"1 day\"}"`。
+- 期間の範囲と複数範囲は、テキストで比べる：`"[\"30 days\",\"60 days\")" -> "[\"1 mon\",\"2 mons\")"`。
+- 期間を含む複合型は、全体をテキストで比べる。そのため、ほかの列もテキストで比べることになる。`numeric` の列だけなら `1.0` と `1.00` は等しいが、ここでは `"(1.0,\"1 mon\")" -> "(1.00,\"1 mon\")"` が変更になる。
+
+### 照合キーの期間
+
+期間のキーの列は、キーの一意インデックスと同じく、型の等価性で行を照合する。
+部分が同じなら、保存されている `1 day` に対する `P1D` のように別の書き方をしたキーでも、その行と照合する。
+一意インデックスは `1 mon` と `30 days` を1つのキーとみなすので、テーブルはそのどちらか一方しか持てない。また、計画はキーを決して変えない。
+そのため計画は、どのモードでも、宣言の2つの行がそうしたキーを持てば止まる。
+
+```text
+kortopi: data/billing/terms.csv: declared rows hold keys that differ, but that the equality of their type takes for one key, as the unique index of the key does, so the table can hold only one row of each pair: (span)=(1 mon) and (span)=(30 days): declare each key once
+```
+
+宣言のキーが、部分の違うキーを持つ保存されている行と照合したときも止まる。
+
+```text
+kortopi: data/billing/terms.csv: declared keys match stored rows by the equality of their type, as the unique index of the key does, but differ from the keys of those rows, and a plan never changes a key: (span)=(1 mon) matches the stored (span)=(30 days): declare each key as the table stores it, or change the stored key with an UPDATE in the schema change, which runs before kortopi
+```
+
+どちらのエラーも、組かキーを10個まで挙げる。適用も同じように止まる。
+
+## 型が等しいとみなす値
+
+列の型が保存されている値と等しいとみなす宣言の値は、宣言が別の値を書いていても変更にならない。
+計画はそれを示さず、適用はそれを書かない。テーブルは保存されている値を持ち続ける。
+この決まりのおかげで、`1.0` と `1.00` の違いはどの計画にも出ない。その代わり、チームはこうした値を宣言で変えられない。
+
+| 型 | 保存されている値 | 宣言の値 | 変更にならない理由 |
+|---|---|---|---|
+| 桁数を指定しない `numeric` | `1000.0` | `1000.00` | 桁数は数えない。 |
+| `citext` | `abc` | `ABC` | 型が大文字と小文字を無視する。 |
+| 大文字と小文字を無視する非決定的な照合順序のもとの `text` | `abc` | `ABC` | 照合順序が大文字と小文字を無視する。 |
+| `double precision` | `-0` | `0` | `-0` と `0` は等しい。 |
+| `json` | `{"a":1}` | `{"a": 1}` | `json` は `jsonb` として比べ、`jsonb` は空白を無視する。 |
+| `json` | `{"a":1,"b":2}` | `{"b":2,"a":1}` | `jsonb` はキーの順番を無視する。 |
+| `json` | `{"tier":"a","tier":"b"}` | `{"tier":"b"}` | `jsonb` は、繰り返されたキーのうち最後のものを残す。 |
+
+こうした値を変えるには、kortopi より前に実行するスキーマの変更の中に、`UPDATE` として変更を書く。
+
+```sql
+UPDATE billing.plans SET price = 1000.00 WHERE code = 'pro';
+```
+
+変更はそのまま残る。以後の計画は宣言の値をその値と等しいとみなし、適用はその値に手を付けない。
+期間はこうした値にあたらない。計画は、期間の部分を比べるからである（[期間](#期間)）。
 
 ## NULL と空文字列
 
@@ -120,6 +193,6 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 これらは、行を適用したときに見つかる（[kortopi apply](apply.ja.md)）。
 マージの前にこれらを見つける方法は、ADR-0016 にある。CI で、使い捨ての PostgreSQL に新しいスキーマを適用し、続けて行を適用する。
 
-これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md) と [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md) にある。
+これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0040](../adr/ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:1a8c6efc727cffefa107019a6031b67850452df5a70d8ff475f5a728f3efd303 -->
+<!-- i18n-source: comparison.md sha256:2791d7e71fa300413b000e3d7fc5965ddd51334c05902ca8998db19d9e32d41b -->
