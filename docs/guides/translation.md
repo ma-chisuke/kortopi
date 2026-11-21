@@ -233,3 +233,19 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | registry (of the dialects of a build), register | レジストリ、登録する |
 | build tag, build constraint (of Go) | ビルドタグ、ビルド制約 |
 | fake (in a test) | 偽物 |
+| issue (on GitHub), blank issue | issue、空の issue |
+| issue form, field (of a form) | issue のフォーム、欄 |
+| chooser (of the forms for a new issue) | テンプレートの選択画面 |
+| label (of an issue or a pull request) | ラベル |
+| milestone (on GitHub) | マイルストーン |
+| task list | タスクリスト |
+| bug | 不具合（ラベルは `bug` のまま） |
+| proposal | 提案 |
+| reproduce, reproduction (of a bug) | 再現する、再現 |
+| reporter (of an issue) | 報告者 |
+| triage (an issue) | トリアージする |
+| closing keyword (in a pull request) | 閉じるキーワード |
+| workaround | 回避策 |
+| impact (of a bug) | 影響 |
+| notification (on GitHub) | 通知 |
+| private vulnerability reporting, security advisory (on GitHub) | 脆弱性の非公開報告、セキュリティアドバイザリ |
