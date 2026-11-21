@@ -98,7 +98,7 @@ func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_
 		return 0, err
 	}
 
-	from := quoteTable(req.Table)
+	from := quoteTable(req.Table) + " AS " + storedAlias
 	if !meta.partitioned {
 		from = "ONLY " + from
 	}
@@ -107,7 +107,10 @@ func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_
 		parts := make([]string, len(req.OrderBy))
 		for i, name := range req.OrderBy {
 			col, _ := meta.column(name)
-			parts[i] = quoteIdent(name)
+			// The column of the table, named with its alias: a bare name
+			// would name the column of the result, which an export in SQL
+			// selects as text, and the rows would be sorted by that text.
+			parts[i] = storedAlias + "." + quoteIdent(name)
 			switch {
 			case !col.ordered:
 				// A type without an ordering sorts by its text.
