@@ -248,6 +248,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   A section `[tables."facility.rooms".on_insert]` with a line for each column is the same.
 
   - A value is a string, which PostgreSQL reads by the type of its column, as it reads a field of a CSV file: `"now"` is the time of the transaction that inserts the row, `"0"` in an integer column is 0, and `""` is the empty string, not NULL. A value of another kind, such as `sort_order = 0`, is an error. NULL cannot be written, and a value is never SQL.
+  - A plan and an apply read a value in the settings that they pin ([How values are compared](comparison.md#the-settings-of-the-session)), not in the time zone of your team: `"today"` is the date in UTC, and `"now"` in a `timestamp` column without a time zone is the time of the clock in UTC.
   - The words `now`, `today`, `tomorrow`, and `yesterday`, which a declaration refuses, are allowed.
   - Every row that kortopi inserts into the table gets the values. kortopi never compares or updates such a column: a row that exists keeps what it holds, and a plan shows no change in the column.
   - A column is named exactly as the table has it. The file of the table must not declare it, and it must not be a column of the match key, a generated column, or an identity column that is `GENERATED ALWAYS`.

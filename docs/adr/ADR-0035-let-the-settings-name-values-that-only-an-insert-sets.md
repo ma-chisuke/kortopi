@@ -50,7 +50,7 @@ The setting:
 
 - A value is a TOML string and nothing else. An integer, a float, a boolean, a date or a time of TOML, an array, or a table is an error that names the settings file, the table, and the column, and says to write the value as a string. A string keeps its meaning by the way it is written, as ADR-0013 requires of every value of the settings.
 - A column is named exactly as the table names it. The values are sorted by the name of the column, and the plan and the statements name them in that order, so that two runs print the same.
-- PostgreSQL reads a value by the type of its column, as it reads a field of a CSV file (ADR-0009): `"now"` in a `timestamptz` column is the time of the transaction that inserts, `"0"` in an integer column is 0, and `""` is the empty string, not NULL. NULL cannot be written: a column that may be NULL needs no value.
+- PostgreSQL reads a value by the type of its column, as it reads a field of a CSV file (ADR-0009): `"now"` in a `timestamptz` column is the time of the transaction that inserts, `"0"` in an integer column is 0, and `""` is the empty string, not NULL. NULL cannot be written: a column that may be NULL needs no value. A plan and an apply read the value in the settings that they pin (ADR-0023): `"today"` is the date in UTC, and `"now"` in a `timestamp` column without a time zone is the time of the clock in UTC.
 - A value is never SQL. It reaches PostgreSQL as a string literal that kortopi writes, never as code.
 - The words `now`, `today`, `tomorrow`, and `yesterday`, which a declaration refuses because they read as the moment of reading (ADR-0022), are allowed here: such a value is never compared, and PostgreSQL reads it in the transaction that inserts the row. This refines ADR-0022: its refusal holds for the values of a declaration, not for the values of `on_insert`.
 
@@ -84,6 +84,7 @@ The output and the statements:
 - Good, because the settings hold strings, never code, and PostgreSQL reads them with the rules of a declared value.
 - Good, because a value of a table that exists and that an insert would refuse stops the plan of a pull request, also when no row is to insert, with the other mistakes.
 - Good, because a first export of the table writes a file that a plan accepts with the settings as they are.
+- Bad, because a plan and an apply read a value in the settings that they pin (ADR-0023), not in the time zone of the team: `today` is the date in UTC, and `now` in a `timestamp` column without a time zone is the time of the clock in UTC. A team that wants another zone writes a `timestamptz` column, or a value with its offset.
 - Bad, because every row that kortopi inserts into a table gets the same values: a column that needs another value for each row must still be declared.
 - Bad, because a reader of a data file does not see what a new row gets without opening `kortopi.toml`, as ADR-0013 says of every setting.
 - Bad, because the plan as SQL reads a value when the script runs, in the settings of the session that runs it: `now` is the time of the script, not of the plan, and a value whose meaning depends on the settings, such as a timestamp without an offset, can read differently there than in an apply. A value that reads the same anywhere, such as a timestamp with its offset, avoids the second case.

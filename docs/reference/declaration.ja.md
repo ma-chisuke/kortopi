@@ -249,6 +249,7 @@ mode = "insert"
   列ごとに1行を書いた `[tables."facility.rooms".on_insert]` の節も、同じ意味である。
 
   - 値は文字列である。PostgreSQL は、CSV ファイルの欄を読むときと同じく、列の型で値を読む。`"now"` は行を挿入するトランザクションの時刻であり、整数の列の `"0"` は 0 であり、`""` は NULL ではなく空文字列である。`sort_order = 0` のように文字列でない値はエラーである。NULL は書けず、値が SQL になることはない。
+  - 計画と apply は、チームのタイムゾーンではなく、自分が固定する設定で値を読む（[値の比べ方](comparison.ja.md#セッションの設定)）。`"today"` は UTC での日付であり、タイムゾーンのない `timestamp` の列の `"now"` は UTC での時計の時刻である。
   - 宣言では拒まれる `now`・`today`・`tomorrow`・`yesterday` の各単語も書ける。
   - kortopi がテーブルに挿入するどの行も、この値を得る。kortopi はこうした列を比べも更新もしない。すでにある行は持っている値を保ち、計画はその列の変更を示さない。
   - 列は、テーブルが持つとおりの名前で書く。テーブルのファイルはその列を宣言してはならず、その列は照合キーの列・生成列・`GENERATED ALWAYS` の識別列であってはならない。
@@ -481,4 +482,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:ab3f25d905c52a64cf0db7f3a4609eb26cbe7b0b38276ce88b3a4fcc7f1f3142 -->
+<!-- i18n-source: declaration.md sha256:2d08627c9c5adeff934fc7857f73c4ab9813a8b240a9c71bcb45cfd45d1ea7d7 -->
