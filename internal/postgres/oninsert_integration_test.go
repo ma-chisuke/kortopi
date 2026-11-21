@@ -4,11 +4,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
@@ -362,6 +364,69 @@ func TestApplyOnInsertPrivileges(t *testing.T) {
 			}
 			if n := db.Query(t, "SELECT pg_catalog.count(*) FROM app.t")[0][0]; n != "0" {
 				t.Errorf("the apply wrote %s rows, want none", n)
+			}
+		})
+	}
+}
+
+// A value that the input function of its type refuses is a mistake of the
+// settings whatever the error: also the syntax error of a tsquery, and a
+// relation that a regclass names and that does not exist. The plan reports
+// them with the mistakes of the tables after them. An error of the session,
+// such as the end of a wait for a lock by lock_timeout or statement_timeout,
+// stops the check at once.
+func TestCheckValuesErrors(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.a_search (id integer PRIMARY KEY, q tsquery, r regclass);
+				CREATE TABLE app.b_nokey (id integer);
+			`)
+			dir := writeFiles(t, map[string]string{"app/a_search.csv": "id\n1\n", "app/b_nokey.csv": "id\n1\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "a_search", "id"), csvTable("app", "b_nokey", "id")}}
+			search := declaration.TableName{Schema: "app", Name: "a_search"}
+			settings := config.New(map[declaration.TableName]config.Table{search: {OnInsert: []config.InsertValue{
+				{Column: "q", Value: "a &"}, {Column: "r", Value: "no_such_table"},
+			}}})
+			_, err := plan.Build(t.Context(), decl, settings, db.session(t, dir), plan.Options{})
+			settingsFile := filepath.Join(dir, "kortopi.toml")
+			want := settingsFile + `: on_insert of table app.a_search gives column "q" the value "a &", which the type of the column does not read: ` +
+				`no operand in tsquery: "a &": write the value as a CSV file writes a value of the column` + "\n" +
+				settingsFile + `: on_insert of table app.a_search gives column "r" the value "no_such_table", which the type of the column does not read: ` +
+				`relation "no_such_table" does not exist: write the value as a CSV file writes a value of the column` + "\n" +
+				"table app.b_nokey has neither a primary key nor a unique key, and a match key must be one of them: " +
+				`give the table a primary key in the schema, or a unique key that you name with key in [tables."app.b_nokey"] of ` + settingsFile
+			if err == nil || err.Error() != want {
+				t.Errorf("plan = %v, want\n%s", err, want)
+			}
+
+			// Another session holds a lock on the table until the test ends.
+			locker, err := pgx.ConnectConfig(t.Context(), db.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = locker.Close(context.Background()) })
+			tx, err := locker.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE app.a_search IN ACCESS EXCLUSIVE MODE"); err != nil {
+				t.Fatal(err)
+			}
+			for setting, code := range map[string]string{"lock_timeout": "55P03", "statement_timeout": "57014"} {
+				cfg := db.Config.Copy()
+				cfg.RuntimeParams[setting] = "200ms"
+				s := db.sessionWith(t, cfg, dir)
+				if _, err := s.Describe(t.Context(), []declaration.TableName{search}); err != nil {
+					t.Fatal(err)
+				}
+				refused, err := s.CheckValues(t.Context(), search, []config.InsertValue{{Column: "q", Value: "a & b"}})
+				var pgErr *pgconn.PgError
+				if refused != nil || !errors.As(err, &pgErr) || pgErr.Code != code {
+					t.Errorf("CheckValues with %s = %+v, %v, want an error of the session with SQLSTATE %s", setting, refused, err, code)
+				}
 			}
 		})
 	}

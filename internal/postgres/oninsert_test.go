@@ -54,8 +54,13 @@ func TestInsertColumns(t *testing.T) {
 
 func TestRefusedValue(t *testing.T) {
 	for code, want := range map[string]bool{
-		"22P02": true, "22007": true, "22001": true, "22003": true, "23514": true,
-		"55P03": false, "57014": false, "42501": false, "25006": false, "XX000": false,
+		// What the input function of a type says about a value.
+		"22P02": true, "22007": true, "22001": true, "22003": true, "23514": true, "23502": true,
+		"42601": true, "42P01": true, "42704": true, "42883": true, "0A000": true, "P0001": true,
+		// What the session says.
+		"08006": false, "25006": false, "25P02": false, "28000": false, "40001": false, "40P01": false,
+		"53200": false, "54000": false, "55P03": false, "57014": false, "57P01": false, "58030": false,
+		"72000": false, "F0000": false, "HV000": false, "XX000": false, "42501": false,
 	} {
 		if got := refusesValue(&pgconn.PgError{Code: code}); got != want {
 			t.Errorf("refusesValue(%s) = %v, want %v", code, got, want)

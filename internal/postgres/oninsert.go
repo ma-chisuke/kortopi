@@ -126,13 +126,30 @@ func (s *Session) readValue(ctx context.Context, name declaration.TableName, col
 	return reason, err
 }
 
+// sessionErrors are the classes and the codes of SQLSTATE of an error that
+// comes from the session, not from a value of on_insert. kortopi writes the
+// statement that reads a value itself, with a literal of the value and
+// nothing else from the settings, so any other error comes from the value:
+// the input function of the type refuses it, such as a data exception
+// (class 22), the constraint of a domain (class 23), a syntax error of a
+// tsquery or a jsonpath (42601), or a relation or a type that a regclass or
+// a regtype names and that does not exist (42P01, 42704). Such a value is a
+// mistake of the settings, which a plan reports with the other mistakes.
+//
+// An error of the session would repeat for every value, so it stops the
+// plan at once: the connection (08), the state of the transaction (25), the
+// authorization (28), a serialization failure or a deadlock (40),
+// insufficient resources (53), a limit of the program (54), a lock that
+// lock_timeout ended the wait for (55), a cancelled statement or a shutdown
+// (57), an error of the system (58), a snapshot too old (72), the
+// configuration file (F0), a foreign data wrapper (HV), an internal error
+// (XX), and a missing privilege (42501).
+var sessionErrors = []string{"08", "25", "28", "40", "53", "54", "55", "57", "58", "72", "F0", "HV", "XX", "42501"}
+
 // refusesValue reports whether err says that PostgreSQL does not take a
-// value: a data exception (class 22), such as invalid_text_representation or
-// numeric_value_out_of_range, or an integrity constraint violation (class 23),
-// such as the CHECK constraint of a domain. Both are about the value; any
-// other error is about the session.
+// value, rather than that the session failed (sessionErrors).
 func refusesValue(err *pgconn.PgError) bool {
-	return strings.HasPrefix(err.Code, "22") || strings.HasPrefix(err.Code, "23")
+	return !slices.ContainsFunc(sessionErrors, func(prefix string) bool { return strings.HasPrefix(err.Code, prefix) })
 }
 
 // refusal returns what PostgreSQL says about a value that it refuses: the
