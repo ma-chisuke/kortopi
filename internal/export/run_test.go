@@ -213,6 +213,25 @@ func TestRun(t *testing.T) {
 			wantOut: "wrote DIR/billing/plans.csv (3 rows)\nExported 1 table with 3 rows.\n",
 		},
 		{
+			// A new file leaves out the columns that on_insert names, next to
+			// the generated ones; a refresh keeps the columns of its file.
+			name:  "the columns of on_insert",
+			files: map[string]string{"facility/rooms.csv": "id,note\n"},
+			decl: []declaration.Table{
+				{Name: tn("facility.rooms"), Columns: []string{"id", "note"}, Format: csv, File: "facility/rooms.csv"},
+			},
+			settings: config.New(map[declaration.TableName]config.Table{
+				tn("facility.room_types"): {OnInsert: []config.InsertValue{{Column: "name", Value: "new"}, {Column: "absent", Value: "x"}}},
+				tn("facility.rooms"):      {OnInsert: []config.InsertValue{{Column: "note", Value: ""}}},
+			}),
+			opts: Options{Schemas: []string{"facility"}, Format: csv, Overwrite: true},
+			wantFiles: map[string]string{
+				"facility/room_types.csv": line("facility.room_types", csv, "code,capacity", "code"),
+				"facility/rooms.csv":      line("facility.rooms", csv, "id,note", "id"),
+			},
+			wantOut: "wrote DIR/facility/room_types.csv (2 rows)\nwrote DIR/facility/rooms.csv (2 rows)\nExported 2 tables with 4 rows.\n",
+		},
+		{
 			name: "a table without a key",
 			opts: Options{Tables: []declaration.TableName{tn("misc.tags")}, Format: csv},
 			wantFiles: map[string]string{

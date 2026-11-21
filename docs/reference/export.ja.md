@@ -22,7 +22,8 @@ table of a database.
 
 A table that no file declares gets a new file, <schema>/<table>.csv, or
 .sql with --format sql. It holds every column of the table but the
-generated ones: remove the columns that the declaration should not manage.
+generated ones and those that on_insert in kortopi.toml names: remove the
+columns that the declaration should not manage.
 
 A table that a file declares already is written again only with
 --overwrite, into that file, in its format, and with its columns.
@@ -443,4 +444,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:99bf6c1e6cfe2e249ffd0f629183ae1dc138e0492d245d5de0067ffc0de6acf6 -->
+<!-- i18n-source: export.md sha256:929102a09b9eb575973560c78ecd31a13da0ff3661169a505c57e17822e3f6b5 -->

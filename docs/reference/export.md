@@ -22,7 +22,8 @@ table of a database.
 
 A table that no file declares gets a new file, <schema>/<table>.csv, or
 .sql with --format sql. It holds every column of the table but the
-generated ones: remove the columns that the declaration should not manage.
+generated ones and those that on_insert in kortopi.toml names: remove the
+columns that the declaration should not manage.
 
 A table that a file declares already is written again only with
 --overwrite, into that file, in its format, and with its columns.
