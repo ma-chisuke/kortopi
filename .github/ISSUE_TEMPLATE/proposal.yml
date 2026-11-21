@@ -1,0 +1,33 @@
+# A proposal: the task that someone cannot do, or does badly, today, what they
+# do instead, and an idea if they have one. The labels of the fields are the
+# headings of the issue (docs/guides/issues.md, ADR-0041).
+name: Propose a change
+description: A task that you cannot do with kortopi today, or can do only badly.
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the task first. The task matters more than the idea: the maintainer may serve it in another way, or find a way that kortopi already has, so a proposal without an idea is welcome.
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: What you need to do and cannot do with kortopi today, or can do only badly, with a concrete case, such as the tables, the rows, and the commands. Make up the rows, and never give rows of a real environment.
+    validations:
+      required: true
+  - type: textarea
+    id: instead
+    attributes:
+      label: What is done instead
+      description: What you do today instead, such as a script, a step by hand, or a second tool, and what it costs.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: How kortopi could serve the task, if you have an idea. Leave it empty if you have none.
+    validations:
+      required: false

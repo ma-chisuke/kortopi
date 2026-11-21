@@ -233,5 +233,21 @@
 | registry（ビルドが含む DB ごとの部品の）, register | レジストリ、登録する |
 | build tag, build constraint（Go の） | ビルドタグ、ビルド制約 |
 | fake（テストの） | 偽物 |
+| issue（GitHub の）, blank issue | issue、空の issue |
+| issue form, field（フォームの） | issue のフォーム、欄 |
+| chooser（新しい issue のフォームを選ぶ画面） | テンプレートの選択画面 |
+| label（issue やプルリクエストの） | ラベル |
+| milestone（GitHub の） | マイルストーン |
+| task list | タスクリスト |
+| bug | 不具合（ラベルは `bug` のまま） |
+| proposal | 提案 |
+| reproduce, reproduction（不具合の） | 再現する、再現 |
+| reporter（issue の） | 報告者 |
+| triage（issue を） | トリアージする |
+| closing keyword（プルリクエストの） | 閉じるキーワード |
+| workaround | 回避策 |
+| impact（不具合の） | 影響 |
+| notification（GitHub の） | 通知 |
+| private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:89b6fc65bd66eb8e58d10bfc4eb36738e0391217ebe5db665d3ca2a1a72e02cd -->
+<!-- i18n-source: translation.md sha256:9c58d8eef2ca6d1dc9c8baaaaed0fe839049347baf92799def0eee7de47bf234 -->

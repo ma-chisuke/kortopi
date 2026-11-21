@@ -208,6 +208,29 @@ case_lint_schema() {
   passes
 }
 
+# An issue form with a field that has no label, and a chooser whose setting of
+# blank issues is not a boolean (ADR-0041). The real ones pass, which also
+# shows that the chooser is not checked as a form.
+case_lint_schema__issue_forms() {
+  put .github/ISSUE_TEMPLATE/bug.yml << 'EOF'
+name: Report a bug
+description: kortopi did something wrong.
+body:
+  - type: input
+    id: kortopi-version
+    attributes:
+      description: The output of kortopi version.
+EOF
+  fails "'label' is a required property"
+  prints 'bug.yml'
+  run git checkout -q -- .github/ISSUE_TEMPLATE/bug.yml
+  put .github/ISSUE_TEMPLATE/config.yml 'blank_issues_enabled: "no"'
+  fails "is not of type 'boolean'"
+  prints 'config.yml'
+  run git checkout -q -- .github/ISSUE_TEMPLATE/config.yml
+  passes
+}
+
 case_lint_typos() {
   local word
   word=$(printf 't%s' 'eh')
