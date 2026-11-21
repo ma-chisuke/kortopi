@@ -106,6 +106,20 @@ Which rows to write, and which columns of a row to update, is decided just befor
 Each setting is local to the transaction, so the connection has its own settings again after the apply, also through a connection pooler.
 A trigger that fails in the settings of your application fails the apply too, with the error of PostgreSQL, and nothing is changed.
 
+### In the database
+
+In the database, an apply does the following and nothing else, in this order:
+
+1. Right after it connects, outside any transaction, one query reads the settings of the session that its writes use.
+2. It opens one transaction at the isolation level `REPEATABLE READ`, takes the lock of kortopi with `pg_try_advisory_xact_lock`, and pins the settings that change how values are read.
+3. It reads the catalogs, and checks each value of `on_insert` in a temporary table of its column alone, inside a savepoint that it rolls back, as a plan does.
+4. For each declared table, it creates a temporary table, loads the declared rows into it, and compares them with the table, as a plan does, but keeps the temporary table until the commit.
+5. When a cycle of foreign keys needs it, it defers their checks with `SET CONSTRAINTS`.
+6. For each write, in one round trip: a statement in the pinned settings picks the rows into one more temporary table, and an insert with values of `on_insert` reads them into another, typed like their columns; `set_config` sets the settings of the session; the insert, the update, or the deletion takes the picked rows; and `set_config` pins the settings again. Before the deletions of a table, it counts the references to their rows again.
+7. It sends the settings of the session and `COMMIT` in one message.
+
+Every temporary table is dropped at the commit, and every setting ends with the transaction.
+
 ### Foreign keys and cycles
 
 The order of the tables comes from the foreign keys in the catalogs, so a new foreign key changes it on the next run.
@@ -401,4 +415,4 @@ kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of t
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), and [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), and [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md).

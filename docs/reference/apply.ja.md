@@ -106,6 +106,20 @@ apply は、計画が固定する設定で読み、比べる（[値の比べ方]
 どの設定もトランザクションの中に限られる。そのため、apply のあと、接続は自分の設定に戻る。コネクションプーラーを通しても同じである。
 アプリケーションの設定で失敗するトリガーは、apply も PostgreSQL のエラーで失敗させる。このとき何も変わらない。
 
+### データベースの中ですること
+
+apply はデータベースの中で、次のことをこの順に行い、それ以外は何もしない。
+
+1. 接続した直後に、どのトランザクションの外でも、書き込みが使うセッションの設定を1つの問い合わせで読む。
+2. 分離レベル `REPEATABLE READ` のトランザクションを1つ開き、`pg_try_advisory_xact_lock` で kortopi のロックを取り、値の読み方を変える設定を固定する。
+3. カタログを読み、計画と同じく、`on_insert` の各値をその列だけの一時テーブルで確かめる。これはロールバックするセーブポイントの中で行う。
+4. 宣言した各テーブルについて、計画と同じく一時テーブルを作り、宣言した行を読み込み、テーブルと比べる。ただし、その一時テーブルはコミットまで残す。
+5. 外部キーの循環が必要とすれば、`SET CONSTRAINTS` でその検査を遅らせる。
+6. 書き込みごとに、1回の往復で次を行う。固定した設定のもとで1つの文が行を選び、もう1つの一時テーブルに入れる。`on_insert` の値を持つ挿入では、列のとおりに型を付けた別の一時テーブルにその値を読む。`set_config` でセッションの設定にする。挿入・更新・削除が、選んだ行を取る。そして `set_config` で設定を再び固定する。テーブルの行を削除する前には、その行への参照を数え直す。
+7. セッションの設定と `COMMIT` を、1つのメッセージで送る。
+
+どの一時テーブルもコミットで消え、どの設定もトランザクションとともに終わる。
+
 ### 外部キーと循環
 
 テーブルの順番はカタログの外部キーから決まるので、外部キーを足せば、次の実行から順番が変わる。
@@ -401,6 +415,6 @@ kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of t
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:f62027fed4de1b9c0b2542dd92825f7d2a985e88f198fe676ae4f151a3dd991c -->
+<!-- i18n-source: apply.md sha256:a64869dfefbff2264ef14c61d0b880e2a52185364bfa80179a54656178cabc95 -->
