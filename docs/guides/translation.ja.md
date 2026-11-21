@@ -229,5 +229,9 @@
 | value that only an insert sets（`kortopi.toml` の `on_insert` の値） | 挿入のときだけ設定する値 |
 | expression（SQL の） | 式 |
 | parameter（SQL の文の） | パラメータ |
+| seam（コマンドがデータベースと接する1か所、`internal/dialect`） | 接点 |
+| registry（ビルドが含む DB ごとの部品の）, register | レジストリ、登録する |
+| build tag, build constraint（Go の） | ビルドタグ、ビルド制約 |
+| fake（テストの） | 偽物 |
 
-<!-- i18n-source: translation.md sha256:d8f630102dacca979dcac390b8b90eaec3154099c5c76ee27b658f2ba2f485c0 -->
+<!-- i18n-source: translation.md sha256:0a31ca8a51e13f0ca3475ecd3a54b422c84933de04559205c3ef729fcb71eca1 -->

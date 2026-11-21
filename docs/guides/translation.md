@@ -229,3 +229,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | value that only an insert sets (a value of `on_insert` in `kortopi.toml`) | 挿入のときだけ設定する値 |
 | expression (in SQL) | 式 |
 | parameter (of a SQL statement) | パラメータ |
+| seam (the one place where a command meets a database, `internal/dialect`) | 接点 |
+| registry (of the dialects of a build), register | レジストリ、登録する |
+| build tag, build constraint (of Go) | ビルドタグ、ビルド制約 |
+| fake (in a test) | 偽物 |
