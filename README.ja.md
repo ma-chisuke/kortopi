@@ -7,8 +7,7 @@ kortopi は、PostgreSQL のマスタテーブルの行を宣言的に管理す�
 宣言的なスキーマの道具がスキーマに対してすることを、行に対してする。
 
 > [!NOTE]
-> kortopi は開発中で、まだリリースがない。
-> 4つのコマンド `plan`・`apply`・`export`・`version` は、どれも動く。
+> kortopi はバージョン 0 である。コマンド、フラグ、ファイルの書式は、リリースごとに変わることがある。
 > このページは最初の版の設計を説明する。詳細と理由は[決定の記録](docs/adr/README.ja.md)にある。
 
 ## 何をするか
@@ -35,7 +34,7 @@ data/
 
 ## インストールする
 
-リリースは[リリースのページ](https://github.com/ma-chisuke/kortopi/releases)に並ぶ。最初のリリースまでは、[試す](#試す)のとおり、このリポジトリから kortopi をビルドする。
+リリースは[リリースのページ](https://github.com/ma-chisuke/kortopi/releases)にある。
 各リリースには、Linux・macOS・Windows のそれぞれについて amd64 と arm64 のアーカイブがあり、チェックサムのファイルが1つ付く。
 アーカイブには、バイナリ、ライセンス、この README、バイナリに組み込まれたサードパーティのソフトウェアの表示が入っている。
 
@@ -71,7 +70,8 @@ CGO_ENABLED=0 go install github.com/ma-chisuke/kortopi/cmd/kortopi@vX.Y.Z
 
 ## 試す
 
-まだリリースがないので、このリポジトリからバイナリをビルドする。[mise](https://mise.jdx.dev/) が要る。
+例は `bin/kortopi` を実行する。これは、このリポジトリをビルドするとできるバイナリである。リリースのバイナリを使うときは、代わりに `kortopi` を実行する。
+ビルドには [mise](https://mise.jdx.dev/) が要る。
 
 ```sh
 make setup    # 固定した道具と依存を入れる
@@ -202,4 +202,4 @@ make build    # bin/kortopi をビルドする
 
 [MIT](LICENSE)
 
-<!-- i18n-source: README.md sha256:472aa9b8190ae779e5f1574d2f912883af10740a3bf2994bf9aef5ecdd06f55d -->
+<!-- i18n-source: README.md sha256:7c13914a652df9a85abce7373440c4c6548a74773e8e3e8cfb3d4d8160152c3a -->

@@ -7,8 +7,7 @@ You declare the rows in files, kortopi shows how they differ from the database a
 It does for rows what a declarative schema tool does for a schema.
 
 > [!NOTE]
-> kortopi is under development and has no release yet.
-> All four commands work: `plan`, `apply`, `export`, and `version`.
+> kortopi is at version 0: its commands, flags, and file formats can still change from one release to the next.
 > This page describes the design of the first version. The [decision records](docs/adr/README.md) hold the details and the reasons.
 
 ## What it does
@@ -35,7 +34,7 @@ data/
 
 ## Install
 
-Releases appear on the [releases page](https://github.com/ma-chisuke/kortopi/releases). Until the first one, build kortopi from this repository, as [Try it](#try-it) shows.
+Releases are on the [releases page](https://github.com/ma-chisuke/kortopi/releases).
 Each release has an archive for Linux, macOS, and Windows, each on amd64 and arm64, and a checksum file.
 An archive holds the binary, the license, this README, and the notices of the third-party software compiled into the binary.
 
@@ -71,7 +70,8 @@ Such a binary is not the one in the release, and has no attestation.
 
 ## Try it
 
-There is no release yet, so build the binary from this repository. You need [mise](https://mise.jdx.dev/).
+The examples run `bin/kortopi`, the binary that a build of this repository writes. With a binary from a release, run `kortopi` in its place.
+A build needs [mise](https://mise.jdx.dev/).
 
 ```sh
 make setup    # install the pinned tools and the dependencies
