@@ -94,7 +94,7 @@ Row-level security:
 What stays as it is:
 
 - A plan and an export write no row of a table, and keep every setting pinned: their output does not change.
-- The plan as SQL (ADR-0029) runs in the session of whoever runs it, with the settings of that session but the three that the script pins, so the defaults and triggers that its statements fire see those settings. The writes of an apply now do the same in their own session, and the two agree.
+- The plan as SQL (ADR-0029) runs in the session of whoever runs it, so the defaults and triggers that its statements fire see the settings of that session, but `client_encoding`, `lc_monetary`, and `xmloption`, which the script pins. The writes of an apply now see the settings of their own session in the same way, but they keep only `client_encoding` pinned. So the two differ in `lc_monetary` and `xmloption`: a trigger that prints a `money` value or reads an `xml` fragment sees `C` and `content` under the script, and the values of the session under an apply.
 
 This refines ADR-0023: it pins `array_nulls` and `timezone_abbreviations` too, the pinned settings are for reading and comparing, and the writes of an apply run with the settings of the session but `client_encoding`. It refines these rules of ADR-0026:
 

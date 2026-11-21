@@ -94,7 +94,7 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
 変わらないもの：
 
 - 計画と書き出しはテーブルの行を書かず、すべての設定を固定したままにする。出力は変わらない。
-- SQL として出力した計画（ADR-0029）は、それを実行する人のセッションで、スクリプトが固定する3つを除き、そのセッションの設定で動く。そのため、その文が発火させる既定値とトリガーは、そのセッションの設定を見る。apply の書き込みも、いまは自分のセッションで同じようにする。両者は一致する。
+- SQL として出力した計画（ADR-0029）は、それを実行する人のセッションで動く。そのため、その文が発火させる既定値とトリガーは、そのセッションの設定を見る。ただし、スクリプトが固定する `client_encoding`・`lc_monetary`・`xmloption` は別である。apply の書き込みも、いまは同じように自分のセッションの設定を見るが、固定したままにするのは `client_encoding` だけである。そのため両者は `lc_monetary` と `xmloption` で違う。`money` の値を表示するトリガーや `xml` の断片を読むトリガーは、スクリプトのもとでは `C` と `content` を見る。apply のもとでは、セッションの値を見る。
 
 これは ADR-0023 を細かくする。`array_nulls` と `timezone_abbreviations` も固定し、固定した設定は読むことと比べることのためのものとする。apply の書き込みは `client_encoding` を除いてセッションの設定で動く。ADR-0026 の次の決まりも細かくする。
 
@@ -175,4 +175,4 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
   - [docs/reference/apply.ja.md](../reference/apply.ja.md#書き込みの設定)
   - [docs/reference/comparison.ja.md](../reference/comparison.ja.md#セッションの設定)
 
-<!-- i18n-source: ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md sha256:5a4958d0708a27e0a31c8ac05a275f3fd7b1caea0d80c2183b6c4d69e0618046 -->
+<!-- i18n-source: ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md sha256:b1a5f729cfe03bf889b97b704426ea9d322c89fe6c3262009e328aae6f13edff -->

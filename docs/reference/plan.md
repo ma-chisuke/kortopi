@@ -495,7 +495,7 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 ```
 
 `--single-transaction` runs the file in one transaction, and `ON_ERROR_STOP=1` stops at the first error, so that the transaction is rolled back.
-The statements run with the settings of the session that runs them, but the three that the script pins, so the defaults and the triggers that they fire see those settings, as the writes of an apply see the settings of its own session ([kortopi apply](apply.md#the-settings-of-the-writes)).
+The statements run with the settings of the session that runs them, but `client_encoding`, `lc_monetary`, and `xmloption`, which the script pins, so the defaults and the triggers that they fire see those settings. The writes of an apply see the settings of their own session in the same way, but keep only `client_encoding` pinned ([kortopi apply](apply.md#the-settings-of-the-writes)): a trigger that prints a `money` value or reads an `xml` fragment sees `C` and `content` under the script, and the values of the session under an apply.
 A tool of versioned migrations usually runs each file in a transaction of its own; check that yours does.
 The `SET LOCAL` statements need the transaction: outside one, they only warn.
 `SET LOCAL client_encoding` applies to the statements that the client sends after it as messages of their own, as `psql` does. A client that sends the whole script as one message has had it read in its own encoding already, so it must connect with `client_encoding` set to UTF8, as database drivers usually do.
