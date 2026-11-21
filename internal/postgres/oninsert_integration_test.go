@@ -418,10 +418,13 @@ func TestCheckValuesErrors(t *testing.T) {
 				t.Fatal(err)
 			}
 			for setting, code := range map[string]string{"lock_timeout": "55P03", "statement_timeout": "57014"} {
-				cfg := db.Config.Copy()
-				cfg.RuntimeParams[setting] = "200ms"
-				s := db.sessionWith(t, cfg, dir)
+				// The timeout holds for the check alone, after Describe, whose
+				// queries take time of their own on a busy machine.
+				s := db.session(t, dir)
 				if _, err := s.Describe(t.Context(), []declaration.TableName{search}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.tx.Exec(t.Context(), "SELECT pg_catalog.set_config($1, '1s', true)", setting); err != nil {
 					t.Fatal(err)
 				}
 				refused, err := s.CheckValues(t.Context(), search, []config.InsertValue{{Column: "q", Value: "a & b"}})
