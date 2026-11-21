@@ -67,7 +67,7 @@
 | reference（ほかのテーブルから外部キーでの） | 参照 |
 | parser | パーサ |
 | bulk load | 一括の読み込み |
-| dialect（データベースごとに違う部分） | DB ごとの部品 |
+| dialect（データベースごとに違う部分。`internal/postgres` のような、そのデータベースのパッケージにある。パッケージ `internal/dialect` は、コマンドが DB ごとの部品を使うための接点であり、それ自体は DB ごとの部品ではない） | DB ごとの部品 |
 | privilege（データベースの） | 権限 |
 | read replica | リードレプリカ |
 | dry run | ドライラン |
@@ -234,4 +234,4 @@
 | build tag, build constraint（Go の） | ビルドタグ、ビルド制約 |
 | fake（テストの） | 偽物 |
 
-<!-- i18n-source: translation.md sha256:0a31ca8a51e13f0ca3475ecd3a54b422c84933de04559205c3ef729fcb71eca1 -->
+<!-- i18n-source: translation.md sha256:89b6fc65bd66eb8e58d10bfc4eb36738e0391217ebe5db665d3ca2a1a72e02cd -->

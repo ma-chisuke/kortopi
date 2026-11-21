@@ -67,7 +67,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | reference (from another table, through a foreign key) | 参照 |
 | parser | パーサ |
 | bulk load | 一括の読み込み |
-| dialect (the parts that differ for each database) | DB ごとの部品 |
+| dialect (the parts that differ for each database, in the package of their database, such as `internal/postgres`; the package `internal/dialect` is the seam through which the commands use a dialect, and is not one itself) | DB ごとの部品 |
 | privilege (in the database) | 権限 |
 | read replica | リードレプリカ |
 | dry run | ドライラン |

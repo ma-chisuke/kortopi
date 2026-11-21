@@ -5,8 +5,9 @@
 // reads the SQL declarations in the grammar of its database, and opens the
 // sessions that plan, apply, and export against it. This package defines
 // what a command needs from a dialect, and a registry of the dialects that a
-// build holds. It knows no database itself, and imports no package of a
-// dialect: the linter enforces that (.golangci.yml).
+// build holds. It is the seam through which the commands use a dialect,
+// and not a dialect itself: it knows no database, and imports no package of
+// a dialect, which the linter enforces (.golangci.yml).
 package dialect
 
 import (

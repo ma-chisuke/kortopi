@@ -77,7 +77,8 @@ linters:
         # imports them, with the file of the command that registers it and
         # the tests of the command against PostgreSQL. Every other package,
         # a shared one or the package of another dialect, reaches PostgreSQL
-        # through internal/dialect (ADR-0019, ADR-0036). A second dialect
+        # through the seam internal/dialect, which is not a dialect itself
+        # (ADR-0019, ADR-0036). A second dialect
         # gets a rule of its own, like this one.
         postgres:
           files:
@@ -87,7 +88,7 @@ linters:
             - "!**/cmd/kortopi/*_integration_test.go"
           deny:
             - pkg: github.com/ma-chisuke/kortopi/internal/postgres
-              desc: code specific to a database goes in the package of its dialect, internal/postgres for PostgreSQL, and every other package reaches it through internal/dialect (ADR-0019)
+              desc: code specific to a database goes in the package of its dialect, internal/postgres for PostgreSQL, and every other package reaches it through the seam internal/dialect, which is not a dialect and holds no code of a database (ADR-0019)
             - pkg: github.com/jackc/
               desc: the driver of PostgreSQL, and the modules that read the password file and the service file of libpq, belong to its dialect, so code that talks to PostgreSQL goes in internal/postgres (ADR-0019)
             - pkg: github.com/pganalyze/pg_query_go

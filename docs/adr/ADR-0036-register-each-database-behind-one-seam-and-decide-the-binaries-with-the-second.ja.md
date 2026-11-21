@@ -55,7 +55,7 @@ DB ごとの部品が2つになると、kortopi は両方を含む1つのバイ�
 
 接点は次の決まりに従う。
 
-- パッケージ `internal/dialect` は、コマンドがデータベースに求めるものだけを定める。`Dialect` は、名前（`postgres` など）、SQL の宣言のパーサ、`Options` からセッションを開く `Open` を持つ。`Options` は、コマンドが集めたままの接続のフラグ、データのディレクトリ、セッションの用途を持つ。`Session` は、コマンドが使うものの集まりである。`plan.Database`・`apply.Database`・`script.Database`・`export.Database` のメソッド、SQL としての計画の冒頭のコメントに書くデータベースの名前、`Close` からなる。
+- パッケージ `internal/dialect` は、コマンドがデータベースに求めるものだけを定める。これはコマンドが DB ごとの部品を使うための接点であり、それ自体は DB ごとの部品ではない。どのデータベースの部分も持たない。`Dialect` は、名前（`postgres` など）、SQL の宣言のパーサ、`Options` からセッションを開く `Open` を持つ。`Options` は、コマンドが集めたままの接続のフラグ、データのディレクトリ、セッションの用途を持つ。`Session` は、コマンドが使うものの集まりである。`plan.Database`・`apply.Database`・`script.Database`・`export.Database` のメソッド、SQL としての計画の冒頭のコメントに書くデータベースの名前、`Close` からなる。
 - `Registry` は、ビルドが含む DB ごとの部品を持つ。`Choose` は、コマンドが使う部品を返す。部品が1つなら、フラグも設定もなしにその部品を返す。1つもなければ、`kortopi plan`・`kortopi apply`・`kortopi export` は1つのエラーで失敗する。エラーは、そのビルドがどのデータベースにも対応していないことと、ビルドし直す方法を告げる。適用では、何も変えなかったことを告げる行がそのあとに続く。このときも `kortopi version` とヘルプは動く。2つ以上あれば、利用者の選び方をあとの記録が決めるまで、`Choose` は失敗する。そのため、その記録ができるまで、2つ目の部品はタグなしのビルドに入れず、リリースにも入れない。
 - DB ごとの部品は、それぞれ1つのパッケージであり、`Dialect` の値を1つ提供する。PostgreSQL では `postgres.Dialect` である。このパッケージは、ほかの DB ごとの部品を import しない。
 - DB ごとの部品には、それぞれコマンドの中に2つのファイルがあり、その部品のビルドタグがどちらか一方を選ぶ。ビルド制約 `//go:build !kortopi_no_<name>` を付けた `cmd/kortopi/dialect_<name>.go` は、その部品を返す関数を持つ。`//go:build kortopi_no_<name>` を付けた `cmd/kortopi/dialect_<name>_off.go` は、同じ名前の関数を持ち、その関数は何も返さない。PostgreSQL では、ファイルは `dialect_postgres.go` と `dialect_postgres_off.go`、関数は `postgresDialects`、ビルドタグは `kortopi_no_postgres` である。コマンドのコードのうち、その部品を名指しするのは1つ目のファイルだけであり、2つ目のファイルはその部品の何も import しない。ヘルプは、これまでどおり PostgreSQL と libpq を挙げる。
@@ -118,4 +118,4 @@ DB ごとの部品が2つになると、kortopi は両方を含む1つのバイ�
 - 接点は `internal/dialect/dialect.go` で、ルールは `.golangci.yml` の `postgres` である。
 - コマンドの中の PostgreSQL のファイルは、`cmd/kortopi/dialect_postgres.go` と `dialect_postgres_off.go` である。レジストリは、`cmd/kortopi/main.go` の `newRegistry` が作る。
 
-<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:19b10e03a9464a80f05424c37b16c9ddec46938ddaa1a719d9d822317baf845e -->
+<!-- i18n-source: ADR-0036-register-each-database-behind-one-seam-and-decide-the-binaries-with-the-second.md sha256:142d486a5b288e47de06161e8e4338f553ba69056265b94bbd012ab9dca8e57d -->
