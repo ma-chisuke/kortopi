@@ -4,13 +4,24 @@
 # Usage: files.sh <git pathspec>...
 #   files.sh '*.sh'                 every shell script in scope
 #   files.sh '*.md' ':!*.ja.md'     English Markdown only
+#   files.sh --verify               check CHECK_FILES only, and print nothing
 #
 # Scope comes from the environment, so every check narrows the same way:
-#   CHECK_FILES   newline-separated paths; only these are considered
+#   CHECK_FILES   paths relative to the root of the repository, separated by
+#                 newlines; only these are considered
 #   CHECK_SCOPE   all (default) | staged | changed
 #                 staged:  files staged for the next commit
 #                 changed: files that differ from CHECK_BASE (default
 #                          origin/main), plus untracked files
+#
+# Each line of CHECK_FILES is one path: the white space around it and a leading
+# "./" are dropped, and empty lines are skipped. Each path must name a file of
+# the repository: a tracked file (also one deleted in the working tree, which
+# has nothing left to check) or an untracked file that Git does not ignore. A
+# path that names none, such as a misspelled path or two paths separated by a
+# space, would leave the checks nothing to look at, and they would pass, so it
+# is an error. tools/scripts/check.sh and tools/scripts/task.sh run `--verify`
+# before any check starts.
 #
 # A change to a tool pin or to the checks themselves can change the result for
 # any file, so when one of those files is staged or changed, every file is in
@@ -21,7 +32,39 @@
 # takes its files from this script.
 set -euo pipefail
 
+verify_only=false
+if [ "${1:-}" = --verify ]; then
+  verify_only=true
+  shift
+fi
+if [ "$verify_only" = true ] && [ -z "${CHECK_FILES:-}" ]; then
+  exit 0
+fi
+
 cd "$(git rev-parse --show-toplevel)"
+
+# The paths of CHECK_FILES, one per line, as described above. Without
+# CHECK_FILES, nothing.
+requested=
+if [ -n "${CHECK_FILES:-}" ]; then
+  requested=$(printf '%s\n' "$CHECK_FILES" \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's|^\(\./\)*||')
+  if [ -z "$requested" ]; then
+    echo "files.sh: CHECK_FILES holds no path. Give paths separated by newlines, or leave it empty to look at every file." >&2
+    exit 2
+  fi
+  missing=$(grep -vFx -f <(git ls-files --cached --others --exclude-standard) <<< "$requested") || [ "$?" -eq 1 ]
+  if [ -n "$missing" ]; then
+    while IFS= read -r path; do
+      echo "files.sh: CHECK_FILES names '$path', which is not a file of the repository (tracked, or untracked and not ignored)." >&2
+    done <<< "$missing"
+    printf '%s\n' "files.sh: CHECK_FILES takes paths relative to the root of the repository, separated by newlines: CHECK_FILES=\$'README.md\\nAGENTS.md'" >&2
+    exit 2
+  fi
+fi
+if [ "$verify_only" = true ]; then
+  exit 0
+fi
 
 # Pathspecs that include, and pathspecs that exclude: the ones that the caller
 # marks with ":(exclude)" or ":!", and every line of .lintignore.
@@ -112,9 +155,9 @@ list_scope() {
   esac
 }
 
-if [ -n "${CHECK_FILES:-}" ]; then
+if [ -n "$requested" ]; then
   # Keep only the requested files that also match the pathspecs.
-  list_all | grep -Fx -f <(printf '%s\n' "$CHECK_FILES") || true
+  list_all | grep -Fx -f <(printf '%s\n' "$requested") || true
 else
   list_scope
 fi | sort -u | { grep -vFx -f <(list_excluded) || [ "$?" -eq 1 ]; } | while IFS= read -r path; do

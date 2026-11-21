@@ -15,7 +15,11 @@ mkdir -p "$state_dir"
 log="$state_dir/$name.log"
 
 start=$(date +%s)
-if bash -euo pipefail -c "$command" > "$log" 2>&1; then
+# A path in CHECK_FILES that names no file would leave the command nothing to
+# look at, and it would pass, so the check fails first. `make check` stops
+# before any check runs (check.sh); this covers a target that runs on its own.
+if "$(dirname "$0")/files.sh" --verify > "$log" 2>&1 \
+  && bash -euo pipefail -c "$command" >> "$log" 2>&1; then
   status=ok
   code=0
 else

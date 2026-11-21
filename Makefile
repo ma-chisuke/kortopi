@@ -67,6 +67,7 @@ endif
 
 .PHONY: fmt
 fmt: ## Format every file in scope
+	@$(FILES) --verify
 	@$(MAKE) --no-print-directory --keep-going $(FMT_TARGETS)
 
 .PHONY: gen

@@ -688,13 +688,78 @@ echo $1
 EOF
 }
 
+good_shell() {
+  put "$1" << 'EOF'
+#!/usr/bin/env bash
+echo "$1"
+EOF
+}
+
+# CHECK_FILES holds paths separated by newlines, and a target looks at those
+# of them that it checks. A leading "./", white space around a path, and empty
+# lines do not matter. A tracked file that is deleted in the working tree is a
+# path of the repository with nothing left to check.
 case_scope__check_files() {
   TARGET=lint-shell
   bad_shell a.sh
   bad_shell b.sh
+  bad_shell c.sh
+  good_shell good.sh
+  good_shell other.sh
   fails 'a.sh' CHECK_FILES=a.sh
   omits 'b.sh'
+  fails 'a.sh' CHECK_FILES=$'a.sh\nb.sh'
+  prints 'b.sh'
+  omits 'c.sh'
+  fails 'a.sh' CHECK_FILES=$' ./a.sh \t\n\ngood.sh\r\n'
+  omits 'b.sh'
+  passes CHECK_FILES=good.sh
+  passes CHECK_FILES=$'good.sh\nother.sh'
   passes CHECK_FILES=LICENSE
+  bad_shell gone.sh
+  run git add gone.sh
+  commit 'add a file that the working tree then loses'
+  drop gone.sh
+  passes CHECK_FILES=$'gone.sh\ngood.sh'
+}
+
+# A path in CHECK_FILES that names no file of the repository would leave the
+# target nothing to look at, so it fails the target, and names the path.
+case_scope__check_files_unknown() {
+  TARGET=lint-shell
+  good_shell a.sh
+  good_shell b.sh
+  fails "CHECK_FILES names 'a.sh b.sh'" CHECK_FILES='a.sh b.sh'
+  prints 'separated by newlines'
+  fails "CHECK_FILES names 'no-such.sh'" CHECK_FILES=$'a.sh\nno-such.sh'
+  omits "names 'a.sh'"
+  fails "CHECK_FILES names 'docs'" CHECK_FILES=docs
+  # Git ignores .cache/.
+  good_shell .cache/ignored.sh
+  fails "CHECK_FILES names '.cache/ignored.sh'" CHECK_FILES=.cache/ignored.sh
+  fails 'CHECK_FILES holds no path' CHECK_FILES=$'\n \n'
+  passes CHECK_FILES=$'a.sh\nb.sh'
+}
+
+# `make check` says so once, and runs no check. With a good CHECK_FILES, it
+# runs the checks on those files.
+case_scope__check_files_run() {
+  TARGET=check
+  bad_shell a.sh
+  bad_shell b.sh
+  fails "CHECK_FILES names 'a.sh b.sh'" CHECK_FILES='a.sh b.sh'
+  prints 'check: no check ran'
+  omits 'passed'
+  omits 'FAIL'
+  if [ "$(grep -cF "CHECK_FILES names 'a.sh b.sh'" "$OUT")" -ne 1 ]; then
+    report "expected the output of $LAST to name the path once"
+  fi
+  fails "CHECK_FILES names 'docs/no-such-file.md'" CHECK_FILES=docs/no-such-file.md
+  omits 'passed'
+  fails 'a.sh' CHECK_FILES=a.sh CHECK_BUDGET=0
+  prints 'FAIL  lint-shell'
+  prints ' passed, 1 failed'
+  omits 'b.sh'
 }
 
 case_scope__staged() {
