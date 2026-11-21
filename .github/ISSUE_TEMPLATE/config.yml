@@ -1,0 +1,9 @@
+# The chooser of new issues. Every issue goes through one of the forms, so that
+# it has the fields that it needs; the maintainer can still open a blank one
+# (ADR-0041). A vulnerability goes to the private reporting of GitHub, which
+# the repository has on (SECURITY.md, docs/guides/github-settings.md).
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/ma-chisuke/kortopi/security/advisories/new
+    about: Report a vulnerability privately, never in a public issue, as SECURITY.md says.

@@ -1,0 +1,42 @@
+# A change to the documentation: the page, what it says or lacks, what the
+# reader needed, and the version that the page was read at. The labels of the
+# fields are the headings of the issue (docs/guides/issues.md, ADR-0041).
+name: Change the documentation
+description: A page is wrong or unclear, or lacks what you needed to know.
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Name one page, or a few gaps of one page. If kortopi does something other than what a page says, and the page is right, [report a bug](https://github.com/ma-chisuke/kortopi/issues/new?template=bug.yml) instead.
+  - type: input
+    id: page
+    attributes:
+      label: Page and section
+      description: The path or the link of the page with the heading of its section, such as `docs/reference/plan.md#connect-to-the-database`, or the command whose help it is, such as `kortopi plan --help`.
+      placeholder: docs/reference/plan.md#connect-to-the-database
+    validations:
+      required: true
+  - type: textarea
+    id: says
+    attributes:
+      label: What the page says or lacks
+      description: Quote the sentences that are wrong or unclear, or say what is missing.
+    validations:
+      required: true
+  - type: textarea
+    id: needed
+    attributes:
+      label: What the reader needed to know
+      description: The question that you brought to the page, and what you did because the page gave no answer, with a concrete case such as the command, the table, or the setting.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version of the page
+      description: The release, such as `v0.2.0`, or the commit of `main` at which you read the page. A permanent link to the page holds the commit.
+      placeholder: v0.2.0
+    validations:
+      required: true

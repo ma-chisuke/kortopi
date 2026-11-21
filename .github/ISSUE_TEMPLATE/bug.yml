@@ -1,0 +1,125 @@
+# A bug: what someone else needs to reproduce it, and later to tell that it is
+# fixed. The labels of the fields are the headings of the issue, so an issue
+# written with `gh issue create --body` uses the same headings in the same
+# order (docs/guides/issues.md, ADR-0041).
+name: Report a bug
+description: kortopi did something wrong, such as a wrong plan, a changed row that should have stayed, a failed run, or a misleading message.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the [existing issues](https://github.com/ma-chisuke/kortopi/issues?q=is%3Aissue), open and closed, first. Reproduce the bug on a release or on a named commit, with the smallest case that shows it, and give that case here in full: someone else will run it against an empty database. The [guide to issues](https://github.com/ma-chisuke/kortopi/blob/main/docs/guides/issues.md) says more.
+
+        An issue is public. Report a vulnerability privately instead, as [SECURITY.md](https://github.com/ma-chisuke/kortopi/blob/main/SECURITY.md) says, and never put a password, a connection string with a password, or real data in an issue.
+  - type: input
+    id: kortopi-version
+    attributes:
+      label: Version of kortopi
+      description: The output of `kortopi version`. A build from source prints the commit that it was built from, as in `kortopi v0.2.1-0.20261121092459-14376aa57348`, with `+dirty` at the end when the working tree had changes.
+      placeholder: kortopi v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: postgresql-version
+    attributes:
+      label: Version of PostgreSQL
+      description: The output of `SELECT version()` on the server that kortopi connected to.
+      placeholder: PostgreSQL 18.1 on x86_64-pc-linux-gnu, ..., 64-bit
+    validations:
+      required: true
+  - type: textarea
+    id: run
+    attributes:
+      label: How kortopi was run
+      description: The command with its flags, and the settings of the connection that matter, such as `PGSSLMODE`, `PGOPTIONS`, `PGCONNECT_TIMEOUT`, or the lines of a service file. Leave out every password, and write placeholders for the names of hosts, databases, and roles that you do not publish.
+      placeholder: PGHOST=db.example.test PGUSER=deployer PGDATABASE=app PGSSLMODE=verify-full kortopi apply --dir data --allow-delete
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest case that shows the bug, as text in this issue, so that someone else can run it against an empty database. Give the SQL that creates the tables and their rows, each file of the data directory with its path, and `kortopi.toml` if there is one. Make up the rows; for many rows, give the SQL that generates them.
+      placeholder: |
+        The tables and their rows:
+
+        ```sql
+        CREATE SCHEMA facility;
+        CREATE TABLE facility.room_types (code text PRIMARY KEY, name text NOT NULL);
+        INSERT INTO facility.room_types VALUES ('single', 'Single');
+        ```
+
+        `data/facility/room_types.csv`:
+
+        ```csv
+        code,name
+        single,Single room
+        ```
+
+        `data/kortopi.toml`: none.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The output of kortopi as text in a code block, never as a screenshot, and its exit status. Cut the output to the lines that matter, and say where you cut it. Say what changed in the database, if anything did.
+      placeholder: |
+        ```text
+        $ kortopi apply --dir data --allow-delete
+        [the output, cut to the lines that matter]
+        ```
+
+        Exit status: 0. The row `single` is gone from `facility.room_types`.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What was expected
+      description: What kortopi should have done instead, and what makes you expect it, such as a page of the documentation, a decision record, or what PostgreSQL does.
+    validations:
+      required: true
+  - type: textarea
+    id: between
+    attributes:
+      label: Between kortopi and the server
+      description: What stands between kortopi and the server, if anything, such as a standby or a read replica, a connection pooler and its mode, TLS and its `sslmode`, a proxy, or a managed service.
+    validations:
+      required: false
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      description: Where kortopi ran, such as Linux on amd64 in a container, or macOS on arm64.
+    validations:
+      required: false
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: The worst that the bug did to you.
+      options:
+        - Data in the database changed that should not have
+        - A wrong plan, but no data changed
+        - A failed run that changed nothing
+        - A confusing or misleading message
+    validations:
+      required: false
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: A way around the bug, if you found one, and what it costs.
+    validations:
+      required: false
+  - type: checkboxes
+    id: nothing-private
+    attributes:
+      label: Nothing private
+      options:
+        - label: This report holds no password, no connection string with a password, and no real data.
+          required: true
