@@ -187,10 +187,10 @@ func TestRunExport(t *testing.T) {
 			if tt.files != nil {
 				dir = writeFiles(t, tt.files)
 			}
-			fc := &fakeConnect{session: tt.session, err: tt.connectErr}
+			fd := &fakeDialect{session: tt.session, err: tt.connectErr}
 			var stdout, stderr strings.Builder
 			args := append([]string{"export", "--dir", dir}, tt.args...)
-			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, connect: fc.connect})
+			code := run(t.Context(), args, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 			replace := func(s string) string {
 				return strings.ReplaceAll(strings.ReplaceAll(s, "DIR/", dir+string(filepath.Separator)), "DIR", dir)
@@ -207,13 +207,13 @@ func TestRunExport(t *testing.T) {
 			if got := listFiles(t, dir); !reflect.DeepEqual(got, tt.wantFiles) && len(got)+len(tt.wantFiles) > 0 {
 				t.Errorf("files = %v, want %v", got, tt.wantFiles)
 			}
-			if got := fc.calls > 0; got != tt.wantConnect {
+			if got := fd.calls > 0; got != tt.wantConnect {
 				t.Errorf("kortopi export connected = %v, want %v", got, tt.wantConnect)
 			}
-			if fc.calls > 0 && (!fc.target.export || fc.target.apply || fc.target.dir != dir) {
-				t.Errorf("kortopi export connected to %+v, want a session for an export in %s", fc.target, dir)
+			if fd.calls > 0 && (!fd.opts.Export || fd.opts.Apply || fd.opts.Dir != dir) {
+				t.Errorf("kortopi export connected to %+v, want a session for an export in %s", fd.opts, dir)
 			}
-			if tt.session != nil && fc.calls > 0 && !tt.session.closed && tt.session.closeErr == nil {
+			if tt.session != nil && fd.calls > 0 && !tt.session.closed && tt.session.closeErr == nil {
 				t.Error("kortopi export left the session open")
 			}
 		})
@@ -235,9 +235,9 @@ func TestRunExportInterrupted(t *testing.T) {
 			}
 		},
 	}
-	fc := &fakeConnect{session: s}
+	fd := &fakeDialect{session: s}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"export", "--dir", dir, "--schema", "facility"}, env{stdout: &stdout, stderr: &stderr, connect: fc.connect})
+	code := run(ctx, []string{"export", "--dir", dir, "--schema", "facility"}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 	want := "kortopi: interrupted: the export was stopped\n" +
 		"kortopi: export table facility.types into " + filepath.Join(dir, "facility", "types.csv") + ": context canceled\n" +
@@ -333,13 +333,13 @@ func TestRunPlanSQL(t *testing.T) {
 			t.Parallel()
 
 			dir := writeFiles(t, twoTables)
-			fc := &fakeConnect{session: tt.session}
-			code, stdout, stderr := runTest(t, append([]string{"plan", "--dir", dir}, tt.args...), fc.connect)
+			fd := &fakeDialect{session: tt.session}
+			code, stdout, stderr := runTest(t, append([]string{"plan", "--dir", dir}, tt.args...), fd.registry(t))
 			if want := strings.ReplaceAll(tt.wantStdout, "DIR", dir); code != tt.wantCode || stdout != want || stderr != tt.wantStderr {
 				t.Errorf("kortopi plan = %d, stdout\n%s\nstderr\n%s\nwant %d, stdout\n%s\nstderr\n%s", code, stdout, stderr, tt.wantCode, want, tt.wantStderr)
 			}
-			if fc.target.export || fc.target.apply {
-				t.Errorf("kortopi plan connected to %+v, want a session for a plan", fc.target)
+			if fd.opts.Export || fd.opts.Apply {
+				t.Errorf("kortopi plan connected to %+v, want a session for a plan", fd.opts)
 			}
 			if !tt.session.closed {
 				t.Error("kortopi plan left the session open")

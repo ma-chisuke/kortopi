@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
@@ -333,9 +334,9 @@ func TestRunPlan(t *testing.T) {
 			t.Parallel()
 
 			dir := writeFiles(t, tt.files)
-			fc := &fakeConnect{session: tt.session, err: tt.connectErr}
+			fd := &fakeDialect{session: tt.session, err: tt.connectErr}
 			args := append([]string{"plan", "--dir", dir}, tt.args...)
-			code, stdout, stderr := runTest(t, args, fc.connect)
+			code, stdout, stderr := runTest(t, args, fd.registry(t))
 
 			if code != tt.wantCode {
 				t.Errorf("kortopi plan exit status = %d, want %d (stderr %q)", code, tt.wantCode, stderr)
@@ -352,13 +353,13 @@ func TestRunPlan(t *testing.T) {
 			case code == exitError && !strings.HasPrefix(stderr, "kortopi: "):
 				t.Errorf("kortopi plan stderr = %q, want an error that starts with \"kortopi: \"", stderr)
 			}
-			if got := fc.calls > 0; got != tt.wantConnect {
+			if got := fd.calls > 0; got != tt.wantConnect {
 				t.Errorf("kortopi plan connected = %v, want %v", got, tt.wantConnect)
 			}
-			if fc.calls > 0 && (fc.target.dir != dir || fc.target.apply) {
-				t.Errorf("kortopi plan connected to %+v, want the data directory %q and a session for a plan", fc.target, dir)
+			if fd.calls > 0 && (fd.opts.Dir != dir || fd.opts.Apply) {
+				t.Errorf("kortopi plan connected to %+v, want the data directory %q and a session for a plan", fd.opts, dir)
 			}
-			if tt.session != nil && fc.calls > 0 && fc.err == nil && !tt.session.closed {
+			if tt.session != nil && fd.calls > 0 && fd.err == nil && !tt.session.closed {
 				t.Error("kortopi plan left the session open")
 			}
 			if tt.wantDescribed != nil && !reflect.DeepEqual(tt.session.described, tt.wantDescribed) {
@@ -417,9 +418,9 @@ func TestRunPlanNoPending(t *testing.T) {
 
 			dir := writeFiles(t, tt.files)
 			session := &fakeSession{diffs: newPlan, missing: tt.missing}
-			fc := &fakeConnect{session: session}
+			fd := &fakeDialect{session: session}
 			args := append([]string{"plan", "--dir", dir, "--no-pending"}, tt.args...)
-			code, stdout, stderr := runTest(t, args, fc.connect)
+			code, stdout, stderr := runTest(t, args, fd.registry(t))
 
 			want := strings.ReplaceAll(filepath.FromSlash(tt.wantStderr), "DIR", dir)
 			if code != exitError || stdout != "" || stderr != want {
@@ -465,8 +466,8 @@ func TestRunPlanNoPendingWithoutPendingNames(t *testing.T) {
 				var calls [2][]string
 				for i, flags := range [][]string{nil, {"--no-pending"}} {
 					session := &fakeSession{diffs: diffs}
-					fc := &fakeConnect{session: session}
-					code, stdout, stderr := runTest(t, append(append([]string{"plan", "--dir", dir}, args...), flags...), fc.connect)
+					fd := &fakeDialect{session: session}
+					code, stdout, stderr := runTest(t, append(append([]string{"plan", "--dir", dir}, args...), flags...), fd.registry(t))
 					results[i] = [3]string{strconv.Itoa(code), stdout, stderr}
 					calls[i] = session.calls
 				}
@@ -488,14 +489,14 @@ func TestRunPlanConnection(t *testing.T) {
 	t.Parallel()
 
 	dir := writeFiles(t, twoTables)
-	fc := &fakeConnect{session: &fakeSession{}}
-	code, _, stderr := runTest(t, []string{"plan", "--dir", dir, "--host", "h", "--port", "6543", "--user", "u", "--dbname", "d"}, fc.connect)
+	fd := &fakeDialect{session: &fakeSession{}}
+	code, _, stderr := runTest(t, []string{"plan", "--dir", dir, "--host", "h", "--port", "6543", "--user", "u", "--dbname", "d"}, fd.registry(t))
 	if code != exitOK {
 		t.Fatalf("kortopi plan exit status = %d, want %d (stderr %q)", code, exitOK, stderr)
 	}
-	want := connection{host: "h", port: "6543", user: "u", dbname: "d"}
-	if fc.target.conn != want {
-		t.Errorf("kortopi plan connected with %+v, want %+v", fc.target.conn, want)
+	want := dialect.Options{Host: "h", Port: "6543", User: "u", Database: "d", Dir: dir}
+	if fd.opts != want {
+		t.Errorf("kortopi plan connected with %+v, want %+v", fd.opts, want)
 	}
 }
 
@@ -505,13 +506,12 @@ func TestRunPlanInterrupted(t *testing.T) {
 	dir := writeFiles(t, twoTables)
 	ctx, cancel := context.WithCancel(t.Context())
 	fake := &fakeSession{}
-	connect := func(ctx context.Context, _ target) (session, error) {
+	fd := &fakeDialect{session: fake, opened: func(ctx context.Context) {
 		cancel()
 		fake.diffErr = ctx.Err()
-		return fake, nil
-	}
+	}}
 	var stdout, stderr strings.Builder
-	code := run(ctx, []string{"plan", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, connect: connect})
+	code := run(ctx, []string{"plan", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
 	if code != exitError {
 		t.Errorf("kortopi plan exit status = %d, want %d", code, exitError)
@@ -538,9 +538,9 @@ func TestRunPlanWriteError(t *testing.T) {
 	t.Parallel()
 
 	dir := writeFiles(t, twoTables)
-	fc := &fakeConnect{session: &fakeSession{}}
+	fd := &fakeDialect{session: &fakeSession{}}
 	var stderr strings.Builder
-	code := run(t.Context(), []string{"plan", "--dir", dir}, env{stdout: failingWriter{}, stderr: &stderr, connect: fc.connect})
+	code := run(t.Context(), []string{"plan", "--dir", dir}, env{stdout: failingWriter{}, stderr: &stderr, dialects: fd.registry(t)})
 
 	if code != exitError {
 		t.Errorf("kortopi plan exit status = %d, want %d", code, exitError)

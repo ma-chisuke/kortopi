@@ -13,9 +13,12 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
 
 // version is the release version. The release build sets it with -ldflags;
@@ -61,6 +64,11 @@ const (
 )
 
 func main() {
+	dialects, err := newRegistry()
+	if err != nil {
+		printError(os.Stderr, err)
+		os.Exit(exitError)
+	}
 	// An interrupt cancels the context, so that the transaction is rolled back
 	// and the connection closed. A second interrupt ends the process at once.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -68,17 +76,28 @@ func main() {
 		<-ctx.Done()
 		stop()
 	}()
-	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, connect: connectPostgres})
+	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, dialects: dialects})
 	stop()
 	os.Exit(code)
 }
 
-// env is what a command takes from outside: where it writes, and how it
-// reaches the database. Tests replace connect.
+// newRegistry returns the registry of the databases that this build
+// supports (ADR-0036). Each dialect has two files in this package, such as
+// dialect_postgres.go and dialect_postgres_off.go, of which its build tag
+// chooses one: the first returns the dialect, the second none. A second
+// dialect adds its call here.
+func newRegistry() (*dialect.Registry, error) {
+	return dialect.NewRegistry(slices.Concat(
+		postgresDialects(),
+	)...)
+}
+
+// env is what a command takes from outside: where it writes, and the
+// dialects through which it reaches a database. Tests replace dialects.
 type env struct {
-	stdout  io.Writer
-	stderr  io.Writer
-	connect connectFunc
+	stdout   io.Writer
+	stderr   io.Writer
+	dialects *dialect.Registry
 }
 
 // run executes one command and returns the exit status.

@@ -74,7 +74,7 @@ func TestNoSecretInOutput(t *testing.T) {
 				}
 				// Every case fails before a connection is made: on a flag, or on
 				// the settings of the connection.
-				code, stdout, stderr := runTest(t, args, connectPostgres)
+				code, stdout, stderr := runTest(t, args, buildDialects(t))
 				if code != exitError {
 					t.Errorf("exit status %d, want %d", code, exitError)
 				}
@@ -125,7 +125,7 @@ func TestConnectionFailureWithSeveralAttempts(t *testing.T) {
 	t.Setenv("PGDATABASE", "shop")
 	dir := writeFiles(t, twoTables)
 
-	code, stdout, stderr := runTest(t, []string{"plan", "--dir", dir}, connectPostgres)
+	code, stdout, stderr := runTest(t, []string{"plan", "--dir", dir}, buildDialects(t))
 	refused := func(port string) string {
 		return "kortopi:   127.0.0.1:" + port + " (127.0.0.1): dial error: dial tcp 127.0.0.1:" + port + ": connect: connection refused\n"
 	}

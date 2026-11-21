@@ -25,7 +25,7 @@ The reason for a rule is in the decision record that the rule cites ([docs/adr/]
 | Path | Content |
 |---|---|
 | `cmd/kortopi/` | The entry point of the CLI. |
-| `internal/` | The packages of kortopi. Everything that differs for each database stays in one package. (ADR-0019) |
+| `internal/` | The packages of kortopi. Everything that differs for each database stays in the package of its dialect, such as `internal/postgres/`. The rest reaches a dialect through `internal/dialect/`, the seam, which is not a dialect itself, and `lint-go` enforces the boundary. (ADR-0019, ADR-0036) |
 | `tools/` | Checks and generators of this repository (a Go module of its own, and scripts). Nothing here ships in the binary. |
 | `make/` | One file of make targets per area. |
 | `docs/adr/` | Decision records. |

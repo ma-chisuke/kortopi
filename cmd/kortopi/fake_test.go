@@ -6,10 +6,12 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"testing"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 	"github.com/ma-chisuke/kortopi/internal/export"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 	"github.com/ma-chisuke/kortopi/internal/script"
@@ -166,21 +168,67 @@ func (s *fakeSession) Close(ctx context.Context) error {
 	return s.closeErr
 }
 
-// fakeConnect is a connectFunc that records its call and returns session, or
-// err when it is not nil.
-type fakeConnect struct {
+// fakeDialect is a dialect whose session is a fakeSession, for the tests of
+// the commands. It records its call of Open, and returns session, or err when
+// it is not nil. It reads SQL declarations with the real parser of the
+// dialect of the build, which needs no database, because some tests declare
+// rows in SQL. So the tests of the command run only in a build that holds a
+// dialect, and not with the tag kortopi_no_postgres; TestBuildWithoutPostgres
+// covers that build.
+type fakeDialect struct {
 	session *fakeSession
 	err     error
+	// opened, when it is not nil, is called with the context of Open.
+	opened func(ctx context.Context)
 
-	calls  int
-	target target
+	calls int
+	opts  dialect.Options
 }
 
-func (f *fakeConnect) connect(_ context.Context, t target) (session, error) {
+func (*fakeDialect) Name() string {
+	return "fake"
+}
+
+func (*fakeDialect) Parser() declaration.SQLParser {
+	r, err := newRegistry()
+	if err != nil {
+		return failingParser{err: err}
+	}
+	d, err := r.Choose()
+	if err != nil {
+		return failingParser{err: err}
+	}
+	return d.Parser()
+}
+
+func (f *fakeDialect) Open(ctx context.Context, opts dialect.Options) (dialect.Session, error) {
 	f.calls++
-	f.target = t
+	f.opts = opts
+	if f.opened != nil {
+		f.opened(ctx)
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.session, nil
+}
+
+// registry returns a registry that holds only f.
+func (f *fakeDialect) registry(t *testing.T) *dialect.Registry {
+	t.Helper()
+	r, err := dialect.NewRegistry(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// failingParser is the parser of a build without a dialect, which fails on
+// every file.
+type failingParser struct {
+	err error
+}
+
+func (p failingParser) ParseInserts(string, []byte) ([]declaration.Insert, error) {
+	return nil, p.err
 }

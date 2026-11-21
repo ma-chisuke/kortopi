@@ -108,7 +108,7 @@ func (e *e2e) plan(t *testing.T, args ...string) (code int, stdout, stderr strin
 	objects := e.db.Objects(t)
 	rows := e.db.Query(t, e2eRows)
 	args = append(append([]string{"plan"}, args...), e.conn...)
-	code, stdout, stderr = runTest(t, args, connectPostgres)
+	code, stdout, stderr = runTest(t, args, buildDialects(t))
 	if got := e.db.Objects(t); !slices.Equal(got, objects) {
 		t.Errorf("kortopi %s left the catalogs changed:\n%s", strings.Join(args, " "), pgtest.Difference(objects, got))
 	}

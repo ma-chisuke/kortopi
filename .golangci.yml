@@ -70,6 +70,33 @@ linters:
               desc: use math/rand/v2
             - pkg: log$
               desc: use log/slog
+        # The dialect of PostgreSQL: its package, its driver and the modules
+        # of its author that read the password file and the service file of
+        # libpq, its SQL parser, and the module that starts its test
+        # servers. Only the dialect
+        # imports them, with the file of the command that registers it and
+        # the tests of the command against PostgreSQL. Every other package,
+        # a shared one or the package of another dialect, reaches PostgreSQL
+        # through the seam internal/dialect, which is not a dialect itself
+        # (ADR-0019, ADR-0036). A second dialect
+        # gets a rule of its own, like this one.
+        postgres:
+          files:
+            - $all
+            - "!**/internal/postgres/**"
+            - "!**/cmd/kortopi/dialect_postgres.go"
+            - "!**/cmd/kortopi/*_integration_test.go"
+          deny:
+            - pkg: github.com/ma-chisuke/kortopi/internal/postgres
+              desc: code specific to a database goes in the package of its dialect, internal/postgres for PostgreSQL, and every other package reaches it through the seam internal/dialect, which is not a dialect and holds no code of a database (ADR-0019)
+            - pkg: github.com/jackc/
+              desc: the driver of PostgreSQL, and the modules that read the password file and the service file of libpq, belong to its dialect, so code that talks to PostgreSQL goes in internal/postgres (ADR-0019)
+            - pkg: github.com/pganalyze/pg_query_go
+              desc: the SQL parser of PostgreSQL belongs to its dialect, so code that reads SQL goes in internal/postgres (ADR-0019)
+            - pkg: github.com/wasilibs/go-pgquery
+              desc: the SQL parser of PostgreSQL belongs to its dialect, so code that reads SQL goes in internal/postgres (ADR-0019)
+            - pkg: github.com/testcontainers/testcontainers-go/modules/postgres
+              desc: the test servers of PostgreSQL belong to its dialect, so a test that needs one goes in internal/postgres, or uses internal/postgres/pgtest from a test of the command (ADR-0019)
     errcheck:
       check-type-assertions: true
     exhaustive:

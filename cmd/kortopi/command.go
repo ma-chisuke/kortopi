@@ -5,16 +5,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"strconv"
 	"time"
 
-	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
-	"github.com/ma-chisuke/kortopi/internal/export"
-	"github.com/ma-chisuke/kortopi/internal/postgres"
-	"github.com/ma-chisuke/kortopi/internal/script"
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
 
 // This file holds what plan and apply share: the flags of the declaration
@@ -67,12 +63,21 @@ type common struct {
 }
 
 // connection holds the flags that override the connection settings of libpq.
-// An empty field leaves the setting to libpq.
+// An empty field leaves the setting to libpq. They are the flags of the
+// first dialect, PostgreSQL, and the command passes them to the dialect as
+// they are (ADR-0036).
 type connection struct {
 	host   string
 	port   string
 	user   string
 	dbname string
+}
+
+// open opens a session of d on the database that c names, for what opts
+// say.
+func (c connection) open(ctx context.Context, d dialect.Dialect, opts dialect.Options) (dialect.Session, error) {
+	opts.Host, opts.Port, opts.User, opts.Database = c.host, c.port, c.user, c.dbname
+	return d.Open(ctx, opts)
 }
 
 // define defines the shared flags on fs, which parsing writes into c. It
@@ -120,11 +125,12 @@ func nameOnly(dst *string, what string) func(string) error {
 	}
 }
 
-// load reads the settings and the declaration of the data directory, checks
-// the settings against the whole declaration, and narrows the declaration to
-// the schemas of --schema. It needs no database, so that a mistake in a file
-// is reported before kortopi connects.
-func load(c common) (*declaration.Declaration, *config.Settings, error) {
+// load reads the settings and the declaration of the data directory, with
+// the parser of SQL declarations of the dialect, checks the settings against
+// the whole declaration, and narrows the declaration to the schemas of
+// --schema. It needs no database, so that a mistake in a file is reported
+// before kortopi connects.
+func load(c common, parser declaration.SQLParser) (*declaration.Declaration, *config.Settings, error) {
 	// The directory comes first, so that a path to a file is named as such,
 	// and not as a file kortopi.toml under it.
 	if err := declaration.CheckDir(c.dir, false); err != nil {
@@ -134,7 +140,7 @@ func load(c common) (*declaration.Declaration, *config.Settings, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	decl, err := declaration.Load(c.dir, postgres.Parser{})
+	decl, err := declaration.Load(c.dir, parser)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -150,48 +156,10 @@ func load(c common) (*declaration.Declaration, *config.Settings, error) {
 	return decl, settings, nil
 }
 
-// target says which database a command opens a session on, and what for.
-type target struct {
-	conn connection
-	// dir is the data directory, from which the session reads the declared
-	// files.
-	dir string
-	// apply opens a session that can write, for an apply. Without it, the
-	// session is for a plan.
-	apply bool
-	// export opens a session that only reads, for an export.
-	export bool
-	// wait gets one line when an apply waits for another apply.
-	wait io.Writer
-}
-
-// connectFunc opens a session on the target database. Tests replace it.
-type connectFunc func(ctx context.Context, t target) (session, error)
-
-// session is a session on the target database, for any command: each command
-// uses the methods that it needs. Its transaction is rolled back when it
-// closes, unless an apply committed it.
-type session interface {
-	apply.Database
-	// WriteStatements writes statements of a plan as SQL (script.Database).
-	WriteStatements(ctx context.Context, w io.Writer, step script.Step) error
-	// Tables and Write are what an export needs (export.Database).
-	Tables(ctx context.Context, schemas []string) ([]declaration.TableName, error)
-	Write(ctx context.Context, w io.Writer, req export.Request) (int, error)
-	// Close rolls back the transaction of the session, unless it was
-	// committed, and closes it.
-	Close(ctx context.Context) error
-}
-
-var (
-	_ script.Database = session(nil)
-	_ export.Database = session(nil)
-)
-
 // closeSession closes s with a context of its own, so that the transaction is
 // rolled back and the connection closed also after an interrupt, and bounded
 // in time.
-func closeSession(ctx context.Context, s session) error {
+func closeSession(ctx context.Context, s dialect.Session) error {
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
 	defer cancel()
 	return s.Close(closeCtx)
@@ -205,23 +173,4 @@ func interrupted(ctx context.Context, err, instead error) error {
 		return instead
 	}
 	return err
-}
-
-// connectPostgres opens a session on a PostgreSQL server. It is the one part
-// of plan and apply that needs a real database, so the tests replace it.
-func connectPostgres(ctx context.Context, t target) (session, error) {
-	s, err := postgres.Connect(ctx, postgres.Options{
-		Host:     t.conn.host,
-		Port:     t.conn.port,
-		User:     t.conn.user,
-		Database: t.conn.dbname,
-		Dir:      t.dir,
-		Apply:    t.apply,
-		Export:   t.export,
-		Wait:     t.wait,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
 }

@@ -67,7 +67,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | reference (from another table, through a foreign key) | 参照 |
 | parser | パーサ |
 | bulk load | 一括の読み込み |
-| dialect (the parts that differ for each database) | DB ごとの部品 |
+| dialect (the parts that differ for each database, in the package of their database, such as `internal/postgres`; the package `internal/dialect` is the seam through which the commands use a dialect, and is not one itself) | DB ごとの部品 |
 | privilege (in the database) | 権限 |
 | read replica | リードレプリカ |
 | dry run | ドライラン |
@@ -229,3 +229,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | value that only an insert sets (a value of `on_insert` in `kortopi.toml`) | 挿入のときだけ設定する値 |
 | expression (in SQL) | 式 |
 | parameter (of a SQL statement) | パラメータ |
+| seam (the one place where a command meets a database, `internal/dialect`) | 接点 |
+| registry (of the dialects of a build), register | レジストリ、登録する |
+| build tag, build constraint (of Go) | ビルドタグ、ビルド制約 |
+| fake (in a test) | 偽物 |

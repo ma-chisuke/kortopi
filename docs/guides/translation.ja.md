@@ -67,7 +67,7 @@
 | reference（ほかのテーブルから外部キーでの） | 参照 |
 | parser | パーサ |
 | bulk load | 一括の読み込み |
-| dialect（データベースごとに違う部分） | DB ごとの部品 |
+| dialect（データベースごとに違う部分。`internal/postgres` のような、そのデータベースのパッケージにある。パッケージ `internal/dialect` は、コマンドが DB ごとの部品を使うための接点であり、それ自体は DB ごとの部品ではない） | DB ごとの部品 |
 | privilege（データベースの） | 権限 |
 | read replica | リードレプリカ |
 | dry run | ドライラン |
@@ -229,5 +229,9 @@
 | value that only an insert sets（`kortopi.toml` の `on_insert` の値） | 挿入のときだけ設定する値 |
 | expression（SQL の） | 式 |
 | parameter（SQL の文の） | パラメータ |
+| seam（コマンドがデータベースと接する1か所、`internal/dialect`） | 接点 |
+| registry（ビルドが含む DB ごとの部品の）, register | レジストリ、登録する |
+| build tag, build constraint（Go の） | ビルドタグ、ビルド制約 |
+| fake（テストの） | 偽物 |
 
-<!-- i18n-source: translation.md sha256:d8f630102dacca979dcac390b8b90eaec3154099c5c76ee27b658f2ba2f485c0 -->
+<!-- i18n-source: translation.md sha256:89b6fc65bd66eb8e58d10bfc4eb36738e0391217ebe5db665d3ca2a1a72e02cd -->
