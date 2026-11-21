@@ -18,6 +18,13 @@ label="$1"
 budget="$2"
 shift 2
 
+# A path in CHECK_FILES that names no file would leave the checks nothing to
+# look at, and every one would pass. Say so once, before any check runs.
+if ! "$(dirname "$0")/files.sh" --verify; then
+  echo "$label: no check ran. Fix CHECK_FILES and run the same command again." >&2
+  exit 1
+fi
+
 state_root=.cache/check
 mkdir -p "$state_root"
 # The directories of killed runs, a day after they last changed.
