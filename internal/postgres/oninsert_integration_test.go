@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,7 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
+	"github.com/ma-chisuke/kortopi/internal/script"
 )
 
 // onInsertSchema has a table with a column of each kind of type that a value
@@ -427,6 +429,73 @@ func TestCheckValuesErrors(t *testing.T) {
 				if refused != nil || !errors.As(err, &pgErr) || pgErr.Code != code {
 					t.Errorf("CheckValues with %s = %+v, %v, want an error of the session with SQLSTATE %s", setting, refused, err, code)
 				}
+			}
+		})
+	}
+}
+
+// The plan as SQL writes a value of on_insert as the settings write it, and
+// the session that runs the script reads it in its own settings. Text with a
+// backslash and a control character arrives unchanged in a session with
+// standard_conforming_strings off, because the literal is an escape string.
+// A timestamp without an offset and a date that DateStyle reads, however,
+// read in the TimeZone and the DateStyle of that session, where an apply
+// reads them in the settings that a plan pins: the difference that the
+// references describe. The script says that its settings do not cover these
+// values.
+func TestOnInsertScriptInOtherSettings(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			const schema = `
+				CREATE SCHEMA app;
+				CREATE TABLE app.rooms (name text PRIMARY KEY, note text NOT NULL, at timestamptz NOT NULL, day date NOT NULL);
+			`
+			dir := writeFiles(t, map[string]string{"app/rooms.csv": "name\nannex\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "rooms", "name")}}
+			settings := config.New(map[declaration.TableName]config.Table{{Schema: "app", Name: "rooms"}: {OnInsert: []config.InsertValue{
+				{Column: "at", Value: "2026-11-21 09:00:00"}, {Column: "day", Value: "11/12/2026"}, {Column: "note", Value: "back\\slash\ttab"},
+			}}})
+			ctx := t.Context()
+
+			byScript := database(t, srv)
+			byScript.Exec(t, schema)
+			s := byScript.session(t, dir)
+			p, err := plan.Build(ctx, decl, settings, s, plan.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var b strings.Builder
+			if err := script.Write(ctx, &b, p, s, script.Header{Dir: dir}); err != nil {
+				t.Fatal(err)
+			}
+			sql := b.String()
+			for _, want := range []string{
+				"-- These settings make the values below, but those of on_insert, mean what they meant to the plan.",
+				`  ('annex', '2026-11-21 09:00:00', '11/12/2026', E'back\\slash\ttab');`,
+			} {
+				if !strings.Contains(sql, want) {
+					t.Errorf("the script:\n%s\nwant it to hold %s", sql, want)
+				}
+			}
+			other := otherSession(t, byScript, nil)
+			if _, err := other.PgConn().Exec(ctx, "BEGIN;\n"+sql+"COMMIT;\n").ReadAll(); err != nil {
+				t.Fatalf("run the script: %v\n%s", err, sql)
+			}
+
+			byApply := testDB{srv.Database(t)}
+			byApply.Exec(t, schema)
+			a := byApply.applySession(t, byApply.Config, dir)
+			if _, err := apply.Run(ctx, decl, settings, a, apply.Options{}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+
+			const rows = "SELECT note, (at AT TIME ZONE 'UTC')::text, day::text FROM app.rooms"
+			if got, want := byApply.Query(t, rows), [][]string{{"back\\slash\ttab", "2026-11-21 09:00:00", "2026-11-12"}}; !slices.EqualFunc(got, want, slices.Equal) {
+				t.Errorf("rows after the apply = %q, want %q", got, want)
+			}
+			// TimeZone Asia/Tokyo and DateStyle SQL, DMY.
+			if got, want := byScript.Query(t, rows), [][]string{{"back\\slash\ttab", "2026-11-21 00:00:00", "2026-12-11"}}; !slices.EqualFunc(got, want, slices.Equal) {
+				t.Errorf("rows after the script = %q, want %q", got, want)
 			}
 		})
 	}

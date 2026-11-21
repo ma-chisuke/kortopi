@@ -2,7 +2,7 @@
 -- It is the difference at the moment of the plan: 2 to insert, 2 to update, 0 to delete in 2 tables.
 -- Run the statements in one transaction.
 
--- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+-- These settings make the values below, but those of on_insert, mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
 SET LOCAL settings;
 
 -- geo.regions: 1 to update
