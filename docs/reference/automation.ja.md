@@ -33,6 +33,7 @@ kortopi apply --dir data
 - ロックのタイムアウトを設定する。設定しなければ、宣言したテーブルのロックをほかのセッションが持っている間、apply は際限なく待ち、デプロイもそれを待つ。設定すれば、apply はそう告げるエラーを出して止まり、何も変えない（[kortopi plan](plan.ja.md#接続の設定)）。
 - 終了コード 1 は、apply が何も変えなかったことを示す。例外は、コミットの結果が分からないとエラーが告げる場合である。直したあとで、デプロイは apply をもう一度実行できる。
 - 削除の扱いは、パイプラインごとに決める。`--allow-delete` がなければ、apply はモード `sync` のテーブルが失うべき行を残し、`Not deleted: ...` の行でそう告げ、0 で終わる。`--allow-delete` があれば、`--max-delete`（既定は 100 行）の範囲でそれらを削除する。行を残したデプロイを失敗にしたければ、apply のあとで `kortopi plan --exit-code` を実行する。
+- スキーマにない宣言済みのテーブルや列があれば、apply は止まり、何も変えない（[kortopi apply](apply.ja.md#データベースにないテーブルや列)）。apply の前に `--no-pending` を付けた計画を置くと、同じ名前で止まり、それを宣言したファイルを挙げる。ただし、apply にない検査を足すわけではない。
 
 ## プルリクエストで
 
@@ -43,13 +44,13 @@ kortopi apply --dir data
 
 ```sh
 # The schema of the pull request is applied to the scratch database first.
-kortopi plan --dir data
+kortopi plan --dir data --no-pending
 kortopi apply --dir data --allow-delete
 kortopi plan --dir data --exit-code
 ```
 
-- 1つ目の計画は、宣言が持つものをチェックのログに出す。
-- apply は、デプロイと同じように行を書く。計画がスキーマの適用後に決まると示すものは、ここで失敗になる。綴りを誤った名前のように、スキーマにないテーブルや列と、`CHECK` 制約や宣言にない行への外部キーのように、制約が拒む値である。
+- 1つ目の計画は、宣言が持つものをチェックのログに出す。スキーマは適用済みなので、スキーマの変更を待つものはないはずである。`--no-pending` があれば、綴りを誤った名前のように、スキーマにない宣言済みのテーブルや列は、ここでチェックを失敗させる。そのエラーは、それを宣言したファイルを挙げる（[kortopi plan](plan.ja.md#スキーマを適用済みのとき)）。
+- apply は、デプロイと同じように行を書く。計画が検査しないものは、ここで失敗になる。`CHECK` 制約や宣言にない行への外部キーのように、制約が拒む値である。
 - 最後の計画は 0 で終わらなければならない。それ以外なら、apply がデータベースを宣言どおりにできなかったことを示す。
 - 使い捨てのデータベースには残すべきものがないので、ここでの `--allow-delete` には何の害もない。
 
@@ -88,4 +89,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
 - スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除だけを示すか、何も示さない。
 
-<!-- i18n-source: automation.md sha256:d345c534d75dfa2491811e4c3aad459a5b415a857cbba1f812834ed83df338ba -->
+<!-- i18n-source: automation.md sha256:81788e43f45cc7c04b590a0a8597e00fb1cd387f1166e8cda2ed670908185ec3 -->

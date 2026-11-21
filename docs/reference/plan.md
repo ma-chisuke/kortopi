@@ -24,6 +24,8 @@ flags:
   --format <name>   text (the default), or sql: print the plan as SQL
                     statements that run as they are
   --exit-code       exit with status 2 when the plan is not empty
+  --no-pending      fail on a table or a column that the database lacks,
+                    instead of showing it as waiting for the schema change
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -46,6 +48,8 @@ The settings in `kortopi.toml` are still checked against every declared table, a
 A plan cannot be narrowed to one table: `--table` is a flag of `kortopi export`, and a plan rejects it with a hint to use `--schema`.
 
 `--format sql` prints the plan as SQL statements instead of text ([Print the plan as SQL](#print-the-plan-as-sql)).
+
+`--no-pending` makes every declared table and column that the database lacks an error, for a run in which the schema is applied already ([Tables and columns that wait for a schema change](#tables-and-columns-that-wait-for-a-schema-change)).
 
 `kortopi plan --help` and `kortopi plan -h` print the same help on standard output.
 
@@ -293,7 +297,24 @@ Known after the schema is applied: 1 table, 1 column.
   ```
 
 A name that differs from a name of the database only in white space or case does not wait: it is a mistake, and the plan stops ([Declaration files](declaration.md#a-name-in-another-case)).
-Any other misspelled table or column name looks the same as one that waits for a schema change, so read these lines in a review, and apply the declaration in the check of the pull request ([Run kortopi from scripts](automation.md#in-a-pull-request)).
+Any other misspelled table or column name, such as `sortorder` for `sort_order`, looks the same as one that waits for a schema change, so read these lines in a review.
+
+#### Where the schema is applied
+
+Where the schema is applied already, such as in a check that applies the schema of a pull request to a scratch database ([Run kortopi from scripts](automation.md#in-a-pull-request)), nothing should wait for a schema change.
+`--no-pending` makes every declared table and column that the database lacks an error then:
+
+```text
+$ kortopi plan --dir data --no-pending
+kortopi: data/billing/discounts.csv: table billing.discounts does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the table
+kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
+```
+
+- Each such table and column gets one error, with the file that declares it and the name as the file writes it. The errors come with the other mistakes that a plan finds before it loads any row ([Errors](#errors)), and the plan exits with status 1 and prints nothing on standard output.
+- A name that differs from a name of the database only in white space or case gets its own error, as without the flag.
+- When every declared table and column exists, the output and the exit status are those of a plan without the flag.
+- The flag works with `--format sql`, with `--exit-code`, and with `--schema`, which narrows the tables that it checks.
+- An apply has no such flag: it always stops on a table or a column that the database lacks, and changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). `kortopi apply --no-pending` is an error that says so.
 
 ### Rows that reference rows to delete
 
@@ -510,7 +531,7 @@ A failed plan prints nothing on standard output.
 kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
-2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
+2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, and that no declared name differs from a name of the database only in white space or case. With `--no-pending`, it also checks that the database has every declared table and column. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
 3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that the declaration does not name is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 5. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
@@ -522,12 +543,13 @@ kortopi checks in this order:
 | Status | Meaning |
 |---|---|
 | 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare. |
-| 1 | The plan failed: a wrong flag, a mistake in the declaration, a database error, or an interrupt. |
+| 1 | The plan failed: a wrong flag, a mistake in the declaration, a table or a column that the database lacks with `--no-pending`, a database error, or an interrupt. |
 | 2 | Only with `--exit-code`: the plan is not empty. |
 
 Without `--exit-code`, a plan that shows changes exits with 0, so a pull request that changes master data does not fail on its own plan.
 
 With `--exit-code`, a plan detects drift: any row to insert, update, or delete, and any table or column that waits for a schema change, gives status 2.
+With `--no-pending` too, such a table or column gives status 1 instead.
 It works the same with `--format sql`.
 A scheduled job that compares the database with the declaration of its main branch tells the three outcomes apart:
 
@@ -543,4 +565,4 @@ esac
 
 The `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), and [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), and [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md).

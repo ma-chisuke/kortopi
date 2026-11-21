@@ -24,6 +24,8 @@ flags:
   --format <name>   text (the default), or sql: print the plan as SQL
                     statements that run as they are
   --exit-code       exit with status 2 when the plan is not empty
+  --no-pending      fail on a table or a column that the database lacks,
+                    instead of showing it as waiting for the schema change
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -46,6 +48,8 @@ exit status:
 計画をテーブルごとに絞ることはできない。`--table` は `kortopi export` のフラグであり、計画はそれを拒んで `--schema` を使うよう告げる。
 
 `--format sql` は、計画をテキストのかわりに SQL の文として出力する（[計画を SQL として出力する](#計画を-sql-として出力する)）。
+
+`--no-pending` は、データベースにない宣言済みのテーブルと列をすべてエラーにする。スキーマをすでに適用した実行のためのフラグである（[スキーマの変更を待つテーブルと列](#スキーマの変更を待つテーブルと列)）。
 
 `kortopi plan --help` と `kortopi plan -h` も、同じヘルプを標準出力に出す。
 
@@ -293,7 +297,24 @@ Known after the schema is applied: 1 table, 1 column.
   ```
 
 データベースの名前と空白か大小だけが違う名前は、スキーマの変更を待たない。それは誤りであり、計画は止まる（[宣言のファイル](declaration.ja.md#大小の違う名前)）。
-そのほかの綴りを誤ったテーブルや列の名前は、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読み、プルリクエストのチェックで宣言を適用する（[スクリプトから kortopi を実行する](automation.ja.md#プルリクエストで)）。
+そのほかの綴りを誤ったテーブルや列の名前は、`sort_order` を `sortorder` と書いたときのように、スキーマの変更を待つものと同じに見える。そのため、レビューではこれらの行を読む。
+
+#### スキーマを適用済みのとき
+
+プルリクエストのスキーマを使い捨てのデータベースに適用するチェック（[スクリプトから kortopi を実行する](automation.ja.md#プルリクエストで)）のように、スキーマをすでに適用したところでは、スキーマの変更を待つものはないはずである。
+このとき `--no-pending` は、データベースにない宣言済みのテーブルと列をすべてエラーにする。
+
+```text
+$ kortopi plan --dir data --no-pending
+kortopi: data/billing/discounts.csv: table billing.discounts does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the table
+kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
+```
+
+- そうしたテーブルと列には、1つごとにエラーを1つ出す。エラーは、それを宣言したファイルと、ファイルが書いたとおりの名前を挙げる。これらのエラーは、計画がどの行も読み込む前に見つけるほかの誤りと一緒に出る（[エラー](#エラー)）。計画は終了コード 1 で終わり、標準出力には何も出さない。
+- データベースの名前と空白か大小だけが違う名前は、フラグがないときと同じく、それ自体のエラーになる。
+- 宣言したテーブルと列がすべてあれば、出力と終了コードはフラグなしの計画と同じである。
+- このフラグは、`--format sql`・`--exit-code`・`--schema` と組み合わせて使える。`--schema` は、検査するテーブルを絞る。
+- apply には、このフラグはない。apply は、データベースにないテーブルや列があれば必ず止まり、何も変えない（[kortopi apply](apply.ja.md#データベースにないテーブルや列)）。`kortopi apply --no-pending` は、そう告げるエラーになる。
 
 ### 削除する行を参照する行
 
@@ -510,7 +531,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
-2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
+2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないことも検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言が挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 5. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
@@ -522,12 +543,13 @@ kortopi は、次の順に検査する。
 | 終了コード | 意味 |
 |---|---|
 | 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。 |
-| 1 | 計画が失敗した。フラグの誤り、宣言の誤り、データベースのエラー、割り込みを含む。 |
+| 1 | 計画が失敗した。フラグの誤り、宣言の誤り、`--no-pending` があるときのデータベースにないテーブルや列、データベースのエラー、割り込みを含む。 |
 | 2 | `--exit-code` のときだけ使う。計画が空でない。 |
 
 `--exit-code` がなければ、変更を示した計画も 0 で終わる。そのため、マスタデータを変えるプルリクエストが、自分の計画で失敗することはない。
 
 `--exit-code` があれば、計画でずれを検出できる。挿入・更新・削除する行が1つでもあるか、スキーマの変更を待つテーブルや列があれば、終了コードは 2 になる。
+`--no-pending` もあれば、そうしたテーブルや列での終了コードは、代わりに 1 である。
 `--format sql` でも同じである。
 データベースを main ブランチの宣言と比べる定期実行は、3つの結果を次のように見分けられる。
 
@@ -543,6 +565,6 @@ esac
 
 `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:e7cbe8ccb7430538b8f48aa29b99c6aed9e0b81c060e32e12a19db77b976ccb3 -->
+<!-- i18n-source: plan.md sha256:8770407d098118ece283af43918ad32a708704c5afa52707ca6a91f143f7242f -->

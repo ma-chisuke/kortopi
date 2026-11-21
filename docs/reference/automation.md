@@ -33,6 +33,7 @@ kortopi apply --dir data
 - Set a lock timeout. Without one, an apply waits without limit while another session holds a lock on a declared table, and the deployment waits with it. With one, the apply stops with an error that says so, and changes nothing ([kortopi plan](plan.md#connection-settings)).
 - Exit status 1 means that the apply changed nothing, unless its error says that the outcome of the commit is not known. The deployment can run the apply again after a fix.
 - Decide about deletions for each pipeline. Without `--allow-delete`, an apply leaves the rows that tables of mode `sync` should lose, says so in a line `Not deleted: ...`, and exits with 0. With `--allow-delete`, it deletes them, within `--max-delete`, 100 rows by default. To fail a deployment that leaves rows behind, run `kortopi plan --exit-code` after the apply.
+- A declared table or column that the schema does not have stops the apply, which then changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). A plan with `--no-pending` before the apply stops on the same names, with the files that declare them, but adds no check that the apply lacks.
 
 ## In a pull request
 
@@ -43,13 +44,13 @@ Check the declaration on a scratch database of the check instead, such as a Post
 
 ```sh
 # The schema of the pull request is applied to the scratch database first.
-kortopi plan --dir data
+kortopi plan --dir data --no-pending
 kortopi apply --dir data --allow-delete
 kortopi plan --dir data --exit-code
 ```
 
-- The first plan prints what the declaration holds, for the log of the check.
-- The apply writes the rows, as a deployment would. It fails on what a plan reports as known after the schema is applied: a table or a column that the schema does not have, such as a misspelled name, and a value that a constraint refuses, such as a `CHECK` constraint or a foreign key to a row that the declaration lacks.
+- The first plan prints what the declaration holds, for the log of the check. The schema is applied, so nothing should wait for a schema change: with `--no-pending`, a declared table or column that the schema does not have, such as a misspelled name, fails the check here, with an error that names its file ([kortopi plan](plan.md#where-the-schema-is-applied)).
+- The apply writes the rows, as a deployment would. It fails on what a plan does not check: a value that a constraint refuses, such as a `CHECK` constraint or a foreign key to a row that the declaration lacks.
 - The last plan must exit with 0: anything else means that the apply did not bring the database to the declaration.
 - `--allow-delete` costs nothing here, since the scratch database holds nothing worth keeping.
 

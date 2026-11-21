@@ -32,6 +32,7 @@ data/
 A name in a CSV path is exact, with its case.
 PostgreSQL folds an unquoted name to lower case, so a table created as `CREATE TABLE Facility.Rooms` is `facility.rooms`, and its file is `facility/rooms.csv`.
 A table, a schema, or a column whose name differs from a name of the database only in white space or case is an error ([A name in another case](#a-name-in-another-case)).
+Any other name that the database lacks waits for a schema change, unless the plan runs with `--no-pending` ([A misspelled name](#a-misspelled-name)).
 
 A partition and a partitioned table above it hold the same rows: a plan reads a partitioned table with the rows of its partitions.
 Declare one of the two, never both ([A partition and its partitioned table](#a-partition-and-its-partitioned-table)).
@@ -371,6 +372,17 @@ Only the declared name is trimmed.
 The names of tables and schemas fold ASCII letters only, and the names of columns fold every letter.
 A table of a schema that exists as it is written is compared with the tables of that schema alone: a new table there still waits for the schema change, also when another schema whose name differs only in case has a table of that name.
 
+### A misspelled name
+
+```text
+kortopi: data/billing/discounts.csv: table billing.discounts does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the table
+kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
+```
+
+A name that differs from every name of the database in more than white space or case, such as `capacty` for `capacity`, looks the same to a plan as a name that waits for a schema change: the plan marks it as known after the schema is applied, and passes.
+Where the schema is applied already, `kortopi plan --no-pending` makes every declared table and column that the database lacks an error, as above ([kortopi plan](plan.md#where-the-schema-is-applied)).
+An apply always stops on such a name.
+
 ### A partition and its partitioned table
 
 ```text
@@ -420,8 +432,8 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-The last nine mistakes need the database, so kortopi reports them after it connects:
+The last ten mistakes need the database, so kortopi reports them after it connects:
 
-- A file without the columns of the key, a name in another case, a partition and its partitioned table, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
+- A file without the columns of the key, a name in another case, a misspelled name with `--no-pending`, a partition and its partitioned table, and a key that cannot match rows, are reported for every table at once, before any row is loaded.
 - A key that two rows hold, NULL in a NOT NULL column, a word for the current time, and a line `\.` stop the plan at the first table that has them, as a value that the column rejects does.
 - A column that the rows to insert would lack is reported for every table at once, after the tables are compared.

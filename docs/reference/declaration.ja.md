@@ -32,6 +32,7 @@ data/
 CSV のパスの名前は、大文字と小文字も含めてそのまま使う。
 PostgreSQL は引用符のない名前を小文字にするので、`CREATE TABLE Facility.Rooms` で作ったテーブルは `facility.rooms` であり、そのファイルは `facility/rooms.csv` である。
 テーブル・スキーマ・列の名前が、データベースの名前と空白か大小だけで違っていれば、エラーである（[大小の違う名前](#大小の違う名前)）。
+データベースにないそのほかの名前は、計画を `--no-pending` 付きで実行しない限り、スキーマの変更を待つ（[綴りを誤った名前](#綴りを誤った名前)）。
 
 パーティションと、その上にあるパーティションテーブルは、同じ行を持つ。計画は、パーティションテーブルをそのパーティションの行とともに読むからである。
 宣言するのはどちらか一方であり、両方ではない（[パーティションとそのパーティションテーブル](#パーティションとそのパーティションテーブル)）。
@@ -372,6 +373,17 @@ kortopi: data/Facility/rooms.csv: schema "Facility" of table Facility.rooms does
 テーブルとスキーマの名前は ASCII の文字の大小だけを同一視し、列の名前はすべての文字の大小を同一視する。
 そのとおりの名前で存在するスキーマのテーブルは、そのスキーマのテーブルとだけ比べる。そのため、そこへの新しいテーブルは、大小だけが違う名前の別のスキーマに同じ名前のテーブルがあっても、引き続きスキーマの変更を待つ。
 
+### 綴りを誤った名前
+
+```text
+kortopi: data/billing/discounts.csv: table billing.discounts does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the table
+kortopi: data/facility/room_types.csv: column "capacty" of table facility.room_types does not exist in the database, and without --no-pending it would wait for the schema change: correct the name, or apply the schema change that adds the column
+```
+
+`capacity` を `capacty` と書いたときのように、データベースのどの名前とも空白と大小のほかにも違いがある名前は、計画からはスキーマの変更を待つ名前と同じに見える。計画はそれにスキーマの適用後に決まるという印を付け、通ってしまう。
+スキーマをすでに適用したところでは、`kortopi plan --no-pending` が、データベースにない宣言済みのテーブルと列を、上のようにすべてエラーにする（[kortopi plan](plan.ja.md#スキーマを適用済みのとき)）。
+apply は、そうした名前があれば必ず止まる。
+
 ### パーティションとそのパーティションテーブル
 
 ```text
@@ -421,10 +433,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の9つの誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
+最後の10個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
-- キーの列のないファイル・大小だけが違う名前・パーティションとそのパーティションテーブル・行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
+- キーの列のないファイル・大小だけが違う名前・`--no-pending` があるときの綴りを誤った名前・パーティションとそのパーティションテーブル・行を照合できないキーは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:930c0c0878751266e33345aa1cd9bb88c8ab519b78d5a294f81a30f783a2309b -->
+<!-- i18n-source: declaration.md sha256:0b25e3f90cc40fa24ed5156dbb2c7d7231f53757326a7b93747ecee095e20992 -->
