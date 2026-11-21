@@ -35,7 +35,7 @@ make github-settings REPO=<owner>/<name>    # 今いるリポジトリ以外を�
 | テンプレートリポジトリ | オフ | kortopi は利用者がインストールして使うプログラムであり、新しいリポジトリを作るときの出発点ではない。 |
 | トピック | `postgresql`、`master-data`、`cli` など | 利用者はトピックから kortopi を見つける。 |
 | マージの方法 | スカッシュだけ | どのプルリクエストも `main` では1つのコミットになり、履歴は一直線のまま保たれる。 |
-| スカッシュのコミットメッセージ | プルリクエストのタイトルと、そのコミットのメッセージ | タイトルは `main` 上のコミットの件名になる。そのため CI は、タイトルが Conventional Commit の形かどうかを確かめる（`make lint-pr-title`）。手元の各コミットについては `commit-msg` フックが同じことを確かめる。 |
+| スカッシュのコミットメッセージ | プルリクエストのタイトルと、そのコミットのメッセージ | タイトルは `main` 上のコミットの件名になる。そのため CI は、タイトルが Conventional Commit の形かどうかを確かめる（`make lint-pr-title`）。手元の各コミットについては `commit-msg` フックが同じことを確かめる。Renovate のタイトルは、形を検査し、長さは検査しない。その長さは、更新するモジュールのパスで決まるからである（ADR-0033）。 |
 | マージ後のブランチ削除 | オン | マージしたブランチはもう使わない。 |
 | 自動マージ | 許可 | Renovate は、パッチ、ダイジェスト、固定の更新を、必須チェックが通った時点でマージする。 |
 
@@ -90,6 +90,11 @@ Renovate は `renovate.json` を読み、毎週月曜日に、更新ごと、ま
 - ロックファイルは毎月1日に更新する。
 - Dependency Dashboard の issue に、保留中の更新がすべて並ぶ。
 
+CI は、Renovate のプルリクエストのタイトルについて、形を検査し、長さは検査しない（ADR-0033）。
+CI はアプリを、GitHub がプルリクエストの作成者として伝えるログイン名 `renovate[bot]` で見分ける。タイトルの文面は関係しない。
+ほかの誰かが開いたプルリクエストには、タイトルが Renovate のものをまねていても、72文字の上限がかかる。
+Renovate のプルリクエストのタイトルを人が編集しても、作成者は Renovate のままである。そのため、編集したタイトルは人の手で短く保つ。
+
 Renovate は `mise.toml` と一緒に `mise.lock` も更新する。
 Renovate のプルリクエストが `mise.toml` を変えて `mise.lock` を変えていないと、CI は `mise.lock` にある道具をインストールするステップで失敗する。
 その場合は、そのプルリクエストのブランチをチェックアウトし、`make tools-lock` を実行して、結果をプッシュする。
@@ -98,4 +103,4 @@ pnpm と uv は、リリースから3日たっていないバージョンを拒�
 そうした修正をすぐ取り込むには、そのパッケージを `pnpm-workspace.yaml`（`minimumReleaseAgeExclude`）か `pyproject.toml`（`exclude-newer-package`）で決まりから外す。
 リリースから3日たったら、その例外を消す。
 
-<!-- i18n-source: github-settings.md sha256:f3852a06e01392d6b235ec1d9b2a7c4e3bfcd67b95399d2b70f166b2ea143cfe -->
+<!-- i18n-source: github-settings.md sha256:e25281820a8f2a24536fe146aca36d12e39318eca3c4d8b47ca4be69793b9638 -->

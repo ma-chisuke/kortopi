@@ -38,5 +38,6 @@
 | [ADR-0030](ADR-0030-release-reproducible-archives-with-attested-provenance.ja.md) | main 上のタグから再現できるアーカイブをリリースし、サードパーティの表示と構成証明した来歴を添える | accepted | 2026-11-20 |
 | [ADR-0031](ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md) | パーティションが二重に宣言する行と、データベースの名前と空白か大小だけが違う名前で止まり、モード insert が比べない値について一致を主張しない | accepted | 2026-11-21 |
 | [ADR-0032](ADR-0032-require-the-name-of-the-database.ja.md) | データベースの名前を必須とし、ユーザーの名前で代用しない | accepted | 2026-11-21 |
+| [ADR-0033](ADR-0033-check-titles-of-the-dependency-bot-for-their-form-not-their-length.ja.md) | 依存を更新するボットのタイトルは、GitHub が伝える作成者で見分け、長さではなく形を検査する | accepted | 2026-11-21 |
 
-<!-- i18n-source: README.md sha256:23a1ec382f7af26759b02a7a247c6b1bbab3955a0d5efb6c523bafb65ba8ceb8 -->
+<!-- i18n-source: README.md sha256:bc565b999f4b24529b81c012ba3170220667e278481d95befa508bb34eda7b17 -->

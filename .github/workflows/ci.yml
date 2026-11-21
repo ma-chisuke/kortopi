@@ -61,12 +61,16 @@ jobs:
           # (tools/scripts/merge-base.sh).
           CHECK_BASE: HEAD^1
       # The title becomes the commit message on main; report it even when
-      # `make check` failed.
+      # `make check` failed. The author is the login that GitHub gives the
+      # account that opened the pull request, which nobody else can take; a
+      # title by the dependency bot is checked for its form, not its length
+      # (ADR-0033).
       - name: make lint-pr-title
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: make lint-pr-title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
 
   # `make check-all`: the fast checks and the slow ones that use the network
   # or PostgreSQL, which the tests start in containers on the Docker of the

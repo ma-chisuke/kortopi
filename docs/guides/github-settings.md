@@ -35,7 +35,7 @@ The maintainer runs it once the repository exists on GitHub, and again after eac
 | Template repository | off | kortopi is a program that people install, not a starting point for new repositories. |
 | Topics | `postgresql`, `master-data`, `cli`, and others | People find kortopi by them. |
 | Merge methods | squash only | Every pull request becomes one commit on `main`, and the history stays linear. |
-| Squash commit message | the title of the pull request, then the messages of its commits | The title becomes the subject of the commit on `main`, so CI checks that the title is a Conventional Commit (`make lint-pr-title`). The `commit-msg` hook checks the same for each local commit. |
+| Squash commit message | the title of the pull request, then the messages of its commits | The title becomes the subject of the commit on `main`, so CI checks that the title is a Conventional Commit (`make lint-pr-title`). The `commit-msg` hook checks the same for each local commit. A title by Renovate is checked for its form but not for its length, which follows the path of the module that it updates (ADR-0033). |
 | Delete head branches | on | A merged branch has no further use. |
 | Automatic merges | allowed | Renovate merges patch, digest, and pin updates once the required check passes. |
 
@@ -89,6 +89,11 @@ Renovate reads `renovate.json` and opens one pull request per update, or per gro
 - Security fixes arrive at once, outside the schedule.
 - The lockfiles are refreshed on the first day of each month.
 - The Dependency Dashboard issue lists every pending update.
+
+CI checks the title of a pull request from Renovate for its form, and not for its length (ADR-0033).
+It knows the app by the login `renovate[bot]`, which GitHub gives as the author of the pull request; the text of the title plays no part.
+A pull request that anyone else opens keeps the limit of 72 characters, even when its title copies those of Renovate.
+The author of a pull request from Renovate stays Renovate when a person edits its title, so keep an edited title short by hand.
 
 Renovate updates `mise.lock` together with `mise.toml`.
 If a pull request from Renovate changes `mise.toml` but not `mise.lock`, CI fails at the step that installs the tools in `mise.lock`.
