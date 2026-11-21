@@ -68,6 +68,7 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
   4. `set_config` で、各設定を固定した値に戻す。apply が次に読むもののためである。
 - 書き込みでキーを照らし合わせても、セッションの設定のもとで安全である。演算子は `OPERATOR(<schema>.=)` のようにスキーマ付きで挙げるので、検索パスがそれを選ぶことはない。比べるのはキーの型そのものの値であり、テキストではない。そのため、`DateStyle`・`TimeZone`・`extra_float_digits` のように値の読み方と表示を変える設定は、結果を変えない。そして値は、計画と同じくキーの列の照合順序を持つ。テキストでの比較なら安全ではない。値のテキストはそうした設定で変わるからである。キーの列に等価演算子を持つ型が要り（ADR-0023）、比べる列を書き込みではなく選ぶ文で比べるのは、このためである。
 - 選ぶ文は書き込みのときに動く。そのため、apply のそれまでの書き込みが残したとおりの行を見る。ADR-0026 の文が条件を評価したときと同じである。条件は計画のものなので、選ぶのは計画が示す行であり、各書き込みが変えた行の数は、これまでどおり計画と照らし合わせる（ADR-0026）。
+- バッチのどの文での PostgreSQL のエラーも、ADR-0026 が書き込みのエラーを報告するのと同じように報告する。エラーはその文がしたことを挙げる。たとえば `pick the rows to update in table app.t` や `read the values of on_insert of table app.t` である。`set the settings of the session to update table app.t` や `update table app.t` もある。PostgreSQL のメッセージ・詳細・ヒント・制約を保ち、その種類の助言を加える。直列化の失敗とデッドロックは、どの文で起きても、もう一度実行すべき競合である。ほかのトランザクションが挿入した行と見なすのは、書き込みそのものでの照合キーのインデックスの違反だけである。これは ADR-0026 を細かくする。ADR-0026 のエラーは、書き込みだけを挙げていた。
 - コミットは、1つのメッセージで2つの文を送る。各設定をセッションでの値にする `set_config` と、`COMMIT` である。メッセージを1つにすれば、答えの返らないコミットは、結果の分からない1つの要求のままである（ADR-0026）。
 - どの設定も、`SET LOCAL` と同じくトランザクションの中に限られる。コミットかロールバックで終わる。そのため、同じサーバーとの接続での次のトランザクションは、トランザクションモードのプーラーが接続を渡しても、セッションの設定で始まる。セッション自身の設定が変わることはない。
 
@@ -111,7 +112,7 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
 
 ### 確認の方法
 
-- `internal/postgres` の単体テストは、行を選ぶ文と書く文、書き込みが戻す設定、コミットする文を固定する（`TestWriteStatements`・`TestSettingsOfWrites`）。バッチのどの文が失敗したかの判定も固定する（`TestFailedStatement`）。
+- `internal/postgres` の単体テストは、行を選ぶ文と書く文、書き込みが戻す設定、コミットする文を固定する（`TestWriteStatements`・`TestSettingsOfWrites`）。バッチのどの文が失敗したかの判定とそのエラーも固定する（`TestFailedStatement`・`TestWriteFailure`）。
 - `make check-all` で PostgreSQL 15 から 18 に対して動く `internal/postgres` の結合テスト：
   - `TestApplyWritesWithTheSettingsOfTheSession`：設定は3か所に置く。データベースに `TimeZone`、ロールに `search_path` と `DateStyle`、接続のオプションに `IntervalStyle` である。最後のものは、`PGOPTIONS` が与えるのと同じである。
     - 対象は、`timestamp` への既定値 `now()`・`current_date`・`now()::text`・テキストにした interval と、`BEFORE UPDATE` のトリガーである。
@@ -121,6 +122,7 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
   - `TestSettingsAroundTheWrites`：各書き込みのあと設定が再び固定されること、トリガーがセッションの設定を見たこと、そしてコミットのあと接続が apply の前と同じセッションの設定を持つことを確かめる。
   - `TestUpdateDecidesInThePinnedSettings`：テキストで比べる列も、固定した設定で違うと決めて更新することを確かめる。
   - `TestWritesInTheSearchPathOfTheRole`：ロールの検索パスで `pg_catalog` の前にあるスキーマのオブジェクトが呼ばれないことを確かめる。
+  - `TestApplyWhenRowLevelSecurityComesToApply` は、選ぶ文のエラーの形も確かめる。
   - `TestApplyWithSelectOnTheDeclaredColumns`：ロールは、宣言した列にだけ `SELECT` と `INSERT` を、比べる列に `UPDATE` を、そして `DELETE` を持つ。このロールが挿入・更新・削除を適用できることを確かめる。
   - `TestApplyWhenRowLevelSecurityComesToApply`：計画のあとに `BYPASSRLS` を失ったロールでは、更新と削除が失敗し、何も書かないことを確かめる。
   - ADR-0026 と ADR-0035 のテストは、apply がこれまでどおりに書くことを確かめる。答えの返らないコミット（`TestCommitWithoutAnAnswer`）も含む。
@@ -163,4 +165,4 @@ apply の書き込みはどの設定で動くのか。そして apply は、書�
   - [docs/reference/apply.ja.md](../reference/apply.ja.md#書き込みの設定)
   - [docs/reference/comparison.ja.md](../reference/comparison.ja.md#セッションの設定)
 
-<!-- i18n-source: ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md sha256:e168fb7b8b0cf0eb7604c0313e577d830078d47622d9c5917448ee7536d06683 -->
+<!-- i18n-source: ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md sha256:33604d2e6b6b568ee864c1b871671f8fbcc2bb6bef78b75a9941d3cc1a56059c -->

@@ -522,13 +522,18 @@ func TestApplyWhenRowLevelSecurityComesToApply(t *testing.T) {
 						t.Fatal(err)
 					}
 					db.Exec(t, `ALTER ROLE `+role+` NOBYPASSRLS`)
-					write := s.Update
+					write, pick := s.Update, "pick the rows to update in table app.items: "
 					if kind == "delete" {
-						write = s.Delete
+						write, pick = s.Delete, "pick the rows to delete from table app.items: "
 					}
+					// The pick names itself, keeps the message of PostgreSQL,
+					// and gets the advice of a missing privilege.
 					n, err := write(ctx, req)
-					if err == nil || (!strings.Contains(err.Error(), "row-level security") && !strings.Contains(err.Error(), "but the plan has 1")) {
-						t.Errorf("%s after the role lost BYPASSRLS = %d, %v, want the error of row-level security or of the count", kind, n, err)
+					picked := err != nil && strings.HasPrefix(err.Error(), pick+"query would be affected by row-level security policy") &&
+						strings.HasSuffix(err.Error(), ": the role lacks a privilege that the statement needs: grant it to the role")
+					counted := err != nil && strings.Contains(err.Error(), "but the plan has 1")
+					if !picked && !counted {
+						t.Errorf("%s after the role lost BYPASSRLS = %d, %v, want the error of the pick or of the count", kind, n, err)
 					}
 					if err := s.Close(ctx); err != nil {
 						t.Fatal(err)

@@ -110,39 +110,44 @@ func commitSQL(values [][2]string) (string, error) {
 	return "SELECT " + strings.Join(sets, ", ") + "; COMMIT", nil
 }
 
-// execWrite runs sql, a statement of an apply that writes rows of a table,
-// with the settings that the session had before kortopi pinned them, and
-// returns its command tag (ADR-0037). The statements of prepare run first,
-// in the pinned settings: they pick the rows that sql writes, with the
-// conditions of the plan, so that every value is compared as the plan
-// compared it. The settings are pinned again after sql, for what the apply
+// batchStatement is a statement of the batch of a write, with what an error
+// of it says that the statement did, as in "pick the rows to insert into
+// table app.t".
+type batchStatement struct {
+	what string
+	sql  string
+}
+
+// execWrite runs write, a statement of an apply that writes rows of a
+// table, with the settings that the session had before kortopi pinned them,
+// and returns its command tag (ADR-0037). The statements of prepare run
+// first, in the pinned settings: they pick the rows that write writes, with
+// the conditions of the plan, so that every value is compared as the plan
+// compared it. The settings are pinned again after write, for what the apply
 // reads next. All of it goes to the server in one round trip, and every
 // setting is local to the transaction.
 //
-// around is true when the error comes from a statement around sql, which
-// the error names; otherwise it is the error of sql itself.
-func (s *Session) execWrite(ctx context.Context, prepare []string, sql string) (_ pgconn.CommandTag, around bool, _ error) {
+// On an error, failed says what the statement that failed did, and
+// isWrite is true when it is write itself.
+func (s *Session) execWrite(ctx context.Context, prepare []batchStatement, write batchStatement) (_ pgconn.CommandTag, failed string, isWrite bool, _ error) {
 	b := &pgconn.Batch{}
+	whats := make([]string, 0, len(prepare)+3)
 	for _, p := range prepare {
-		b.ExecParams(p, nil, nil, nil, nil)
+		b.ExecParams(p.sql, nil, nil, nil, nil)
+		whats = append(whats, p.what)
 	}
 	queueSettings(b, s.sessionSettings)
-	b.ExecParams(sql, nil, nil, nil, nil)
+	b.ExecParams(write.sql, nil, nil, nil, nil)
 	queueSettings(b, pinnedForWrites())
+	whats = append(whats, "set the settings of the session to "+write.what, write.what,
+		"pin the settings of the session again after the statement to "+write.what)
 	results, err := s.tx.Conn().PgConn().ExecBatch(ctx, b).ReadAll()
-	write := len(prepare) + 1
+	written := len(prepare) + 1
 	if err == nil {
-		return results[write].CommandTag, false, nil
+		return results[written].CommandTag, "", false, nil
 	}
-	switch failed := failedStatement(results); {
-	case failed < len(prepare):
-		return pgconn.CommandTag{}, true, fmt.Errorf("pick the rows to write: %w", err)
-	case failed == len(prepare):
-		return pgconn.CommandTag{}, true, fmt.Errorf("set the settings of the session for the write: %w", err)
-	case failed == write:
-		return pgconn.CommandTag{}, false, err
-	}
-	return pgconn.CommandTag{}, true, fmt.Errorf("pin the settings of the session again after the write: %w", err)
+	i := min(failedStatement(results), len(whats)-1)
+	return pgconn.CommandTag{}, whats[i], i == written, err
 }
 
 // failedStatement returns the index of the statement of a batch that failed,

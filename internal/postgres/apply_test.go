@@ -204,6 +204,39 @@ func TestWriteError(t *testing.T) {
 	}
 }
 
+// An error of any statement of the batch of a write names that statement,
+// keeps what PostgreSQL said, and gets the advice of its kind; only the
+// write itself turns a violation of the match key into a conflict.
+func TestWriteFailure(t *testing.T) {
+	meta := testMeta()
+	meta.keyIndexes = map[string][]string{"t_pkey": {"id"}}
+	op := equality{kind: compareOperator, schema: "pg_catalog", op: "="}
+	lt := &loadedTable{meta: meta, c: &comparison{key: []column{{name: "id", eq: op}}}}
+	rls := &pgconn.PgError{Code: "42501", Message: `query would be affected by row-level security policy for table "t"`, Detail: "d", Hint: "h", ConstraintName: "c"}
+	err := lt.writeFailure("pick the rows to update in table s.t", false, "update", rls)
+	want := `pick the rows to update in table s.t: query would be affected by row-level security policy for table "t" (detail: d) (hint: h) (constraint: c): ` +
+		"the role lacks a privilege that the statement needs: grant it to the role"
+	if err == nil || err.Error() != want {
+		t.Errorf("writeFailure of a pick =\n%v\nwant\n%s", err, want)
+	}
+	serialization := &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+	err = lt.writeFailure("pick the rows to delete from table s.t", false, "delete from", serialization)
+	if !errors.Is(err, ErrConflict) || !strings.HasPrefix(err.Error(), "pick the rows to delete from table s.t: could not serialize access: ") {
+		t.Errorf("writeFailure of a serialization failure in a pick = %v, want ErrConflict", err)
+	}
+	key := &pgconn.PgError{Code: "23505", Message: "duplicate key value", ConstraintName: "t_pkey"}
+	if err := lt.writeFailure("insert into table s.t", true, "insert into", key); !errors.Is(err, ErrConflict) {
+		t.Errorf("writeFailure of the match key in the write = %v, want ErrConflict", err)
+	}
+	if err := lt.writeFailure("read the values of on_insert of table s.t", false, "insert into", key); errors.Is(err, ErrConflict) {
+		t.Errorf("writeFailure of the match key around the write = %v, want no ErrConflict", err)
+	}
+	broken := lt.writeFailure("set the settings of the session to update table s.t", false, "update", io.ErrUnexpectedEOF)
+	if !errors.Is(broken, io.ErrUnexpectedEOF) || broken.Error() != "set the settings of the session to update table s.t: unexpected EOF" {
+		t.Errorf("writeFailure of a broken connection = %v", broken)
+	}
+}
+
 func TestWritesOnASessionOfAPlan(t *testing.T) {
 	ctx := t.Context()
 	table := declaration.Table{Name: declaration.TableName{Schema: "s", Name: "t"}}
