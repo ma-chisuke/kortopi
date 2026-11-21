@@ -37,10 +37,17 @@ lint-toml:
 	@$(TASK) $@ '$(FILES) "*.toml" | RUST_LOG=warn xargs -r taplo lint --no-schema'
 
 # Configuration files validated against the schemas bundled with
-# check-jsonschema, so this check needs no network.
+# check-jsonschema, so this check needs no network: Renovate, and the issue
+# forms and the chooser of new issues on GitHub (ADR-0041).
+# GitHub reads the chooser from config.yml alone, and every other YAML file in
+# the directory as a form.
+ISSUE_FORMS := ".github/ISSUE_TEMPLATE/*.yml" ".github/ISSUE_TEMPLATE/*.yaml" ":(exclude).github/ISSUE_TEMPLATE/config.yml"
+ISSUE_CONFIG := ".github/ISSUE_TEMPLATE/config.yml"
 lint-schema:
 	@$(TASK) $@ '\
-		$(FILES) "renovate.json" "renovate.json5" ".github/renovate.json" ".github/renovate.json5" | xargs -r check-jsonschema --builtin-schema vendor.renovate'
+		$(FILES) "renovate.json" "renovate.json5" ".github/renovate.json" ".github/renovate.json5" | xargs -r check-jsonschema --builtin-schema vendor.renovate; \
+		$(FILES) $(ISSUE_FORMS) | xargs -r check-jsonschema --builtin-schema vendor.github-issue-forms; \
+		$(FILES) $(ISSUE_CONFIG) | xargs -r check-jsonschema --builtin-schema vendor.github-issue-config'
 
 # Configuration files whose schema is fetched from its publisher.
 lint-schema-remote:
