@@ -415,7 +415,7 @@ kortopi: data/facility/room_types.csv: column "name" of table facility.room_type
 ### A column that the rows to insert would lack
 
 ```text
-kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 ```
 
 Declare the column with a value for every row, or give it a default with the tool that changes your schema.

@@ -67,6 +67,11 @@ type columnMeta struct {
 	// quoted, without a type modifier, so that a cast to it names that type
 	// whatever the search path is.
 	typeName string
+	// fullType is the type of the column with its type modifier, as
+	// format_type writes it in the pinned search path, which holds only
+	// pg_catalog, so that a type of another schema has its schema: the type
+	// of a temporary column that holds a value as the column would.
+	fullType string
 	// collatable is true when the column has a collation.
 	collatable bool
 	typ        uint32
@@ -199,6 +204,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 				OR EXISTS (SELECT FROM pg_catalog.pg_type AS ty WHERE ty.oid = a.atttypid AND ty.typdefaultbin IS NOT NULL),
 			(SELECT ARRAY[tn.nspname::pg_catalog.text, ty.typname::pg_catalog.text] FROM pg_catalog.pg_type AS ty
 				JOIN pg_catalog.pg_namespace AS tn ON tn.oid = ty.typnamespace WHERE ty.oid = a.atttypid),
+			pg_catalog.format_type(a.atttypid, a.atttypmod),
 			a.attcollation <> 0,
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT'),
 			a.attnum IS NOT NULL AND pg_catalog.has_column_privilege(c.oid, a.attnum, 'INSERT'),
@@ -236,10 +242,11 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var column *string
 		var notNull, generated, identityAlways, hasDefault *bool
 		var typeName []string
+		var fullType *string
 		var collatable *bool
 		var typ *uint32
 		var partitionOf, partitions [][]string
-		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
+		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &fullType, &collatable,
 			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
@@ -272,6 +279,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			}
 			if len(typeName) == 2 {
 				col.typeName = quoteIdent(typeName[0]) + "." + quoteIdent(typeName[1])
+			}
+			if fullType != nil {
+				col.fullType = *fullType
 			}
 			m.columns = append(m.columns, col)
 		}

@@ -100,6 +100,11 @@ func (f *fakeDB) CountRows(_ context.Context, table declaration.Table) (int, err
 	return 1, f.record("CountRows " + table.Name.String())
 }
 
+// CheckValues accepts every value of on_insert.
+func (f *fakeDB) CheckValues(_ context.Context, table declaration.TableName, _ []config.InsertValue) ([]plan.RefusedValue, error) {
+	return nil, f.record("CheckValues " + table.String())
+}
+
 func (f *fakeDB) ForeignKeys(_ context.Context, names []declaration.TableName) ([]ForeignKey, error) {
 	return f.keys, f.record("ForeignKeys " + namesOf(names))
 }
@@ -352,7 +357,8 @@ func TestRun(t *testing.T) {
 			opts: all,
 			want: diffs,
 			wantErr: `z/parent.csv: column "created_by" of table z.parent is NOT NULL and has no default, and the declaration does not name it, ` +
-				"so the 2 rows to insert would get no value for it: declare the column, or give it a default in the schema",
+				"so the 2 rows to insert would get no value for it: declare the column, give it a value in on_insert of [tables.\"z.parent\"] in kortopi.toml, " +
+				"or give it a default in the schema",
 		},
 		{
 			name:     "a mistake in the declaration",

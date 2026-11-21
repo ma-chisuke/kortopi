@@ -416,7 +416,7 @@ kortopi: data/facility/room_types.csv: column "name" of table facility.room_type
 ### 挿入する行が値を得られない列
 
 ```text
-kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 ```
 
 どの行にも値を書いてその列を宣言するか、スキーマを変える道具でその列に既定値を与える。
@@ -439,4 +439,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:50f437a3fa226cf1b9f19f4343abefda5a1a0b714e1b5dd3a025f3fa81ec039f -->
+<!-- i18n-source: declaration.md sha256:ce6799867d769a3784956f2a8c42331476f7622e7cf2e689c1ff8166e1c56c6c -->

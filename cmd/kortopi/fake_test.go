@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
+	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/export"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -81,6 +82,11 @@ func (s *fakeSession) Diff(_ context.Context, req plan.DiffRequest) (plan.TableD
 func (s *fakeSession) CountRows(_ context.Context, t declaration.Table) (int, error) {
 	_ = s.record("CountRows " + t.Name.String())
 	return 2, nil
+}
+
+// CheckValues accepts every value of on_insert.
+func (s *fakeSession) CheckValues(_ context.Context, table declaration.TableName, _ []config.InsertValue) ([]plan.RefusedValue, error) {
+	return nil, s.record("CheckValues " + table.String())
 }
 
 func (s *fakeSession) ForeignKeys(context.Context, []declaration.TableName) ([]apply.ForeignKey, error) {

@@ -327,7 +327,7 @@ kortopi: insert into table app.b: new row for relation "b" violates check constr
 ### 挿入する行が値を得られない列
 
 ```text
-kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, or give it a default in the schema
+kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is NOT NULL and has no default, and the declaration does not name it, so the row to insert would get no value for it: declare the column, give it a value in on_insert of [tables."facility.rooms"] in data/kortopi.toml, or give it a default in the schema
 kortopi: nothing was changed
 ```
 
@@ -378,4 +378,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:993eba11ac798442c56588898c711fed8e90384d67145e96a10f5cee914072c6 -->
+<!-- i18n-source: apply.md sha256:c5bed238e59e01f327979e393deca4c597993b7642347eb3fabdf7d767c2d39d -->

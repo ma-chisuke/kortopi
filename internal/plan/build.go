@@ -23,7 +23,10 @@ import (
 //
 // Mistakes in the declaration or the settings are reported together, one error
 // for each, before the database loads any row. With opts.NoPending, a declared
-// table or column that the database does not have is such a mistake. A column
+// table or column that the database does not have is such a mistake. So is a
+// value of on_insert that the database does not read by the type of its
+// column, which the database checks for each table with such values before
+// any row is loaded (ADR-0035). A column
 // that the rows to insert of a table would lack, NOT NULL and without a
 // default, shows only with the difference; such mistakes of all tables are
 // reported together after the comparison. An error of the database stops the
@@ -74,21 +77,30 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		errs = append(errs, declaredTwice(decl.Dir, dt, info.PartitionOf, declared)...)
 		c := &check{table: dt, file: dt.Path(decl.Dir), settingsFile: settingsFile, info: info, noPending: opts.NoPending}
 		cols, tableErrs := c.settle(s.Key)
-		if len(tableErrs) > 0 {
-			errs = append(errs, tableErrs...)
+		values, pendingValues, valueErrs, err := c.onInsert(ctx, db, s)
+		errs = append(append(errs, tableErrs...), valueErrs...)
+		if err != nil {
+			return nil, joinAfter(errs, err)
+		}
+		if len(tableErrs) > 0 || len(valueErrs) > 0 {
 			continue
 		}
 		tables[i].Key = cols.key
 		tables[i].Compare = cols.compare
 		tables[i].PendingColumns = cols.pending
+		if len(pendingValues) > 0 {
+			tables[i].PendingColumns = slices.Concat(cols.pending, pendingValues)
+		}
+		tables[i].OnInsert = values
 		requests[i] = DiffRequest{
-			Table:   *dt,
-			Key:     cols.key,
-			Compare: cols.compare,
-			NotNull: c.notNull(cols.compare),
-			Pending: cols.pending,
-			Updates: updates,
-			Deletes: deletes,
+			Table:    *dt,
+			Key:      cols.key,
+			Compare:  cols.compare,
+			NotNull:  c.notNull(cols.compare),
+			Pending:  cols.pending,
+			Updates:  updates,
+			Deletes:  deletes,
+			OnInsert: values,
 		}
 	}
 	if len(errs) > 0 {
@@ -114,7 +126,7 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 		tables[i].Diff = diff
 		if n := len(diff.Inserts); n > 0 {
 			dt := &decl.Tables[i]
-			errs = append(errs, missingValues(dt, dt.Path(decl.Dir), infos[dt.Name], n)...)
+			errs = append(errs, missingValues(dt, dt.Path(decl.Dir), settingsFile, infos[dt.Name], tables[i].OnInsert, n)...)
 		}
 	}
 	if len(errs) > 0 {
@@ -236,22 +248,98 @@ func joinAfter(errs []error, err error) error {
 }
 
 // missingValues returns an error for each column that a new row of the table
-// needs and the declaration does not name: NOT NULL, and without a default.
-// Each of the inserts rows to insert would fail on it.
-func missingValues(t *declaration.Table, file string, info TableInfo, inserts int) []error {
+// needs and gets no value for: NOT NULL, without a default, not named by the
+// declaration, and without a value in onInsert. Each of the inserts rows to
+// insert would fail on it.
+func missingValues(t *declaration.Table, file, settingsFile string, info TableInfo, onInsert []config.InsertValue, inserts int) []error {
 	rows := "the " + strconv.Itoa(inserts) + " rows"
 	if inserts == 1 {
 		rows = "the row"
 	}
 	var errs []error
 	for _, c := range info.Columns {
-		if c.NotNull && !c.HasDefault && !slices.Contains(t.Columns, c.Name) {
+		set := slices.ContainsFunc(onInsert, func(v config.InsertValue) bool { return v.Column == c.Name })
+		if c.NotNull && !c.HasDefault && !set && !slices.Contains(t.Columns, c.Name) {
 			errs = append(errs, fmt.Errorf("%s: column %q of table %s is NOT NULL and has no default, and the declaration does not name it, "+
-				"so %s to insert would get no value for it: declare the column, or give it a default in the schema",
-				file, c.Name, t.Name, rows))
+				"so %s to insert would get no value for it: declare the column, give it a value in on_insert of [tables.%s] in %s, "+
+				"or give it a default in the schema",
+				file, c.Name, t.Name, rows, strconv.Quote(t.Name.String()), settingsFile))
 		}
 	}
 	return errs
+}
+
+// onInsert checks the values of on_insert of the table (ADR-0035), after
+// settle, and lets the database read the values whose columns pass, so that
+// a value that an insert would refuse is a mistake of the plan, also when
+// there is no row to insert. It returns the values whose columns the table
+// has, the columns that the table does not have yet, and the mistakes, at
+// most one for each column. err is an error of the database.
+//
+// A column of on_insert is set in a new row and never compared, so it cannot
+// be declared too, nor be part of the match key, which each declared row
+// holds; a generated column and an identity column that is GENERATED ALWAYS
+// take no value. A column that the table does not have is treated as a
+// declared column that it does not have: it waits for the schema change, or
+// it is an error when its name differs from a column of the table only in
+// white space or case, or with noPending.
+func (c *check) onInsert(ctx context.Context, db Database, s config.Table) (values []config.InsertValue, pending []string, errs []error, err error) {
+	if len(s.OnInsert) == 0 {
+		return nil, nil, nil, nil
+	}
+	key := s.Key
+	if len(key) == 0 {
+		key = c.info.PrimaryKey
+	}
+	where := c.settingsFile + ": on_insert of table " + c.table.Name.String()
+	for _, v := range s.OnInsert {
+		col, ok := c.byName[v.Column]
+		switch {
+		case c.declared[v.Column]:
+			errs = append(errs, fmt.Errorf("%s gives a value to column %q, which %s declares too: "+
+				"a declared column is compared and updated, and a column of on_insert is set only when a row is inserted: "+
+				"remove the column from one of the two", where, v.Column, c.file))
+		case slices.Contains(key, v.Column):
+			errs = append(errs, fmt.Errorf("%s gives a value to column %q, which is a column of the match key: "+
+				"each declared row holds its key, so the key cannot come from on_insert: remove the column from on_insert", where, v.Column))
+		case !ok:
+			if near := c.nearColumns(v.Column); len(near) > 0 {
+				errs = append(errs, fmt.Errorf("%s names column %q, which is not a column of the table, but %s is, "+
+					"whose name differs only in white space or case: write the name as the table has it", where, v.Column, alternatives("column", near)))
+				continue
+			}
+			if c.noPending {
+				errs = append(errs, fmt.Errorf("%s names column %q, which does not exist in the database, and without --no-pending it would wait for the schema change: "+
+					"correct the name, or apply the schema change that adds the column", where, v.Column))
+				continue
+			}
+			pending = append(pending, v.Column)
+		case col.Generated:
+			errs = append(errs, fmt.Errorf("%s gives a value to column %q, which is generated, so the database computes its value: "+
+				"remove the column from on_insert", where, v.Column))
+		case col.IdentityAlways:
+			errs = append(errs, fmt.Errorf("%s gives a value to column %q, which is an identity column that the database always generates: "+
+				"remove the column from on_insert", where, v.Column))
+		default:
+			values = append(values, v)
+		}
+	}
+	if len(values) == 0 {
+		return nil, pending, errs, nil
+	}
+	refused, err := db.CheckValues(ctx, c.table.Name, values)
+	if err != nil {
+		return nil, nil, errs, err
+	}
+	for _, r := range refused {
+		i := slices.IndexFunc(values, func(v config.InsertValue) bool { return v.Column == r.Column })
+		if i < 0 {
+			return nil, nil, errs, fmt.Errorf("table %s: the database refused a value of column %q, which on_insert does not name", c.table.Name, r.Column)
+		}
+		errs = append(errs, fmt.Errorf("%s gives column %q the value %s, which the type of the column does not read: %s: "+
+			"write the value as a CSV file writes a value of the column", where, r.Column, strconv.Quote(values[i].Value), r.Reason))
+	}
+	return values, pending, errs, nil
 }
 
 // kinds returns whether the mode of a table allows updates and deletes.

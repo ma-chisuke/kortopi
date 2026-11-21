@@ -27,10 +27,16 @@ type fakeDB struct {
 	diffErrs map[declaration.TableName]error
 	counts   map[declaration.TableName]int
 	countErr error
+	// refused holds the values of on_insert that CheckValues refuses, and
+	// checkErr makes it fail.
+	refused  map[declaration.TableName][]RefusedValue
+	checkErr error
 
 	describes [][]declaration.TableName
 	requests  []DiffRequest
 	counted   []declaration.TableName
+	// checked holds the values of each call of CheckValues.
+	checked map[declaration.TableName][]config.InsertValue
 }
 
 func (f *fakeDB) Describe(_ context.Context, names []declaration.TableName) (map[declaration.TableName]TableInfo, error) {
@@ -55,6 +61,17 @@ func (f *fakeDB) Diff(_ context.Context, req DiffRequest) (TableDiff, error) {
 		return TableDiff{}, f.diffErr
 	}
 	return f.diffs[req.Table.Name], f.diffErrs[req.Table.Name]
+}
+
+func (f *fakeDB) CheckValues(_ context.Context, table declaration.TableName, values []config.InsertValue) ([]RefusedValue, error) {
+	if f.checked == nil {
+		f.checked = make(map[declaration.TableName][]config.InsertValue)
+	}
+	f.checked[table] = slices.Clone(values)
+	if f.checkErr != nil {
+		return nil, f.checkErr
+	}
+	return f.refused[table], nil
 }
 
 func (f *fakeDB) CountRows(_ context.Context, table declaration.Table) (int, error) {
@@ -694,12 +711,14 @@ func TestBuildMissingValues(t *testing.T) {
 	mistake := func(table, column, rows string) string {
 		return filepath.FromSlash("data/"+table[:1]+"/"+table[2:]+".csv") + `: column "` + column + `" of table ` + table +
 			" is NOT NULL and has no default, and the declaration does not name it, so " + rows +
-			" to insert would get no value for it: declare the column, or give it a default in the schema"
+			` to insert would get no value for it: declare the column, give it a value in on_insert of [tables."` + table + `"] in ` +
+			filepath.FromSlash("data/kortopi.toml") + ", or give it a default in the schema"
 	}
 	tests := []struct {
 		name      string
 		diffs     map[declaration.TableName]TableDiff
 		diffErrs  map[declaration.TableName]error
+		settings  map[declaration.TableName]config.Table
 		want      string
 		wantDiffs int
 	}{
@@ -726,6 +745,26 @@ func TestBuildMissingValues(t *testing.T) {
 			want:      mistake("a.t", "created_by", "the row") + "\n" + mistake("a.t", "owner", "the row") + "\n" + errDB.Error(),
 			wantDiffs: 2,
 		},
+		{
+			// A column that on_insert gives a value gets one in every new
+			// row: only the other column is a mistake, and only of the
+			// table whose settings name the column.
+			name:  "a column with a value in on_insert",
+			diffs: map[declaration.TableName]TableDiff{tableT: inserts(1), tableU: inserts(1)},
+			settings: map[declaration.TableName]config.Table{
+				tableT: {OnInsert: []config.InsertValue{{Column: "created_by", Value: "kortopi"}}},
+			},
+			want:      mistake("a.t", "owner", "the row") + "\n" + mistake("b.u", "created_by", "the row") + "\n" + mistake("b.u", "owner", "the row"),
+			wantDiffs: 2,
+		},
+		{
+			name:  "every such column with a value in on_insert",
+			diffs: map[declaration.TableName]TableDiff{tableT: inserts(1)},
+			settings: map[declaration.TableName]config.Table{
+				tableT: {OnInsert: []config.InsertValue{{Column: "created_by", Value: "kortopi"}, {Column: "owner", Value: ""}}},
+			},
+			wantDiffs: 2,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -733,7 +772,7 @@ func TestBuildMissingValues(t *testing.T) {
 
 			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: info, tableU: info}, diffs: tt.diffs, diffErrs: tt.diffErrs}
 			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id", "note"), csvTable(tableU, "id")}}
-			p, err := Build(t.Context(), decl, nil, db, Options{})
+			p, err := Build(t.Context(), decl, config.New(tt.settings), db, Options{})
 			if tt.want == "" {
 				if err != nil {
 					t.Errorf("Build() error = %v", err)

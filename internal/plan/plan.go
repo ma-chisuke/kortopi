@@ -33,6 +33,24 @@ type Database interface {
 	// holds. Build calls it for a table that the database does not have, so
 	// it must not need the table.
 	CountRows(ctx context.Context, table declaration.Table) (int, error)
+
+	// CheckValues reads each value of on_insert by the type of its column of
+	// an existing table, as an insert of the value would, and returns the
+	// values that the database refuses, in the order of values (ADR-0035).
+	// Build calls it for every table with such values, before any row is
+	// loaded, so that a value that an insert would refuse is a mistake of
+	// the plan, also when there is no row to insert. A refused value does not
+	// end the session; any other error is an error of the database.
+	CheckValues(ctx context.Context, table declaration.TableName, values []config.InsertValue) ([]RefusedValue, error)
+}
+
+// RefusedValue is a value of on_insert that the database does not read by
+// the type of its column.
+type RefusedValue struct {
+	Column string
+	// Reason is what the database says, as in `invalid input syntax for type
+	// integer: "x"`.
+	Reason string
 }
 
 // Options change what Build reports.
@@ -132,6 +150,11 @@ type DiffRequest struct {
 	// kinds of change. The database does not compute a kind that is false.
 	Updates bool
 	Deletes bool
+	// OnInsert holds the values of on_insert whose columns the table has,
+	// sorted by column (ADR-0035). An insert gives them to every new row,
+	// and nothing compares them: they are not columns of Compare, and the
+	// declaration does not name them.
+	OnInsert []config.InsertValue
 }
 
 // Value is the value of one column of one row, as the database prints it.
@@ -209,9 +232,13 @@ type Table struct {
 	PendingTable bool
 	DeclaredRows int
 	// PendingColumns holds the declared columns that the table does not have
-	// yet.
+	// yet, and then the columns of on_insert that it does not have yet.
 	PendingColumns []string
-	Diff           TableDiff
+	// OnInsert holds the values that the inserts of the table give the new
+	// rows, as the settings write them, for the columns that the table has
+	// (ADR-0035). They are not compared.
+	OnInsert []config.InsertValue
+	Diff     TableDiff
 }
 
 // Plan is the difference between a declaration and a database.
