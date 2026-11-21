@@ -212,9 +212,12 @@ func TestEffectsOfRowsThatThePlanChanges(t *testing.T) {
 // of the foreign keys, so without an index it scans such a table once for
 // each deleted row: the deletions run with the indexes. The test logs how
 // long the plan takes without and with the indexes, and how long the
-// deletions and the check after them take.
+// deletions and the check after them take. It measures, and the other tests
+// cover the versions, so it runs against the newest server alone, to keep the
+// load of the tests down.
 func TestEffectsOnLargeTables(t *testing.T) {
-	for _, srv := range eachServer(t) {
+	servers := eachServer(t)
+	for _, srv := range servers[len(servers)-1:] {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)
 			db.Exec(t, `

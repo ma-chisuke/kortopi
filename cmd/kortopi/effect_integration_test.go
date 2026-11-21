@@ -30,6 +30,10 @@ INSERT INTO t.orders VALUES (1, 1), (2, 2);
 INSERT INTO t.order_line SELECT g, 2, g FROM generate_series(1, 50000) AS g;
 INSERT INTO t.order_line VALUES (50001, 1, 1);
 INSERT INTO t.line_note SELECT g, g FROM generate_series(1, 2000) AS g;
+-- PostgreSQL deletes row by row through the triggers of the foreign keys:
+-- without these indexes, it would scan the tables once for each deleted row.
+CREATE INDEX ON t.order_line (order_id);
+CREATE INDEX ON t.line_note (line_id);
 CREATE TABLE m.node (id int PRIMARY KEY, parent_id int REFERENCES m.node ON DELETE CASCADE, name text);
 INSERT INTO m.node VALUES (1, NULL, 'root'), (2, 1, 'a'), (3, 2, 'a1'), (4, 3, 'a11'), (5, 1, 'b');
 CREATE TABLE m.kind (code text PRIMARY KEY);
