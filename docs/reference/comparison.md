@@ -39,6 +39,7 @@ They decide how PostgreSQL reads the values of your files and how a plan prints 
 | `lc_monetary` | `C` | A `money` value reads and prints in the form of the C locale, the same in every environment. |
 | `row_security` | `off` | A query that a policy of row-level security would filter fails instead of returning fewer rows ([kortopi plan](plan.md#what-the-session-needs)). |
 
+An apply reads and compares in these settings too, but it writes the rows with the settings that the session had before kortopi pinned them, so the defaults and the triggers of your tables see the settings of your application ([kortopi apply](apply.md#the-settings-of-the-writes)).
 [kortopi export](export.md) writes values in these settings too, so a plan reads its files back as the same values.
 A plan printed as SQL writes each value so that it reads the same in a session with other settings ([Values in the script](plan.md#values-in-the-script)).
 
@@ -120,4 +121,4 @@ A plan therefore does not check:
 These are found when the rows are applied ([kortopi apply](apply.md)).
 ADR-0016 describes how a team finds them before a merge: it applies the new schema and then the rows to a throwaway PostgreSQL in CI.
 
-The reasons for these rules are in [ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.md) and [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md).
+The reasons for these rules are in [ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.md), [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md), and [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md).

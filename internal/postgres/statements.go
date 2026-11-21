@@ -189,8 +189,10 @@ func tableReplacement(temp string) string {
 // declared rows d and the stored rows s, and takes the conditions from the
 // methods match and differs.
 //
-// An apply builds its statements from the same parts, so that it changes
-// exactly the rows that a plan shows: insertSQL, updateSQL, and deleteSQL.
+// An apply picks the rows that it writes with the same parts, so that it
+// changes exactly the rows that a plan shows: pickInsertsSQL,
+// pickUpdatesSQL, and pickDeletesSQL, which insertSQL, updateSQL, and
+// deleteSQL write.
 type comparison struct {
 	// stored is the real table: qualified, quoted, and after ONLY for a table
 	// that is not partitioned, so that the rows of a child table that
@@ -395,55 +397,138 @@ func (c *comparison) updatesSQL() string {
 	return b.String()
 }
 
-// insertSQL inserts the declared rows that no stored row matches: the rows of
-// insertsSQL. It names the key and the compared columns, so that every other
-// column gets its default (ADR-0011), and the columns of on_insert, each with
-// its value as a literal without a cast (ADR-0035). PostgreSQL reads such a
-// literal of INSERT ... SELECT by the type of the column that receives it,
-// as in VALUES, once for the statement, so that every row that the statement
-// inserts gets the same value.
-func (c *comparison) insertSQL() string {
+// Aliases of the temporary tables of a write of an apply: w holds the rows
+// that a pick statement chose, and v the values of on_insert.
+const (
+	pickedAlias = "w"
+	valuesAlias = "v"
+)
+
+// A write of an apply is two statements (ADR-0037). A pick statement, in the
+// pinned settings, records in a temporary table which rows the write takes,
+// with the conditions of the plan: the rows of insertsSQL, updatesSQL, or
+// deletesSQL, by their row identifiers, ctid, and for a stored row also the
+// table that holds it, tableoid, which tells the partitions of a partitioned
+// table apart. The write then runs in the settings of the session, and takes
+// those rows by their identifiers. It compares no value: everything that
+// depends on the settings, such as a column that is compared by its text,
+// was decided by the pick. Every name in it is qualified, and its operators
+// are those of tid and oid in pg_catalog, so an object in the search path of
+// the session cannot change it.
+
+// joinPicked returns the condition that pairs the row of alias, a row of the
+// declared or the stored rows, with a picked row whose identifier is column.
+func joinPicked(alias, column string) string {
+	return alias + ".ctid OPERATOR(pg_catalog.=) " + pickedAlias + "." + quoteIdent(column)
+}
+
+// storedPicked returns the condition that pairs a stored row with the
+// picked row that names its table and its identifier.
+func storedPicked() string {
+	return storedAlias + ".tableoid OPERATOR(pg_catalog.=) " + pickedAlias + `."table" AND ` + joinPicked(storedAlias, "stored")
+}
+
+// pickInsertsSQL returns the statement that records in the temporary table
+// temp the declared rows that no stored row matches, the rows of insertsSQL,
+// by their identifiers in the column "row".
+func (c *comparison) pickInsertsSQL(temp string) string {
+	return "CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + declaredAlias + `.ctid AS "row" FROM ` +
+		c.declared + " AS " + declaredAlias + " WHERE " + c.missing()
+}
+
+// insertSQL inserts the declared rows that pickInsertsSQL recorded in the
+// temporary table picked. It names the key and the compared columns, so that
+// every other column gets its default (ADR-0011), and the columns of
+// on_insert, whose values come from the one row of the temporary table
+// values (insertValuesSQL), so that every row that the statement inserts
+// gets the same value (ADR-0035).
+func (c *comparison) insertSQL(picked, values string) string {
 	columns := slices.Concat(c.key, c.compare)
 	names := make([]string, len(columns))
 	for i, col := range columns {
 		names[i] = col.name
 	}
-	values := quoteColumns(declaredAlias+".", names)
+	selected := quoteColumns(declaredAlias+".", names)
+	from := picked + " AS " + pickedAlias + " JOIN " + c.declared + " AS " + declaredAlias + " ON " + joinPicked(declaredAlias, "row")
+	if len(c.onInsert) > 0 {
+		from += " CROSS JOIN " + values + " AS " + valuesAlias
+	}
 	for _, col := range c.onInsert {
 		names = append(names, col.name)
-		values += ", " + col.literal
+		selected += ", " + valuesAlias + "." + quoteIdent(col.name)
 	}
 	overriding := ""
 	if c.overriding {
 		overriding = " OVERRIDING SYSTEM VALUE"
 	}
-	return "INSERT INTO " + c.table + " (" + quoteColumns("", names) + ")" + overriding +
-		" SELECT " + values + " FROM " + c.declared + " AS " + declaredAlias +
-		" WHERE " + c.missing()
+	return "INSERT INTO " + c.table + " (" + quoteColumns("", names) + ")" + overriding + " SELECT " + selected + " FROM " + from
 }
 
-// updateSQL updates the stored rows in which a compared column differs from
-// the declared row: the rows of updatesSQL. Every compared column is a
-// target of the statement, so the role needs UPDATE on each, and a trigger
-// UPDATE OF one of them fires; a column whose value does not differ gets its
-// stored value back, so an equal value stays as it is stored, such as 1.0
-// for a declared 1.00.
-func (c *comparison) updateSQL() string {
-	sets := make([]string, len(c.compare))
+// insertValuesSQL returns the statement that inserts the values of
+// on_insert into the temporary table temp, which has the columns of
+// on_insert with the types of the columns of the table (createDeclaredSQL).
+// Each value is a literal without a cast, which PostgreSQL reads by the type
+// of the column that receives it, in the pinned settings, as a plan reads it
+// (ADR-0035).
+func (c *comparison) insertValuesSQL(temp string) string {
+	names := make([]string, len(c.onInsert))
+	literals := make([]string, len(c.onInsert))
+	for i, col := range c.onInsert {
+		names[i], literals[i] = col.name, col.literal
+	}
+	return "INSERT INTO " + temp + " (" + quoteColumns("", names) + ") VALUES (" + strings.Join(literals, ", ") + ")"
+}
+
+// pickUpdatesSQL returns the statement that records in the temporary table
+// temp the matched rows in which a compared column differs, the rows of
+// updatesSQL: the identifier of the declared row in the column "declared",
+// the table and the identifier of the stored row in "table" and "stored",
+// and for each compared column, numbered from 1 as "c1", whether its values
+// differ.
+func (c *comparison) pickUpdatesSQL(temp string) string {
+	var b strings.Builder
+	b.WriteString("CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + declaredAlias + `.ctid AS "declared", ` +
+		storedAlias + `.tableoid AS "table", ` + storedAlias + `.ctid AS "stored"`)
 	conds := make([]string, len(c.compare))
 	for i, col := range c.compare {
 		conds[i] = c.differs(col)
-		sets[i] = quoteIdent(col.name) + " = CASE WHEN " + conds[i] + " THEN " + declaredAlias + "." + quoteIdent(col.name) +
-			" ELSE " + storedAlias + "." + quoteIdent(col.name) + " END"
+		b.WriteString(", " + conds[i] + " AS " + quoteIdent("c"+strconv.Itoa(i+1)))
 	}
-	return "UPDATE " + c.stored + " AS " + storedAlias + " SET " + strings.Join(sets, ", ") +
-		" FROM " + c.declared + " AS " + declaredAlias + " WHERE " + c.match() + " AND (" + strings.Join(conds, " OR ") + ")"
+	b.WriteString(" FROM " + c.declared + " AS " + declaredAlias + " JOIN " + c.stored + " AS " + storedAlias + " ON " + c.match())
+	b.WriteString(" WHERE " + strings.Join(conds, " OR "))
+	return b.String()
 }
 
-// deleteSQL deletes the stored rows that no declared row matches: the rows
-// of deletesSQL.
-func (c *comparison) deleteSQL() string {
-	return "DELETE FROM " + c.stored + " AS " + storedAlias + " WHERE " + c.unmatched()
+// updateSQL updates the stored rows that pickUpdatesSQL recorded in the
+// temporary table picked. Every compared column is a target of the
+// statement, so the role needs UPDATE on each, and a trigger UPDATE OF one
+// of them fires; a column whose value does not differ gets its stored value
+// back, so an equal value stays as it is stored, such as 1.0 for a declared
+// 1.00.
+func (c *comparison) updateSQL(picked string) string {
+	sets := make([]string, len(c.compare))
+	for i, col := range c.compare {
+		sets[i] = quoteIdent(col.name) + " = CASE WHEN " + pickedAlias + "." + quoteIdent("c"+strconv.Itoa(i+1)) +
+			" THEN " + declaredAlias + "." + quoteIdent(col.name) + " ELSE " + storedAlias + "." + quoteIdent(col.name) + " END"
+	}
+	return "UPDATE " + c.stored + " AS " + storedAlias + " SET " + strings.Join(sets, ", ") +
+		" FROM " + picked + " AS " + pickedAlias + " JOIN " + c.declared + " AS " + declaredAlias + " ON " + joinPicked(declaredAlias, "declared") +
+		" WHERE " + storedPicked()
+}
+
+// pickDeletesSQL returns the statement that records in the temporary table
+// temp the stored rows that no declared row matches, the rows of
+// deletesSQL: their tables in the column "table", and their identifiers in
+// "stored".
+func (c *comparison) pickDeletesSQL(temp string) string {
+	return "CREATE TEMPORARY TABLE " + temp + " ON COMMIT DROP AS SELECT " + storedAlias + `.tableoid AS "table", ` +
+		storedAlias + `.ctid AS "stored" FROM ` + c.stored + " AS " + storedAlias + " WHERE " + c.unmatched()
+}
+
+// deleteSQL deletes the stored rows that pickDeletesSQL recorded in the
+// temporary table picked.
+func (c *comparison) deleteSQL(picked string) string {
+	return "DELETE FROM " + c.stored + " AS " + storedAlias + " USING " + picked + " AS " + pickedAlias + " WHERE " + storedPicked()
 }
 
 // referencingAlias is the alias of the referencing rows in referencesSQL.

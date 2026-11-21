@@ -92,6 +92,20 @@ kortopi は `on_insert` の列を更新しない。すでにある行は、持�
 更新は、値が違わない列に保存されている値を戻すので、等しいとみなす値は保存されているテキストを保つ。
 kortopi はシーケンスを読みも動かしもしない。
 
+### 書き込みの設定
+
+apply は、計画が固定する設定で読み、比べる（[値の比べ方](comparison.ja.md#セッションの設定)）。そのため、宣言した値と `on_insert` の値は、どの環境でも同じ意味になる。
+一方、挿入・更新・削除とコミットは、kortopi が固定する前にセッションが持っていた設定で動く。`client_encoding` だけは固定したままである。セッションが持っていた設定とは、サーバー・`ALTER DATABASE ... SET`・`ALTER ROLE ... SET`・`PGOPTIONS` が設定したものである。
+そのため、書き込みが発火させる既定値、トリガー、外部キーの動作、遅らせた検査は、アプリケーションの文と同じ設定を見る。
+
+- `timestamp` の列への既定値 `now()` や `current_date` は、データベースの `TimeZone` での時刻と日付になる。値をテキストにする既定値は、その `DateStyle` と `IntervalStyle` の形になる。
+- スキーマを付けずにテーブルを挙げるトリガーは、ロールの検索パスでそのテーブルを見つける。
+- 行単位セキュリティを持つテーブルに書くトリガーは、アプリケーションの文と同じく、そのポリシーに従う。
+
+どの行を書き、行のどの列を更新するかは、固定した設定のもとで、計画と同じ比べ方で決める。決めるのは、書き込みのたびにその直前である。書き込みはその行を取るだけで、値を比べない。
+どの設定もトランザクションの中に限られる。そのため、apply のあと、接続は自分の設定に戻る。コネクションプーラーを通しても同じである。
+アプリケーションの設定で失敗するトリガーは、apply も PostgreSQL のエラーで失敗させる。このとき何も変わらない。
+
 ### 外部キーと循環
 
 テーブルの順番はカタログの外部キーから決まるので、外部キーを足せば、次の実行から順番が変わる。
@@ -233,7 +247,7 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
-- `PGOPTIONS='-c lock_timeout=10s'` のようにロックのタイムアウトを設定する。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[kortopi plan](plan.ja.md#接続の設定)）。接続の設定は計画と同じである。
+- `PGOPTIONS='-c lock_timeout=10s'` のようにロックのタイムアウトを設定する。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[kortopi plan](plan.ja.md#接続の設定)）。接続の設定は計画と同じであり、書き込みもその設定で動く（[書き込みの設定](#書き込みの設定)）。
 - 失敗した apply は何も変えない。宣言かデータベースを直して、もう一度実行する。
 
 ### スキーマごとの apply
@@ -256,7 +270,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - `ON DELETE CASCADE` は、1段目だけを数えて示す。
 - kortopi はシーケンスを動かさない。`serial` や識別列に明示の値を挿入する apply のあと、そのシーケンスの次の値が、すでに使われていることがある。
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
-- apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。
+- apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。
 - コミットのあと、PostgreSQL 自身の一時スキーマ `pg_temp_N` と `pg_toast_temp_N` が、空のままカタログに残る。これらは kortopi のオブジェクトではない。
 - テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。
 
@@ -387,6 +401,6 @@ kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of t
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:e2e5cb3f24237a7a91b923f0375d7cb725b383aff2124bda27b9934d6f5365fe -->
+<!-- i18n-source: apply.md sha256:c1eedba86a9e1077849460a3077ad09b0f3971daedb2b3dd42a380111bc144d4 -->

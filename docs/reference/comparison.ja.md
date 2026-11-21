@@ -39,6 +39,7 @@ kortopi は、ファイルのテキストをデータベースと比べること
 | `lc_monetary` | `C` | `money` の値は、C ロケールの形で読み、表示する。どの環境でも同じである。 |
 | `row_security` | `off` | 行単位セキュリティのポリシーが絞り込む問い合わせは、少ない行を返さずに失敗する（[kortopi plan](plan.ja.md#セッションに要るもの)）。 |
 
+apply も、これらの設定で読み、比べる。ただし、行は kortopi が固定する前にセッションが持っていた設定で書く。そのため、テーブルの既定値とトリガーは、アプリケーションの設定を見る（[kortopi apply](apply.ja.md#書き込みの設定)）。
 [kortopi export](export.ja.md) も、これらの設定で値を書く。そのため、計画はそのファイルを同じ値として読み戻す。
 SQL として出力した計画は、設定の違うセッションでも同じに読めるように各値を書く（[スクリプトの値](plan.ja.md#スクリプトの値)）。
 
@@ -120,6 +121,6 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 これらは、行を適用したときに見つかる（[kortopi apply](apply.ja.md)）。
 マージの前にこれらを見つける方法は、ADR-0016 にある。CI で、使い捨ての PostgreSQL に新しいスキーマを適用し、続けて行を適用する。
 
-これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md) と [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md) にある。
+これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:1a8c6efc727cffefa107019a6031b67850452df5a70d8ff475f5a728f3efd303 -->
+<!-- i18n-source: comparison.md sha256:a705e055eb08a75f6cb973a2d184508428ffcd22bdac5bf1c22a7f8b225ea852 -->

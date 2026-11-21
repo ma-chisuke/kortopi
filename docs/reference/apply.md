@@ -92,6 +92,20 @@ kortopi never updates a column of `on_insert`: a row that exists keeps what it h
 An update gives a column whose value does not differ its stored value back, so a value that compares equal keeps its stored text.
 kortopi neither reads nor moves sequences.
 
+### The settings of the writes
+
+An apply reads and compares in the settings that a plan pins ([How values are compared](comparison.md#the-settings-of-the-session)), so the declared values and the values of `on_insert` mean the same in every environment.
+Its inserts, updates, and deletions, and its commit, run with the settings that the session had before kortopi pinned them, but `client_encoding`: what the server, `ALTER DATABASE ... SET`, `ALTER ROLE ... SET`, and `PGOPTIONS` set.
+So the defaults, the triggers, the actions of the foreign keys, and the deferred checks that the writes fire see what the statements of your application see:
+
+- A default `now()` into a `timestamp` column, or `current_date`, gives the time and the date of the database's `TimeZone`, and a default that turns a value into text gives the form of its `DateStyle` and `IntervalStyle`.
+- A trigger that names a table without its schema finds it through the search path of the role.
+- A trigger that writes a table with row-level security is held to its policies as your application's statement is.
+
+Which rows to write, and which columns of a row to update, is decided just before each write, in the pinned settings, with the comparisons of the plan; the write then takes those rows and compares no value.
+Each setting is local to the transaction, so the connection has its own settings again after the apply, also through a connection pooler.
+A trigger that fails in the settings of your application fails the apply too, with the error of PostgreSQL, and nothing is changed.
+
 ### Foreign keys and cycles
 
 The order of the tables comes from the foreign keys in the catalogs, so a new foreign key changes it on the next run.
@@ -233,7 +247,7 @@ Apply the schema first, with the tool that changes your schema, and the rows sec
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.
-- Set a lock timeout, such as `PGOPTIONS='-c lock_timeout=10s'`, so that an apply does not wait without limit for a lock that another session holds ([kortopi plan](plan.md#connection-settings)). The settings of the connection are those of a plan.
+- Set a lock timeout, such as `PGOPTIONS='-c lock_timeout=10s'`, so that an apply does not wait without limit for a lock that another session holds ([kortopi plan](plan.md#connection-settings)). The settings of the connection are those of a plan, and the writes run with them ([The settings of the writes](#the-settings-of-the-writes)).
 - A failed apply changes nothing. Fix the declaration or the database, and run it again.
 
 ### One apply for each schema
@@ -256,7 +270,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - Only the first level of `ON DELETE CASCADE` is counted and shown.
 - kortopi does not move sequences. After an apply that inserts explicit values into a `serial` or identity column, the next value of its sequence may already be taken.
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
-- An apply keeps the declared rows loaded and the changed rows locked until it commits.
+- An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
 - Not tested: a standby, Aurora PostgreSQL, and a real connection pooler.
 
@@ -387,4 +401,4 @@ kortopi: delete from table f.room_types: foreign key "rooms_room_type_fkey" of t
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), and [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), and [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md).

@@ -118,6 +118,7 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 
 `PGOPTIONS` の設定は、kortopi が固定する設定を変えない（[値の比べ方](comparison.ja.md#セッションの設定)）。
 kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
+apply も固定した設定で読み、比べる。ただし書き込みは、`PGOPTIONS` の設定も含めたセッションの設定で行う（[kortopi apply](apply.ja.md#書き込みの設定)）。
 
 `ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが、計画や apply の読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
 kortopi にはこのための独自の設定がない。`PGOPTIONS` で `lock_timeout` を設定する。
@@ -494,6 +495,7 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 ```
 
 `--single-transaction` はファイルを1つのトランザクションで実行し、`ON_ERROR_STOP=1` は最初のエラーで止める。そのため、トランザクションはロールバックされる。
+スクリプトの文は、それを実行するセッションの設定で動く。スクリプトが固定する3つの設定だけは別である。そのため、文が発火させる既定値とトリガーは、そのセッションの設定を見る。適用の書き込みが自分のセッションの設定を見るのと同じである（[kortopi apply](apply.ja.md#書き込みの設定)）。
 版管理のマイグレーションの道具は、ふつう各ファイルをそれぞれのトランザクションで実行する。使う道具がそうするかを確かめる。
 `SET LOCAL` の文には、そのトランザクションが要る。トランザクションの外では、警告を出すだけである。
 `SET LOCAL client_encoding` が効くのは、クライアントがそのあとに別のメッセージとして送る文である。`psql` はそう送る。スクリプト全体を1つのメッセージで送るクライアントでは、スクリプトはすでにそのクライアントの符号化方式で読まれている。そのため、そうしたクライアントは `client_encoding` を UTF8 にして接続する必要がある。データベースのドライバーは、ふつうそうする。
@@ -603,4 +605,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:4ff21927ead5cef8c8357cbd17c008824cdc186b92be4b960ab874204ecfe1d2 -->
+<!-- i18n-source: plan.md sha256:95e6bda8cf7d97f2e0683f00251194571caa515b6870d3532a942d5db6c0d58f -->
