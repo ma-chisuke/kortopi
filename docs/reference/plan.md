@@ -169,7 +169,7 @@ Before it loads a table, kortopi checks in the catalogs, in this order:
 4. Row-level security does not apply to the role on the table: the table has none enabled, or the role has `BYPASSRLS`, or the role owns a table that does not force row-level security.
 
 PostgreSQL itself checks that the role may connect, with `CONNECT` on the database, and grants `CONNECT` and `TEMPORARY` to `PUBLIC` by default.
-To show where an apply would move the sequence of an identity or `serial` column that it writes values into, a plan reads the sequence, with `SELECT` on it and `USAGE` on its schema; without them, the line of the sequence says so, and the plan goes on ([Sequences](#sequences)).
+To show where an apply would move the sequence of an identity or `serial` column that it writes values into, a plan reads the sequence, with `SELECT` on it and `USAGE` on its schema; without them, the line of the sequence says so, and the plan goes on ([Sequences](#sequences)). The line also says when the role may not make the move: a walk with `nextval` needs `USAGE` or `UPDATE` on the sequence, and a `setval` needs `UPDATE`.
 A table that waits for a schema change needs none of these, except that a CSV file of such a table is counted in a temporary table, which needs the first.
 
 For a role that does nothing but plan:
@@ -393,13 +393,19 @@ billing.fees (upsert, key: id)
 - A sequence that the apply would leave where it is gets a line that says why, and what to do:
 
   ```text
-  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not update the sequence: grant the role UPDATE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
   sequence billing.tax_rates_id_seq of column id: not moved: the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence billing.tax_rates_id_seq
   sequence billing.codes of column code: next value 1, not moved: the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is
   sequence billing.ranks of column rank: next value 1, not moved: the sequence gives no value beyond 100, the largest value of the column, because its MAXVALUE is 100: raise its MAXVALUE
+  sequence billing.levels of column level: next value 1, not moved: the sequence gives no value beyond 32767, the largest value of the column, because 32767 is the largest value of its type smallint: give the column and its sequence the type bigint
   ```
 
-- The plan reads each sequence with `SELECT` on it and `USAGE` on its schema, and moves none of them. A sequence that the role may not read does not stop the plan, and the exit status does not change.
+- The plan reads each sequence with `SELECT` on it and `USAGE` on its schema, and moves none of them. It decides by the move that the position of the sequence calls for whether the role may make it: a walk with `nextval` needs `USAGE` or `UPDATE` on the sequence, and a move of more than 100,000 values, which sets it with `setval`, needs `UPDATE`. A sequence that the role may not read or move does not stop the plan, and the exit status does not change. The advice names the sequence and its schema as identifiers of SQL, quoted where PostgreSQL needs it.
+- The read of a sequence waits for a lock that another session holds on it 5 seconds at most, or for `--lock-timeout` when it is shorter, in a savepoint of its own that gives `lock_timeout` its value again afterwards. When PostgreSQL ends the read, by that bound or another error, the plan says so and goes on, and an apply tries the move all the same:
+
+  ```text
+  sequence billing.fees_id_seq of column id: could not be read: PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence: an apply reads it again, and moves it if it can
+  ```
 
 ### What the deletions also do
 
@@ -537,7 +543,8 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - When an apply would defer foreign keys of a cycle, a `SET CONSTRAINTS ... DEFERRED` follows ([kortopi apply](apply.md#foreign-keys-and-cycles)). When another table of the schema has a constraint of the same name that is not deferrable, the plan fails with the error of an apply ([kortopi apply](apply.md#a-constraint-of-the-same-name)).
 - The tables follow in the order of an apply, from referenced tables to referencing ones, each under a comment line with its counts. A table gets one `INSERT` for its rows to insert, each row on a line of its own, and one `UPDATE` for each row to update, which sets only the columns that differ.
 - The deletions come next, in the reverse order, as comments: one `DELETE` for each table, which lists the keys of its rows one on each line ([Deletions](#deletions)).
-- Last comes a statement for each sequence that an apply would move, and for each that the plan could not read, under comment lines that say what the statements do, and the line of the sequence of the plan ([Sequences](#sequences)). The statement is the one that an apply runs: when the script runs, it reads the largest value of the column, after the inserts and updates of the script, and the sequence, and moves the sequence beyond the column with `nextval`, or with `setval` for a move of more than 100,000 values. A sequence beyond the column already, as after the application took values when the script runs later than the plan, stays where it is. It needs `SELECT` and `UPDATE` on the sequence: without them, it fails, and with it the transaction of the script. A sequence that cycles, or whose limit comes first, gets its comment line and no statement.
+- Last come the sequences, under comment lines that say what their statements do ([Sequences](#sequences)). Each sequence gets its line of the plan as a comment, and under it the statement that an apply runs: when the script runs, it reads the largest value of the column, after the inserts and updates of the script, and the sequence, and moves the sequence beyond the column with `nextval`, or with `setval` for a move of more than 100,000 values. A sequence beyond the column already, as after the application took values when the script runs later than the plan, stays where it is.
+- The script does what an apply by the role of the plan would do, and never fails on a sequence. The statement runs only for a sequence that the plan shows moving, which the role of the plan may read and move. For a role that may take values from the sequence and may not set it, the statement has no `setval`: it leaves a sequence that needs more than 100,000 values where it is. Under every other line that calls for a move, or of a sequence that the plan could not read, the statement is a comment, for a role that may run it, and the line above it gives the reason, as the plan does. A sequence that cycles, or whose limit comes first, gets its comment line and no statement.
 - Every name is in double quotes, because a name that is plain on one version of PostgreSQL can be a keyword on another. An ordinary table has `ONLY`, as in an apply, and a partitioned table does not.
 - A table that waits for a schema change has no statement, and a column that waits for one is left out of the statements of its table.
 - The `INSERT` of a table with values of `on_insert` names their columns after the declared ones and gives every row the values, under two comment lines:

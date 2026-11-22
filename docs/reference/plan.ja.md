@@ -169,7 +169,7 @@ kortopi は、テーブルを読み込む前に、次の順でカタログを調
 4. そのテーブルで、行単位セキュリティがロールにかからない。テーブルで有効になっていないか、ロールが `BYPASSRLS` を持つか、ロールが行単位セキュリティを強制していないテーブルを所有していればよい。
 
 ロールが接続できること（データベースに対する `CONNECT`）は、PostgreSQL 自身が調べる。PostgreSQL は、既定で `CONNECT` と `TEMPORARY` を `PUBLIC` に与えている。
-値を書く識別列や `serial` の列のシーケンスを apply がどこまで進めるかを示すため、計画はシーケンスの `SELECT` とそのスキーマの `USAGE` でシーケンスを読む。それがなければ、シーケンスの行がそう伝え、計画は続く（[シーケンス](#シーケンス)）。
+値を書く識別列や `serial` の列のシーケンスを apply がどこまで進めるかを示すため、計画はシーケンスの `SELECT` とそのスキーマの `USAGE` でシーケンスを読む。それがなければ、シーケンスの行がそう伝え、計画は続く（[シーケンス](#シーケンス)）。ロールがその進め方を許されないときも、行がそう伝える。`nextval` で値を順に取るにはシーケンスの `USAGE` か `UPDATE` が要り、`setval` には `UPDATE` が要る。
 スキーマの変更を待つテーブルには、これらはどれも要らない。ただし、そうしたテーブルの CSV ファイルは一時テーブルで数えるので、1つ目が要る。
 
 計画を立てるだけのロールなら、次のように権限を与える。
@@ -393,13 +393,19 @@ billing.fees (upsert, key: id)
 - apply がそのままにするシーケンスには、その理由とすることを伝える行を出す。
 
   ```text
-  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not update the sequence: grant the role UPDATE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
   sequence billing.tax_rates_id_seq of column id: not moved: the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence billing.tax_rates_id_seq
   sequence billing.codes of column code: next value 1, not moved: the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is
   sequence billing.ranks of column rank: next value 1, not moved: the sequence gives no value beyond 100, the largest value of the column, because its MAXVALUE is 100: raise its MAXVALUE
+  sequence billing.levels of column level: next value 1, not moved: the sequence gives no value beyond 32767, the largest value of the column, because 32767 is the largest value of its type smallint: give the column and its sequence the type bigint
   ```
 
-- 計画は、各シーケンスをその `SELECT` とスキーマの `USAGE` で読み、どれも進めない。ロールの読めないシーケンスがあっても計画は止まらず、終了コードも変わらない。
+- 計画は、各シーケンスをその `SELECT` とスキーマの `USAGE` で読み、どれも進めない。ロールがその進め方を許されるかは、シーケンスの位置が求める進め方で判断する。`nextval` で値を順に取るにはシーケンスの `USAGE` か `UPDATE` が要る。100,000 個を超えて進めるときは `setval` で設定し、それには `UPDATE` が要る。ロールの読めないシーケンスや進められないシーケンスがあっても計画は止まらず、終了コードも変わらない。助言は、シーケンスとそのスキーマを SQL の識別子で挙げ、必要なところは引用符で囲む。
+- シーケンスを読むとき、ほかのセッションが持つロックを待つのは最大 5 秒であり、`--lock-timeout` がそれより短ければその時間である。読み取りは自分のセーブポイントの中で動き、そのあと `lock_timeout` はもとの値に戻る。その上限などで PostgreSQL が読み取りを終えたときは、計画はそう伝えて先へ進み、apply はそれでも進めようとする。
+
+  ```text
+  sequence billing.fees_id_seq of column id: could not be read: PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence: an apply reads it again, and moves it if it can
+  ```
 
 ### 削除がほかの行にすること
 
@@ -537,7 +543,8 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
 - 削除はそのあとに、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
-- 最後に、apply が進めるシーケンスと、計画が読めなかったシーケンスのそれぞれについて、文を1つ置く。その前には、文がすることを伝えるコメント行と、計画のシーケンスの行が並ぶ（[シーケンス](#シーケンス)）。文は apply が実行するものと同じである。スクリプトが動くとき、スクリプトの挿入と更新のあとで列の最大の値とシーケンスを読み、`nextval` で、100,000 個を超えて進めるときは `setval` で、シーケンスを列の先へ進める。すでに列の先にあるシーケンスは、そのままにする。計画より遅れてスクリプトが動き、その間にアプリケーションが値を取った場合がそうである。文にはシーケンスの `SELECT` と `UPDATE` が要る。それがなければ文は失敗し、スクリプトのトランザクションも失敗する。循環するシーケンスと上限が先に来るシーケンスには、コメントの行だけを置き、文は置かない。
+- 最後にシーケンスが来る。その前には、文がすることを伝えるコメント行が並ぶ（[シーケンス](#シーケンス)）。各シーケンスには計画の行をコメントで置き、その下に apply が実行するのと同じ文を置く。スクリプトが動くとき、文はスクリプトの挿入と更新のあとで列の最大の値とシーケンスを読み、`nextval` で、100,000 個を超えて進めるときは `setval` で、シーケンスを列の先へ進める。すでに列の先にあるシーケンスは、そのままにする。計画より遅れてスクリプトが動き、その間にアプリケーションが値を取った場合がそうである。
+- スクリプトは、計画したロールによる apply と同じことをし、シーケンスで失敗しない。文が実行されるのは、apply が進めると計画が示したシーケンス、つまり計画したロールが読めて進められるシーケンスだけである。値を取れるがシーケンスを設定できないロールの文は `setval` を持たず、100,000 個を超える値が要るシーケンスはそのままにする。進める必要を示すほかの行と、計画が読めなかったシーケンスの行の下では、文をコメントにする。それは実行を許されたロールのためであり、上の行が計画と同じく理由を伝える。循環するシーケンスと上限が先に来るシーケンスには、コメントの行だけを置き、文は置かない。
 - 名前はすべて二重引用符で囲む。PostgreSQL のある版でそのまま書ける名前が、別の版ではキーワードでありうるからである。ふつうのテーブルには適用と同じく `ONLY` を付け、パーティションテーブルには付けない。
 - スキーマの変更を待つテーブルには文を書かない。スキーマの変更を待つ列は、そのテーブルの文から除く。
 - `on_insert` の値を持つテーブルの `INSERT` は、宣言した列のあとにその列を挙げ、すべての行にその値を与える。文の前には、2行のコメントを置く。
@@ -696,4 +703,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:a2d47c05c412057f6d9a1b4b91b19774420c21d6fca018582778a1e7dd8eabcb -->
+<!-- i18n-source: plan.md sha256:b6f58a4cab93425118900b74f683856098c0cedf39979af1713234d1b3736fcc -->

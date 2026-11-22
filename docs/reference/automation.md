@@ -40,7 +40,7 @@ kortopi apply --dir data --lock-timeout 10s
   - what other sessions wrote after the snapshot of the apply, while it ran or after its commit: the lock of kortopi keeps two applies apart, not the application.
 
   The values of a table of mode `insert` beyond its key are compared by neither the apply nor the plan.
-- An apply that writes explicit values into an identity or `serial` column moves the sequence of the column beyond them, last before its commit, so that the application does not take one of them next, and says so after `Applied:` ([kortopi apply](apply.md#sequences)). It needs `SELECT` and `UPDATE` on the sequence; without them, it writes the rows, leaves the sequence, and says what to grant, with exit status 0.
+- An apply that writes explicit values into an identity or `serial` column moves the sequence of the column beyond them, last before its commit, so that the application does not take one of them next, and says so after `Applied:` ([kortopi apply](apply.md#sequences)). `SELECT` and `UPDATE` on the sequence allow every move; without the privileges that a move needs, it writes the rows, leaves the sequence, and says what to grant in a note on standard error, with exit status 0. So it does when another session holds a lock on the sequence for more than 5 seconds.
 - A declared table or column that the schema does not have stops the apply, which then changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). A plan with `--no-pending` before the apply stops on the same names, with the files that declare them, but adds no check that the apply lacks.
 
 ## In a pull request
@@ -94,6 +94,6 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 
 - The script is the difference from one database at one moment: run it against the database that the plan read, soon after the plan ([kortopi plan](plan.md#print-the-plan-as-sql)).
 - Its deletions are comments, which run only when someone removes the comment marks.
-- It ends with a statement for each sequence of a column that it writes explicit values into, which moves the sequence beyond them when the script runs, as an apply does, and needs `SELECT` and `UPDATE` on the sequence: give them to the role that runs the script, or remove the statement ([kortopi plan](plan.md#read-the-script)).
+- It ends with the sequences of the columns that it writes explicit values into: a statement that moves a sequence beyond them when the script runs, as an apply by the role of the plan does, and, for a sequence that this role may not read or move, the statement as a comment under the reason. Run the script as the role that planned it, and it never fails on a sequence ([kortopi plan](plan.md#read-the-script)).
 - `--exit-code` works with `--format sql` as with the text: status 2 when the plan is not empty.
 - The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, such values, or nothing.
