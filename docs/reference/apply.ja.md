@@ -171,8 +171,8 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 挿入と更新のあと、最初の削除の直前に、apply は外部キーをもう一度たどり、着いたものを計画とステップごとに比べる。
 apply の書いた行に、計画から見えない参照があれば、そこで止まる。列の既定値・`on_insert` の値・トリガー・計画のあとに作られたルールが与えた参照である（[挿入と更新のあとで削除がほかの行に着く](#挿入と更新のあとで削除がほかの行に着く)）。
 削除のあとコミットの前に、計画の数えた行がすべて消えたか変わったことを確かめる。
-さらに、トランザクションが削除し更新した行の数を確かめる。どのテーブルも計画が数えた行を失い、計画が着かなかったテーブルは行を失いも変えもしなかったはずである（[削除が消さなかった行と、削除が消したほかの行](#削除が消さなかった行と削除が消したほかの行)）。
-これで、apply の間に別のトランザクションが足した外部キーやパーティションと、ほかのテーブルの行を消すトリガーやルールが見つかる。
+さらに、トランザクションが削除し更新した行の数を確かめる。どのテーブルも計画が数えた行を失ったはずである。その行の更新は、計画が変わると数えた行の数を下回らず、削除の動作が更新しうる回数を上回らないはずである。計画が着かなかったテーブルは、行を失いも変えもしなかったはずである（[削除が消さなかった行と、削除が消したほかの行](#削除が消さなかった行と削除が消したほかの行)）。
+これで、apply の間に別のトランザクションが足した外部キーやパーティションと、ほかのテーブルの行を消すか、計画が許すより多くの行を更新するトリガーやルールが見つかる。
 計画は、apply が働かせる宣言したテーブルのルールで止まる（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。しかし、カスケードは、それが着くテーブルのルールも働かせる。宣言が持たないテーブルのルールも含む。
 
 ### 例
@@ -331,7 +331,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 削除がテーブルにすることを数えるには、ロールに、外部キーの列だけでなくテーブル全体に対する `SELECT` が要る。
 - 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。
 - 計画は、apply と同じく、一時テーブルと宣言したテーブルのロックを終わるまで持つ。テーブルの数がとても多い宣言では、サーバーの `max_locks_per_transaction` を上げる必要がありうる。
-- トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。削除が着くテーブルでトリガーが変える行も数えない。ただし、トリガーが削除の着かないテーブルの行を消すか変えれば、apply は止まる。コミットまで遅らせた制約トリガーは検査のあとに働くので、それが消すか変える行は確かめない。1つの行が、`SET NULL` のキーと `CASCADE` のキーの両方で削除する行を参照するときは、計画はそれを消える行として数え、実際に最後には消える。どちらの動作を先に実行するかは、PostgreSQL が決める順による。
+- トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。トリガーかルールがそれを超えて更新すれば、apply は止まる。範囲に幅を残すのは、カスケードも消す行と、2つのキーで変わる行である。そこで範囲の中に収まる更新は見えず、更新の書く値も見えない。コミットまで遅らせた制約トリガーは検査のあとに働くので、それが消すか変える行は確かめない。
 - kortopi はシーケンスを動かさない。`serial` や識別列に明示の値を挿入する apply のあと、そのシーケンスの次の値が、すでに使われていることがある。
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
@@ -497,6 +497,7 @@ kortopi: after the inserts and updates, the deletion of rows of z.parent reaches
 ```text
 kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
 kortopi: the deletions deleted 2 rows of table t.audit, and the plan counted 0: a foreign key or a partition that another transaction added while the apply ran, a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table t.audit
+kortopi: the deletions updated rows of table t.events 2 times, and the plan allows 1: a foreign key or a partition that another transaction added while the apply ran, a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table t.events
 ```
 
 別のトランザクションが起こした原因は、apply をもう一度実行すれば消える。トリガーやルールは、毎回同じことをする。
@@ -520,4 +521,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:2751b175419ece6c35dd2ddef4b19639e25cc82100853b65fe0a2f0ab294e656 -->
+<!-- i18n-source: apply.md sha256:a3ebf9ef9df3556d1cc37c97a132523bc1f22ed93ea55ba1fcb1cbfdf9512d2b -->

@@ -104,8 +104,11 @@ type Session struct {
 	deletesChecked bool
 	writtenBefore  map[uint32]written
 	// effect is the temporary table of the rows that the deletions reach,
-	// which Effects made last (ADR-0039).
-	effect string
+	// which Effects made last (ADR-0039), and effectUpdates the most updates
+	// that the deletions may make in each partitioned table at the top of a
+	// relation, as it counted them; CheckEffect compares the counts with them.
+	effect        string
+	effectUpdates map[uint32]int64
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.

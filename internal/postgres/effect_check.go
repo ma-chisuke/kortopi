@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
@@ -49,9 +50,12 @@ func (s *Session) writtenRows(ctx context.Context) (map[uint32]written, error) {
 //     foreign key is gone from the snapshot of the transaction, which its
 //     deletion, or the new version that its change wrote, takes away;
 //   - every table lost as many rows as the plan deletes from it and Effects
-//     counted, and a table that Effects did not reach lost and changed no
-//     row, by the counters of the rows of the transaction since the first
-//     deletion, by the partitioned table at the top of each relation.
+//     counted, and its rows were updated no fewer times than Effects counted
+//     rows that SET NULL and SET DEFAULT change and that stay, and no more
+//     times than one for each referencing row and foreign key that such an
+//     action can change, by the counters of the rows of the transaction
+//     since the first deletion, by the partitioned table at the top of each
+//     relation; a table that Effects did not reach lost and changed none.
 //
 // The first finds a row that another transaction deleted, or pointed at
 // another row, after the snapshot, or that a trigger BEFORE DELETE, a rule of
@@ -204,18 +208,27 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			oids = append(oids, oid)
 		}
 	}
+	for oid := range s.effectUpdates {
+		if _, ok := now[oid]; !ok {
+			if _, ok := expected[oid]; !ok {
+				oids = append(oids, oid)
+			}
+		}
+	}
 	slices.Sort(oids)
 	for _, oid := range oids {
 		want := expected[oid]
+		most := s.effectUpdates[oid]
 		got := written{deleted: now[oid].deleted - s.writtenBefore[oid].deleted, updated: now[oid].updated - s.writtenBefore[oid].updated}
-		reached := want.deleted > 0 || want.updated > 0
 		switch {
 		case got.deleted != want.deleted:
 			// Rows that a cascade would delete and a trigger or a rule kept,
 			// or rows that the deletions reached beyond the plan.
-		case !reached && got.updated > 0:
-			// Rows of a table that the plan does not reach, which a key
-			// SET NULL or SET DEFAULT, a trigger, or a rule changed.
+		case got.updated < want.updated || got.updated > most:
+			// Rows that the actions SET NULL and SET DEFAULT that the plan
+			// counted did not change, or changes beyond them: of a key or a
+			// partition that the catalogs of the snapshot do not show, a
+			// trigger, or a rule.
 		default:
 			continue
 		}
@@ -226,8 +239,16 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			return fmt.Errorf("read the name of a table that the deletions changed: %w", err)
 		}
 		what := fmt.Sprintf("deleted %d %s of table %s, and the plan counted %d", got.deleted, plural(got.deleted, "row", "rows"), name, want.deleted)
-		if got.deleted == want.deleted {
+		switch {
+		case got.deleted != want.deleted:
+		case most == 0:
 			what = fmt.Sprintf("changed %d %s of table %s, which the plan did not count", got.updated, plural(got.updated, "row", "rows"), name)
+		default:
+			allows := strconv.FormatInt(want.updated, 10)
+			if most != want.updated {
+				allows = fmt.Sprintf("from %d to %d", want.updated, most)
+			}
+			what = fmt.Sprintf("updated rows of table %s %d %s, and the plan allows %s", name, got.updated, plural(got.updated, "time", "times"), allows)
 		}
 		return fmt.Errorf("the deletions %s: a foreign key or a partition that another transaction added while the apply ran, "+
 			"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: "+

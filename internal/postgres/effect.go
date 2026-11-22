@@ -74,7 +74,7 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 		return out, nil
 	}
 	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
-		w := &walk{s: s, tx: tx, table: s.nextTemp()}
+		w := &walk{s: s, tx: tx, table: s.nextTemp(), updates: make(map[uint32]int64)}
 		if err := w.partitionTrees(ctx); err != nil {
 			return err
 		}
@@ -106,7 +106,7 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 			})
 		}
 		out.Conflicts = w.conflicts
-		s.effect = w.table
+		s.effect, s.effectUpdates = w.table, w.updates
 		return nil
 	})
 	if err != nil {
@@ -123,6 +123,11 @@ type walk struct {
 	// table is the temporary table of the rows that the walk reached.
 	table     string
 	conflicts []plan.Conflict
+	// updates holds, for the partitioned table at the top of each relation,
+	// the most updates that SET NULL and SET DEFAULT can make: one for each
+	// referencing row and foreign key, also of a row that a deletion takes
+	// away too (ADR-0039).
+	updates map[uint32]int64
 }
 
 // level is one level of the walk from the rows to delete of a table: the
@@ -142,6 +147,9 @@ type edge struct {
 	fromOID uint32
 	toOID   uint32
 	toTable declaration.TableName
+	// top is the partitioned table at the top of the referencing relation,
+	// or the relation itself.
+	top uint32
 	// inTree is true when the referenced relation is the table of level 0
 	// or one of its partitions, rather than a partitioned table above it.
 	inTree bool
@@ -422,6 +430,9 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 				}
 			}
 			n, err = w.insert(ctx, r, root, i, lv, kindChanged, "NOT ("+strings.Join(conflicting, " OR ")+")")
+			if err == nil {
+				err = w.countUpdates(ctx, r, root, i, lv)
+			}
 			if err == nil && n > 0 {
 				step.OnUpdate, step.OnUpdateTable, err = w.onUpdate(ctx, e)
 				if step.OnUpdate != "" {
@@ -446,6 +457,21 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 			effect.Steps = append(effect.Steps, step)
 		}
 	}
+	return nil
+}
+
+// countUpdates adds to the most updates of the table at the top of the
+// relation of r one for each row of r that references a row of level lv:
+// the action of the foreign key fires once for each row that a deletion
+// takes away, and updates each row that references it, also a row that a
+// cascade or the plan deletes too, when PostgreSQL runs the action first,
+// and a row that another action changed already.
+func (w *walk) countUpdates(ctx context.Context, r refs, root *loadedTable, i, lv int) error {
+	var n int64
+	if err := w.tx.QueryRow(ctx, "SELECT pg_catalog.count(*) FROM "+r.from()+" WHERE "+w.referencing(r, root, i, lv)).Scan(&n); err != nil {
+		return fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
+	}
+	w.updates[r.e.top] += n
 	return nil
 }
 
@@ -843,6 +869,7 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 				WHERE NOT pg_catalog.has_column_privilege(co.confrelid, k.attnum, 'SELECT')),
 			pg_catalog.has_schema_privilege(tn.oid, 'USAGE') AND pg_catalog.has_table_privilege(t.oid, 'SELECT')
 				AND NOT pg_catalog.row_security_active(t.oid),
+			COALESCE(pg_catalog.pg_partition_root(co.conrelid)::pg_catalog.oid, co.conrelid),
 			EXISTS (WITH RECURSIVE made(oid) AS (
 					SELECT co.oid
 					UNION ALL SELECT c2.oid FROM pg_catalog.pg_constraint AS c2 JOIN made ON c2.conparentid = made.oid
@@ -869,7 +896,7 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 		if err := rows.Scan(&e.name, &e.fromOID, &e.table.Schema, &e.table.Name, &partitioned,
 			&e.toOID, &e.toTable.Schema, &e.toTable.Name, &toPartitioned, &action, &e.self, &e.inTree,
 			&e.columns, &e.referenced, &schemas, &ops, &collSchemas, &collNames, &e.set,
-			&e.schemaUsage, &e.tableSelect, &e.rowSecurity, &e.refColumns, &e.refTable, &e.triggersDisabled); err != nil {
+			&e.schemaUsage, &e.tableSelect, &e.rowSecurity, &e.refColumns, &e.refTable, &e.top, &e.triggersDisabled); err != nil {
 			return nil, fmt.Errorf("read the foreign keys that reference the rows to delete: %w", err)
 		}
 		e.readable = e.schemaUsage && e.tableSelect && !e.rowSecurity
