@@ -356,9 +356,11 @@ END $$;
 // catalogs ends the session of the apply first, with a wait of its own,
 // while the cancel request of the interrupt has not ended the read of the
 // second session yet: the apply rolls back and its process goes. The second
-// session closes after its read has ended, with a wait of its own, and, as
-// the server did not end it, is named in a line of its own, as the read-only
-// session of the check, with its process ID (ADR-0043, ADR-0048).
+// session closes after its read has ended, and, as the server did not end
+// it, is named in a line of its own, as the read-only session of the check,
+// with its process ID (ADR-0043, ADR-0048). The wait of the second session is
+// a minute long, so that a slow machine sees the order, and the second
+// interrupt ends it.
 func TestInterruptDuringTheCheck(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -366,8 +368,9 @@ func TestInterruptDuringTheCheck(t *testing.T) {
 			db.Exec(t, schemaCheckSchema+stubbornCheck)
 			ctx, interrupt := context.WithCancel(t.Context())
 			defer interrupt()
+			giveUp := make(chan struct{})
 			s, err := ConnectConfig(ctx, db.Config, Options{
-				Dir: writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"}), Apply: true, cancelWait: 3 * time.Second,
+				Dir: writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"}), Apply: true, cancelWait: time.Minute, GiveUp: giveUp,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -415,12 +418,14 @@ func TestInterruptDuringTheCheck(t *testing.T) {
 				t.Fatalf("Close returned without waiting for the read of the second session: %v", err)
 			default:
 			}
+			// The second interrupt ends the wait for the second session.
+			close(giveUp)
 			select {
 			case err = <-closed:
 			case <-time.After(time.Minute):
 				t.Fatal("Close did not return")
 			}
-			want := fmt.Sprintf("the server did not confirm within 3s that the read-only session of the check after the deletions ended: "+
+			want := fmt.Sprintf("kortopi stopped waiting for the server to end the read-only session of the check after the deletions: "+
 				"its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone: "+
 				`find the session in pg_stat_activity, where application_name is "kortopi" and pid is %d, `+
 				"and end it with pg_cancel_backend(%d), or with pg_terminate_backend(%d) if it does not end", checkPID, checkPID, checkPID)
@@ -500,6 +505,114 @@ func TestInterruptAsTheCheckClosesItsSession(t *testing.T) {
 			}
 			waitGone(t, db, applyPID)
 			waitGone(t, db, checkPID)
+			if got := db.Query(t, schemaCheckRows); !slices.EqualFunc(got, before, slices.Equal) {
+				t.Errorf("rows after the interrupt: %v, want %v", got, before)
+			}
+		})
+	}
+}
+
+// The second session of the check names the server and the database that it
+// reached, and they must be those of the apply: a second session that
+// reaches another database of the same server, as a proxy or a connection
+// pooler can send it, stops the apply before its commit, and nothing
+// changes (ADR-0048).
+func TestCheckThatReachesAnotherDatabase(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, schemaCheckSchema)
+			s := db.applySession(t, db.Config, writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"}))
+			s.adjustNewest = func(cfg *pgx.ConnConfig, pinned string) string {
+				cfg.Database = "postgres"
+				return pinned
+			}
+			req := request(t, s, csvTable("m", "plan", "id", "code"), []string{"code"}, config.ModeSync)
+			if _, err := s.Diff(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Effects(t.Context(), []declaration.TableName{req.Table.Name}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Delete(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			before := db.Query(t, schemaCheckRows)
+			if err := s.CheckEffect(t.Context()); !errors.Is(err, errOtherServer) {
+				t.Errorf("check: %v\nwant %v", err, errOtherServer)
+			}
+			if err := s.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := db.Query(t, schemaCheckRows); !slices.EqualFunc(got, before, slices.Equal) {
+				t.Errorf("rows after the failed apply: %v, want %v", got, before)
+			}
+		})
+	}
+}
+
+// An interrupt while the second session of the check connects, here to a
+// server that never answers, ends the connection, and the session of the
+// apply then rolls back and goes; no session of the check is left to name,
+// and nothing changes (ADR-0043, ADR-0048).
+func TestInterruptAsTheCheckConnects(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, schemaCheckSchema)
+			ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			accepted := make(chan net.Conn, 1)
+			go func() {
+				if c, err := ln.Accept(); err == nil {
+					accepted <- c
+				}
+			}()
+			ctx, interrupt := context.WithCancel(t.Context())
+			defer interrupt()
+			s, err := ConnectConfig(ctx, db.Config, Options{Dir: writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"}), Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close(context.Background()) })
+			s.adjustNewest = func(*pgx.ConnConfig, string) string { return ln.Addr().String() }
+			req := request(t, s, csvTable("m", "plan", "id", "code"), []string{"code"}, config.ModeSync)
+			if _, err := s.Diff(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Effects(ctx, []declaration.TableName{req.Table.Name}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Delete(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			before := db.Query(t, schemaCheckRows)
+			applyPID := s.pid
+			checked := make(chan error, 1)
+			go func() { checked <- s.CheckEffect(ctx) }()
+			select {
+			case c := <-accepted:
+				t.Cleanup(func() { _ = c.Close() })
+			case <-time.After(time.Minute):
+				t.Fatal("the second session did not connect")
+			}
+			interrupt()
+			select {
+			case err := <-checked:
+				want := "the check after the deletions could not open its second connection: context canceled"
+				if err == nil || err.Error() != want {
+					t.Errorf("check: %v\nwant %s", err, want)
+				}
+			case <-time.After(time.Minute):
+				t.Fatal("the check did not stop")
+			}
+			if err := s.Close(context.Background()); err != nil {
+				t.Errorf("Close = %v, want nil", err)
+			}
+			checkEnded(t, db, applyPID)
 			if got := db.Query(t, schemaCheckRows); !slices.EqualFunc(got, before, slices.Equal) {
 				t.Errorf("rows after the interrupt: %v, want %v", got, before)
 			}

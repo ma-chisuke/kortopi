@@ -267,6 +267,9 @@ func (s *Session) openNewest(ctx context.Context) (*Session, error) {
 	lock, connect := s.newestBounds()
 	cfg, pinned := newestConfig(s.config, s.conn.PgConn().Conn())
 	cfg.ConnectTimeout = connect
+	if s.adjustNewest != nil {
+		pinned = s.adjustNewest(cfg, pinned)
+	}
 	return ConnectConfig(ctx, cfg, Options{LockTimeout: lock, GiveUp: s.giveUp, cancelWait: s.guard.wait, newest: true, pinned: pinned})
 }
 
