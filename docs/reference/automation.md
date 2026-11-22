@@ -33,6 +33,7 @@ kortopi apply --dir data
 - Set a lock timeout. Without one, an apply waits without limit while another session holds a lock on a declared table, and the deployment waits with it. With one, the apply stops with an error that says so, and changes nothing ([kortopi plan](plan.md#connection-settings)).
 - Exit status 1 means that the apply changed nothing, unless its error says that the outcome of the commit is not known. The deployment can run the apply again after a fix.
 - Decide about deletions for each pipeline. Without `--allow-delete`, an apply leaves the rows that tables of mode `sync` should lose, says so in a line `Not deleted: ...`, and exits with 0. With `--allow-delete`, it deletes them, within `--max-delete`, 100 rows by default, which counts the rows to delete and every row that foreign keys delete or change with them, at every depth ([kortopi apply](apply.md#the-guards-on-deletions)). Set the limit for what the deletions of the pipeline do to the tables that reference them, not only for the rows of the declaration. To fail a deployment that leaves rows behind, run `kortopi plan --exit-code` after the apply.
+- An apply compares every declared table again before its commit, and fails without changing anything when the database holds other values or rows than the declaration after the writes, as a trigger that rewrites a declared value makes it hold ([kortopi apply](apply.md#the-check-before-the-commit)). So a plan after an apply that committed shows only the deletions that it left out, and what a constraint trigger deferred to the commit changed, which the apply does not compare. A table whose trigger rewrites a declared value fails every such apply until the declaration holds the value as the table stores it.
 - A declared table or column that the schema does not have stops the apply, which then changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). A plan with `--no-pending` before the apply stops on the same names, with the files that declare them, but adds no check that the apply lacks.
 
 ## In a pull request
@@ -50,8 +51,8 @@ kortopi plan --dir data --exit-code
 ```
 
 - The first plan prints what the declaration holds, for the log of the check. The schema is applied, so nothing should wait for a schema change: with `--no-pending`, a declared table or column that the schema does not have, such as a misspelled name, fails the check here, with an error that names its file ([kortopi plan](plan.md#where-the-schema-is-applied)).
-- The apply writes the rows, as a deployment would. It fails on what a plan does not check: a value that a constraint refuses, such as a `CHECK` constraint or a foreign key to a row that the declaration lacks.
-- The last plan must exit with 0: anything else means that the apply did not bring the database to the declaration.
+- The apply writes the rows, as a deployment would. It fails on what a plan does not check: a value that a constraint refuses, such as a `CHECK` constraint or a foreign key to a row that the declaration lacks, and a value or a row that a trigger makes other than the declaration says, which it finds when it compares the tables again before its commit.
+- The last plan must exit with 0: anything else means that the apply did not bring the database to the declaration, as a constraint trigger deferred to the commit, which fires after that comparison, can make it.
 - `--allow-delete` costs nothing here, since the scratch database holds nothing worth keeping.
 
 A plan against a real environment, to show a reviewer what the merge will change, belongs in a run that you trust, such as one that a maintainer starts, as a role that has [what the session of a plan needs](plan.md#what-the-session-needs) and no privilege to change the declared tables, such as `UPDATE`.
@@ -87,4 +88,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - The script is the difference from one database at one moment: run it against the database that the plan read, soon after the plan ([kortopi plan](plan.md#print-the-plan-as-sql)).
 - Its deletions are comments, which run only when someone removes the comment marks.
 - `--exit-code` works with `--format sql` as with the text: status 2 when the plan is not empty.
-- After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, or nothing.
+- The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, such values, or nothing.

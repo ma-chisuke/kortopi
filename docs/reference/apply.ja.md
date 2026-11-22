@@ -90,10 +90,12 @@ GRANT SELECT ON billing.subscriptions TO deployer;
 6. 削除の安全策と、外部キーの循環を検査する。`--allow-delete` 付きで削除する行のあるときは、セッションの `track_counts` が on であることも検査する。
 7. 参照されるテーブルから参照するテーブルへの順に、各テーブルの足りない行を挿入し、それから違う行を更新する。
 8. `--allow-delete` があれば、挿入と更新のあとで削除の外部キーをもう一度たどり、計画が数えたのと違う行に着けば止まる。それから、宣言にない行を削除する。順番は、参照するテーブルから参照されるテーブルへであり、削除する行に別のテーブルからのカスケードが着くテーブルは、そのテーブルより先にする。削除が計画の数えたとおりにしたことを確かめる。
-9. コミットし、書いたものを出力する。
+9. 宣言したすべてのテーブルを、計画と同じ比べ方でデータベースともう一度比べ、残った違いが、自分が省いた削除のほかにあれば止まる（[コミット前の比較](#コミット前の比較)）。
+10. コミットし、書いたものを出力する。
 
-どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガー、計画のあとに作られたルール、外部キーのカスケードのどれかが文のすることを変えたので、apply は止まる。
-apply の文を書き換えるルールは、それより前に計画を止める。行数の確認では、すべてのルールを捉えられないからである（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
+どの削除も、計画が示す数だけ行を削除しなければならない。そうでなければ、トリガー、計画のあとに作られたルール、外部キーのカスケードのどれかが文のすることを変えたので、apply は止まる。
+挿入と更新は、計画が示すより少ない行や多い行を書くことがある。apply のほかの書き込みが、その仕事をすでに済ませていたり、元に戻していたりするときである。どちらを受け入れるかは、コミット前の比較が決める。
+apply の文を書き換えるルールは、それより前に計画を止める（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
 計画と書き込みは1つのスナップショットから来るので、出力した計画が、apply の書き込むものである。
 その間に別のトランザクションが同じ行を変えれば、apply は失敗し、もう一度実行するよう求める。
 
@@ -101,6 +103,27 @@ apply の文を書き換えるルールは、それより前に計画を止め�
 kortopi は `on_insert` の列を更新しない。すでにある行は、持っている値を保つ。
 更新は、値が違わない列に保存されている値を戻すので、等しいとみなす値は保存されているテキストを保つ。
 kortopi はシーケンスを読みも動かしもしない。
+
+### コミット前の比較
+
+apply は、書き込みのあと、削除の確認のあとで、宣言したすべてのテーブルを自分のトランザクションの中でデータベースともう一度比べる。比べ方は計画と同じであり、キーも、各型の等価性も、設定も同じである（[値の比べ方](comparison.ja.md)）。
+変更のないテーブルも比べる。あるテーブルのトリガーが、別のテーブルの行を書くことがあるからである。
+読むのは計画と同じく宣言した列であり、何も書かない。
+apply がコミットするのは、残ったものが出力の報告するものと一致するときだけである。
+
+- どのテーブルにも、挿入する行と更新する行が残っていない。
+- `--allow-delete` があれば、削除する行が残っていない。
+- `--allow-delete` がなければ、計画が示し `Not deleted:` の行が数える削除する行だけが残り、それ以外はない。モード `sync` のテーブルに書き込みが加えた行は違いであり、それらの削除する行のうち書き込みが消した行も違いである。
+
+モード `insert` のテーブルは、計画と同じくキーだけで比べる。そのため、宣言したキーがすべてそろっていなければならず、ほかの値は確かめない。
+
+したがって、データベースが書き込みに対して宣言と違うことをすると、apply はコミットの前に止まる。たとえば、書き込みが与える値を変えるトリガー、行を飛ばすトリガー、宣言した別のテーブルの行を書くトリガー、外部キーのカスケードやほかの動作、計画のあとに作られたルールである（[書き込みのあとに残った違い](#書き込みのあとに残った違い)）。
+テーブルが宣言のとおりなら、apply のほかの書き込みがある書き込みの仕事を済ませていても、コミットする。外部キー `ON UPDATE CASCADE` でつながる宣言した2つのテーブルは一緒に変わり、参照するテーブルの更新は、自分の行がすでに宣言のとおりであるのを見つける。
+
+宣言した値を書き換えるトリガーを持つテーブル、たとえばどのラベルも小文字にして書くテーブルでは、そうした値を書く apply がどれも失敗する。トリガーを通したあとに保存される値を宣言するか、列をファイルから外す。新しい行にその列の値が要るなら、`kortopi.toml` の `on_insert` で値を与える（[宣言のファイル](declaration.ja.md#kortopitoml)）。`on_insert` は新しい行だけに列を設定し、比べることはない。
+
+何も書かない apply は、もう一度比べることもしない。何も違わないときと、省く削除だけが違うときである。
+比べている途中の Ctrl-C は、apply をロールバックする。
 
 ### 書き込みの設定
 
@@ -126,7 +149,8 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 4. 宣言した各テーブルについて、計画と同じく一時テーブルを作り、宣言した行を読み込み、テーブルと比べる。その一時テーブルはコミットまで残す。削除する行があるときは、削除の外部キーを問い合わせでたどり、着いた行をもう1つの一時テーブルに控える（[削除の安全策](#削除の安全策)）。
 5. 外部キーの循環が必要とすれば、`SET CONSTRAINTS` でその検査を遅らせる。
 6. 書き込みごとに、1回の往復で次を行う。固定した設定のもとで1つの文が行を選び、もう1つの一時テーブルに入れる。`on_insert` の値を持つ挿入では、列のとおりに型を付けた別の一時テーブルにその値を読む。`set_config` でセッションの設定にする。挿入・更新・削除が、選んだ行を取る。そして `set_config` で設定を再び固定する。最初の削除の前に、固定した設定のもとで、削除の外部キーをもう一度たどる。削除のあとで、たどった行と、トランザクションが削除し更新した行の数を `pg_stat_xact_user_tables` から読む。
-7. セッションの設定と `COMMIT` を、1つのメッセージで送る。
+7. 固定した設定のもとで、宣言した各テーブルの比較の問い合わせをもう一度実行する。
+8. セッションの設定と `COMMIT` を、1つのメッセージで送る。
 
 どの一時テーブルもコミットで消え、どの設定もトランザクションとともに終わる。
 
@@ -173,6 +197,7 @@ apply の書いた行に、計画から見えない参照があれば、そこ�
 削除のあとコミットの前に、計画の数えた行がすべて消えたか変わったことを確かめる。
 さらに、トランザクションが削除し更新した行の数を確かめる。どのテーブルも計画が数えた行を失ったはずである。その行の更新は、計画が変わると数えた行の数を下回らず、削除の動作が更新しうる回数を上回らないはずである。計画が着かなかったテーブルは、行を失いも変えもしなかったはずである（[削除が消さなかった行と、削除が消したほかの行](#削除が消さなかった行と削除が消したほかの行)）。
 これで、ほかのテーブルの行を消すか、計画が許すより多くの行を更新するトリガーやルールが見つかる。apply の間に別のトランザクションが足した外部キーやパーティションも見つかる。ただし、その更新が範囲の残す幅に収まるときは除く（[分かっている制限](#分かっている制限)）。スキーマの変更は kortopi の前にし、apply の間にはしない（[デプロイでの使い方](#デプロイでの使い方)）。
+そのあとコミット前の比較が宣言したテーブルを比べ、削除のトリガーがモード `sync` の宣言したテーブルに加えた行や、そのトリガーが変えた宣言した値を見つける（[コミット前の比較](#コミット前の比較)）。
 計画は、apply が働かせる宣言したテーブルのルールで止まる（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。しかし、カスケードは、それが着くテーブルのルールも働かせる。宣言が持たないテーブルのルールも含む。
 
 ### 例
@@ -257,6 +282,19 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   Through foreign keys, the deletion also changed 30 rows.
   ```
 
+- `Applied:` は、kortopi の文が書いた行を、PostgreSQL が報告したとおりに数える。挿入や更新が計画の示すより少ない行を書いたときは、それを伝える行が続く。apply のほかの書き込み、たとえば外部キー `ON UPDATE CASCADE` のカスケードやトリガーが、その行をすでに宣言した値にしていたときであり、テーブルが宣言のとおりであることはコミット前の比較が確かめている。
+
+  ```text
+  Applied: 0 inserted, 1 updated, 0 deleted.
+  Fewer than planned: 1 row to update of sales.price held its declared values already, after the other writes of the apply.
+  ```
+
+  挿入では、行がすでにあったとこの行が伝える。書き込みが計画の示すより多くの行を書くこともある。ほかの書き込みが、計画のあとで宣言した行を変えていたときである。そのときは、次の行がそれを伝える。
+
+  ```text
+  More than planned: kortopi also updated 1 row of t.b, which the other writes of the apply had taken away from its declared values.
+  ```
+
 - 削除を見送ったときは、`Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` が続く。見送った削除が外部キーを通じて行を消すか変えるはずなら、その行はフラグの前でそれを伝える。`Through foreign keys, their deletion would also delete 2 rows and change 1 row.` のようになる。
 - 違いが削除だけなら、apply は何も書き込まずコミットもしない。そのときは `Not deleted` の行だけを出し、そのことを伝える。
 
@@ -290,7 +328,7 @@ kortopi: nothing was changed
 | 0 | apply が変更をコミットしたか、変えるものがなかった。`--allow-delete` がなくて見送った削除は、終了コードを変えない。 |
 | 1 | apply が失敗し、何も変わっていない。ただし、コミットの結果が不明だとエラーが伝える場合は除く。 |
 
-apply が 2 で終わることはない。apply のあとでデータベースが宣言と一致するかを確かめるには、`kortopi plan --exit-code` を実行する（[kortopi plan](plan.ja.md#終了コードとずれ)）。
+apply が 2 で終わることはない。コミットした apply は、省いた削除を除いて、宣言したテーブルが宣言のとおりであることをコミットの前に確かめている（[コミット前の比較](#コミット前の比較)）。省いた削除も含めて何も残っていないことを確かめ、コミットまで遅らせた制約トリガーが変えたものを見るには、apply のあとで `kortopi plan --exit-code` を実行する（[kortopi plan](plan.ja.md#終了コードとずれ)）。
 
 ## 2つの apply を同時に動かす
 
@@ -331,7 +369,10 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 削除がテーブルにすることを数えるには、ロールに、外部キーの列だけでなくテーブル全体に対する `SELECT` が要る。
 - 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。
 - 計画は、apply と同じく、一時テーブルと宣言したテーブルのロックを終わるまで持つ。テーブルの数がとても多い宣言では、サーバーの `max_locks_per_transaction` を上げる必要がありうる。
-- トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。範囲の中の更新は見えない。トリガー・ルール、または apply の間に別のトランザクションが足す `SET NULL` か `SET DEFAULT` の外部キーかパーティションのどれがしても同じである。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査のあとに働くので、それが消すか変える行は確かめない。
+- トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。範囲の中の更新は見えない。トリガー・ルール、または apply の間に別のトランザクションが足す `SET NULL` か `SET DEFAULT` の外部キーかパーティションのどれがしても同じである。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査のあとに働くので、それが消すか変える行は確かめない。宣言したテーブルについては、件数では見えないものをコミット前の比較が見る。トリガーが挿入する行と、更新の書く値である。
+- コミット前の比較が比べるのは宣言が持つものだけである。宣言が挙げない列、`on_insert` の値、宣言しないテーブル、モード `insert` のテーブルのキー以外の値、宣言が持たない保存された行は比べない。ただし、モード `sync` のテーブルの削除する行は、キーで比べる。コミットまで遅らせた制約トリガーは比較のあとに働くので、それが変えるものも比べない。
+- コミット前の比較は、宣言したすべてのテーブルを、変更のないテーブルも含めてもう一度読む。宣言した行を読み込んで確かめる手間がない分、計画の比較より費用は小さい。[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) に測った値がある。
+- apply のほかの書き込みが仕事を済ませていても、削除は計画が示す数だけ行を削除しなければならない。`--allow-delete` があるとき、計画が削除する行を挿入や更新のトリガーが消すと、結果が宣言のとおりであっても apply は止まる。その行は、先に別の apply で削除する。
 - kortopi はシーケンスを動かさない。`serial` や識別列に明示の値を挿入する apply のあと、そのシーケンスの次の値が、すでに使われていることがある。
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
@@ -471,10 +512,37 @@ kortopi: foreign key "link" of table app.x cannot be deferred: table app.other h
 kortopi: update table app.t: could not serialize access due to concurrent update: another transaction changed the rows while the apply ran, so nothing was written: run the apply again
 ```
 
-### 文を変えるトリガーやルール
+### 書き込みのあとに残った違い
 
 ```text
-kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops
+kortopi: data/o/label.csv: after the writes of the apply, table o.label still differs from the declaration in 1 row to update: ~ code=greeting  label: "hello world" -> "Hello World": declare each value as the table stores it after the writes, or leave its column out of data/o/label.csv, and give the column a value in on_insert of [tables."o.label"] in data/kortopi.toml if new rows need one
+kortopi: the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, the cascade or another action of a foreign key, or a rule created after the plan can do that
+kortopi: nothing was changed
+```
+
+`o.label` のトリガーがどのラベルも小文字にして書くので、宣言が `Hello World` とするところに、テーブルは `hello world` を持つ。コミット前の比較がこれを見つけて apply を止める（[コミット前の比較](#コミット前の比較)）。
+テーブルが保存するとおりの値 `hello world` を宣言するか、列をファイルから外す。
+テーブルごとの行は、計画と同じ形で行を示す。変わった列は保存された値 -> 宣言した値と書き、行は5行までと残りの数を示す。
+計画と違う数の行を書いた書き込みがあれば、最後の行がそれを挙げ、どのテーブルで起きたかの手がかりになる。
+
+```text
+kortopi: data/app/t.csv: after the writes of the apply, table app.t still differs from the declaration in 1 row to insert: + id=2  v=b: declare only rows that the table keeps after the writes, or change what takes them away
+kortopi: the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, the cascade or another action of a foreign key, or a rule created after the plan can do that, and the writes that wrote another number of rows than the plan shows are the place to look first: the insert into table app.t wrote 2 rows, and the plan has 3
+kortopi: nothing was changed
+```
+
+`NULL` を返す `BEFORE INSERT` のトリガーが、行 `id=2` をテーブルに入れなかった。
+書き込みがモード `sync` のテーブルに加えた行は、削除する行として残る。そのときは、その行を宣言するか、行を削除しないモード `upsert` をテーブルに与えるよう助言する。
+`--allow-delete` がなく、書き込みが削除する行を消したときは、それを伝える行が別にある。
+
+```text
+kortopi: data/app/t.csv: after the writes of the apply, table app.t no longer holds 1 row that the plan shows to delete, which an apply without --allow-delete leaves in place: - id=9: delete it in an apply of its own with --allow-delete first, or change what deletes it
+```
+
+### 計画と違う数の行を消した削除
+
+```text
+kortopi: the deletion from table app.t deleted 2 rows, but the plan has 3 rows to delete: a trigger, a rule created after the plan, or the cascade of a foreign key changed what the statement did, and an apply deletes exactly the rows that its plan shows, so it stops
 ```
 
 ### 挿入と更新のあとで削除がほかの行に着く
@@ -519,6 +587,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:e9694ad88a996df3e579b1226f206bba5bed688a37dc726dffe212c361e00912 -->
+<!-- i18n-source: apply.md sha256:0f13281bb343a9c4bae29f46398be63af3184504b0033c60593271b97414c4d1 -->
