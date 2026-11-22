@@ -274,13 +274,20 @@ func (f *fakeDB) Sequences(_ context.Context, table declaration.TableName, colum
 }
 
 // MoveSequences records the call, with the error of its context, and
-// returns what moved holds for the table, or the sequences as moved. With a
-// failure, it returns the first sequence as moved, as a database whose
-// second move failed.
+// returns what moved holds for the table, or the sequences, each that the
+// apply tries to move moved to its goal (movedTo). With a failure, it
+// returns the first sequence, as a database whose second move failed.
 func (f *fakeDB) MoveSequences(ctx context.Context, table declaration.TableName, sequences []plan.Sequence) ([]plan.Sequence, error) {
 	f.moveErr = ctx.Err()
+	done := make([]plan.Sequence, len(sequences))
+	for i, s := range sequences {
+		if s.Tries() {
+			s = movedTo(s, s.Goal)
+		}
+		done[i] = s
+	}
 	if err := f.record("MoveSequences " + table.String()); err != nil {
-		return sequences[:1], err
+		return done[:1], err
 	}
 	// The statement of a move is a query, which an interrupt cancels.
 	if f.moveErr != nil {
@@ -289,7 +296,7 @@ func (f *fakeDB) MoveSequences(ctx context.Context, table declaration.TableName,
 	if m, ok := f.moved[table]; ok {
 		return m, nil
 	}
-	return sequences, nil
+	return done, nil
 }
 
 // csv returns the declaration of a table in a CSV file with the columns id

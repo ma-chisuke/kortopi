@@ -293,6 +293,68 @@ func TestRunApply(t *testing.T) {
 			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
 		},
 		{
+			// A move that an interrupt stopped before the apply could read
+			// the sequence again may have moved it forward, and the last
+			// line says so.
+			name:  "a move that may have moved the sequence",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				moved: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3", Unknown: true},
+				}},
+				fail: map[string]error{"MoveSequences app.plans": errDB},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: connection reset\n" +
+				"kortopi: nothing was changed but the sequences that the apply had moved before its commit, which a rollback does not move back, " +
+				"so they only skip values: app.plans_id_seq, which may have moved forward\n",
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans"),
+		},
+		{
+			// A sequence that the role may not move stays, and a note on
+			// standard error says what to do after the commit (ADR-0045).
+			name:  "a sequence that the role may not move",
+			files: twoTables,
+			session: &fakeSession{diffs: newPlan, sequences: map[declaration.TableName][]plan.Sequence{plans: {{
+				Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3",
+				Stays: "the role may not take values from the sequence", Advice: "grant the role USAGE on sequence app.plans_id_seq",
+			}}}},
+			wantCode: exitOK,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n"+
+				"  sequence app.plans_id_seq of column id: next value 2, not moved to 3: the role may not take values from the sequence: "+
+				"grant the role USAGE on sequence app.plans_id_seq\n", 1) +
+				"\nApplied: 1 inserted, 0 updated, 0 deleted.\n" +
+				"Sequence app.plans_id_seq of app.plans (id): next value 2, not moved to 3: the role may not take values from the sequence.\n",
+			wantStderr: "note: sequence app.plans_id_seq of column id of table app.plans: next value 2, not moved to 3: " +
+				"the role may not take values from the sequence: grant the role USAGE on sequence app.plans_id_seq\n",
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+		},
+		{
+			// Whether or not the commit was made, the sequences that moved
+			// before it stay moved.
+			name:  "the outcome of the commit is not known after a sequence moved",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				fail: map[string]error{"Commit": fmt.Errorf("commit the apply: %w", apply.ErrUnknownOutcome)},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: commit the apply: " + apply.ErrUnknownOutcome.Error() + "\n" +
+				"kortopi: whether or not the commit was made, the sequences that the apply had moved before it stay moved, " +
+				"which only skips values: app.plans_id_seq to next value 3\n",
+			wantCalls:      append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+			outcomeUnknown: true,
+		},
+		{
 			name:  "the outcome of the commit is not known",
 			files: twoTables,
 			session: &fakeSession{diffs: newPlan, fail: map[string]error{

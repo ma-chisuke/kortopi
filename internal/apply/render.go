@@ -15,7 +15,9 @@ import (
 // found fewer rows to update than the plan shows, a line says which, and that
 // the other writes of the apply had done their work already, as the check
 // before the commit confirmed (ADR-0042). A line follows for each sequence
-// of the plan: where the apply moved it, or why it left it (ADR-0045). When
+// of the plan: where the apply moved it, as the database read it after the
+// move, or why it left it, without the advice, which SequenceNotes gives
+// (ADR-0045). When
 // deletions were left out, a line counts them, with what they would also
 // do, and names the flag that allows them (ADR-0018); when they were all that
 // differed, that line stands alone and says that nothing was written. An
@@ -43,7 +45,7 @@ func RenderSummary(w io.Writer, r *Result) error {
 		}
 		for _, s := range r.Sequences {
 			fmt.Fprintf(&b, "Sequence %s of %s (%s): %s.\n",
-				plan.FormatSequence(s.Name), plan.FormatTable(s.Table), plan.FormatName(s.Column), plan.SequenceText(&s.Sequence))
+				plan.FormatSequence(s.Name), plan.FormatTable(s.Table), plan.FormatName(s.Column), plan.SequenceState(&s.Sequence))
 		}
 	}
 	if r.SkippedDeletes > 0 {
@@ -68,6 +70,28 @@ func RenderSummary(w io.Writer, r *Result) error {
 	}
 	_, err := w.Write(b.Bytes())
 	return err
+}
+
+// SequenceNotes returns a note for each sequence of an apply that its
+// column still calls to move, after the apply, or that the apply could not
+// read (ADR-0045): where the sequence stands, as the apply read it after its
+// move, why it stays there, and what to do, with the statement that moves
+// it by hand, as in "note: sequence billing.fees_id_seq of column id of
+// table billing.fees: next value 3, not moved to 4: the role may not take
+// values from the sequence: grant ..., or take 1 value from it as a role
+// that may, with SELECT ...". A sequence that moved, or that stays for
+// good, as one that cycles, gets none. kortopi prints the notes on standard
+// error after the summary, as an export prints its notes.
+func SequenceNotes(r *Result) []string {
+	var notes []string
+	for _, s := range r.Sequences {
+		if s.Advice == "" && !s.Unread {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("note: sequence %s of column %s of table %s: %s",
+			plan.FormatSequence(s.Name), plan.FormatName(s.Column), plan.FormatTable(s.Table), plan.SequenceText(&s.Sequence)))
+	}
+	return notes
 }
 
 // unevenLines returns the line of the updates that found fewer rows to

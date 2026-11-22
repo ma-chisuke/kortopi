@@ -20,15 +20,21 @@ INSERT INTO geo.cities (10, n10);
 -- geo.cities: 1 to delete
 -- DELETE FROM geo.cities WHERE (3);
 
--- The sequences of the columns that the statements above write values into, moved as an apply moves them, last before its commit.
--- Each statement reads the largest value of its column when it runs, or the smallest for a sequence that counts down, then its
--- sequence, and takes values from the sequence with nextval until the next one lies beyond them, or, to move it further than
--- 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not rolled
--- back with the transaction. It needs SELECT and UPDATE on the sequence; without them, it fails, and so does the script.
+-- The sequences of the columns that the statements above write values into, moved as an apply by the role of the plan moves them,
+-- last before its commit. Each statement reads the largest value of its column when it runs, or the smallest for a sequence that
+-- counts down, then its sequence, and takes values from it with nextval until the next one lies beyond them, or, to move it further
+-- than 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not
+-- rolled back with the transaction. A statement runs only for a sequence that the plan shows moving, a move that the role of the
+-- plan may make: for a role that may take values from the sequence and may not set it, without setval, which leaves a sequence
+-- that needs more than 100000 values. The others are comments under their reason: remove the "-- " before each line to run one.
 
 -- geo.cities: sequence geo.cities_id_seq of column id: next value 4 -> 11
--- geo.cities: sequence geo.ranks of column rank: next value 2, not moved: the sequence cycles
 MOVE SEQUENCE geo.cities_id_seq BEYOND geo.cities.id;
+-- geo.cities: sequence geo.ranks of column rank: next value 2, not moved: the sequence cycles
+-- geo.cities: sequence geo.codes of column code: next value 2, not moved to 9: the role may not take values from the sequence: grant the role USAGE on sequence geo.codes
+-- MOVE SEQUENCE geo.codes BEYOND geo.cities.code;
 
--- geo.regions: sequence geo.names of column name: not moved: the role may not read the sequence
-MOVE SEQUENCE geo.names BEYOND geo.regions.name;
+-- geo.regions: sequence geo.names of column name: not moved: the role may not read the sequence: grant the role SELECT and UPDATE on sequence geo.names
+-- MOVE SEQUENCE geo.names BEYOND geo.regions.name;
+-- geo.regions: sequence geo.region_ranks of column rank: could not be read: PostgreSQL ended the read: lock timeout: an apply reads it again, and moves it if it can
+-- MOVE SEQUENCE geo.region_ranks BEYOND geo.regions.rank;

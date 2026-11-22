@@ -93,16 +93,28 @@ func (s *fakeSession) Sequences(_ context.Context, table declaration.TableName, 
 }
 
 // MoveSequences records the call, and returns what moved holds for the
-// table, or the sequences as moved. With a failure, it returns the first
-// sequence as moved, as a database whose second move failed.
+// table, or the sequences, each that the apply tries to move read at its
+// goal after the move. With a failure, it returns what moved holds, or the
+// first sequence, as a database whose second move failed.
 func (s *fakeSession) MoveSequences(_ context.Context, table declaration.TableName, sequences []plan.Sequence) ([]plan.Sequence, error) {
-	if err := s.record("MoveSequences " + table.String()); err != nil {
-		return sequences[:1], err
+	done := make([]plan.Sequence, len(sequences))
+	for i, seq := range sequences {
+		if seq.Tries() {
+			seq.After = seq.Goal
+		}
+		done[i] = seq
 	}
-	if m, ok := s.moved[table]; ok {
+	m, ok := s.moved[table]
+	if err := s.record("MoveSequences " + table.String()); err != nil {
+		if ok {
+			return m, err
+		}
+		return done[:1], err
+	}
+	if ok {
 		return m, nil
 	}
-	return sequences, nil
+	return done, nil
 }
 
 // Diff returns the difference of the table, without the kinds that the mode

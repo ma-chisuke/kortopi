@@ -279,9 +279,20 @@ func TestWrite(t *testing.T) {
 			plan: &plan.Plan{Tables: []plan.Table{
 				withSequences(table(cities, config.ModeSync, plan.TableDiff{Inserts: inserts("10"), Deletes: deletes("3")}),
 					plan.Sequence{Column: "id", Name: plan.SequenceName{Schema: "geo", Name: "cities_id_seq"}, Next: "4", Goal: "11"},
-					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "geo", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"}),
+					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "geo", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"},
+					plan.Sequence{
+						Column: "code", Name: plan.SequenceName{Schema: "geo", Name: "codes"}, Next: "2", Goal: "9",
+						Stays: "the role may not take values from the sequence", Advice: "grant the role USAGE on sequence geo.codes",
+					}),
 				withSequences(table(regions, config.ModeUpsert, plan.TableDiff{Updates: updates("1")}),
-					plan.Sequence{Column: "name", Name: plan.SequenceName{Schema: "geo", Name: "names"}, Stays: "the role may not read the sequence"}),
+					plan.Sequence{
+						Column: "name", Name: plan.SequenceName{Schema: "geo", Name: "names"},
+						Stays: "the role may not read the sequence", Advice: "grant the role SELECT and UPDATE on sequence geo.names",
+					},
+					plan.Sequence{
+						Column: "rank", Name: plan.SequenceName{Schema: "geo", Name: "region_ranks"}, Unread: true,
+						Stays: "PostgreSQL ended the read: lock timeout", Advice: "an apply reads it again, and moves it if it can",
+					}),
 				withSequences(table(plans, config.ModeUpsert, plan.TableDiff{Inserts: inserts("1")}),
 					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "app", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"}),
 			}},

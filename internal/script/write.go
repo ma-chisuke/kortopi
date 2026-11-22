@@ -49,7 +49,9 @@ type Header struct {
 //     names them, and says that PostgreSQL reads them when the script runs.
 //   - Last come the statements that move the sequences of the columns that
 //     the script writes explicit values into, beyond those values, as an
-//     apply moves them last before its commit (ADR-0045).
+//     apply by the role of the plan moves them last before its commit: the
+//     statement of a sequence that the plan does not show moving is a
+//     comment, under the reason (ADR-0045).
 //
 // An empty plan gives one comment line, and a second one that names the
 // tables of mode insert, whose values were not compared, when the plan has
@@ -173,12 +175,15 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 
 // writeSequences writes the statements that move the sequences of the
 // columns that the script writes explicit values into, after every other
-// statement, as an apply moves them last before its commit (ADR-0045): a
-// statement for each sequence whose position the plan found calling for a
-// move, or could not read. Each statement reads the sequence and the column
-// when it runs, and does nothing to a sequence that gives values beyond the
-// column already, so it moves no sequence back when the script runs later
-// than the plan.
+// statement, as an apply by the role of the plan moves them last before its
+// commit (ADR-0045). Each sequence gets its line of the plan as a comment,
+// and, when its position calls for a move, or the plan could not read it,
+// the statement under it: a statement that runs for a sequence that the plan
+// shows the apply moving, and a comment for the others, for a role that may
+// run it, so that the script never fails on a sequence. Each statement reads
+// the sequence and the column when it runs, and does nothing to a sequence
+// that gives values beyond the column already, so it moves no sequence back
+// when the script runs later than the plan.
 func writeSequences(ctx context.Context, b *bytes.Buffer, p *plan.Plan, db Database) error {
 	var tables []*plan.Table
 	for i := range p.Tables {
@@ -190,18 +195,25 @@ func writeSequences(ctx context.Context, b *bytes.Buffer, p *plan.Plan, db Datab
 		return nil
 	}
 	b.WriteString("\n")
-	comment(b, "The sequences of the columns that the statements above write values into, moved as an apply moves them, last before its commit.")
-	comment(b, "Each statement reads the largest value of its column when it runs, or the smallest for a sequence that counts down, then its")
-	comment(b, "sequence, and takes values from the sequence with nextval until the next one lies beyond them, or, to move it further than")
-	comment(b, "100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not rolled")
-	comment(b, "back with the transaction. It needs SELECT and UPDATE on the sequence; without them, it fails, and so does the script.")
+	comment(b, "The sequences of the columns that the statements above write values into, moved as an apply by the role of the plan moves them,")
+	comment(b, "last before its commit. Each statement reads the largest value of its column when it runs, or the smallest for a sequence that")
+	comment(b, "counts down, then its sequence, and takes values from it with nextval until the next one lies beyond them, or, to move it further")
+	comment(b, "than 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not")
+	comment(b, "rolled back with the transaction. A statement runs only for a sequence that the plan shows moving, a move that the role of the")
+	comment(b, "plan may make: for a role that may take values from the sequence and may not set it, without setval, which leaves a sequence")
+	comment(b, "that needs more than 100000 values. The others are comments under their reason: remove the \"-- \" before each line to run one.")
 	for _, t := range tables {
 		b.WriteString("\n")
-		for _, line := range plan.SequenceLines(t) {
-			comment(b, plan.FormatTable(t.Name)+": "+line)
-		}
-		if err := db.WriteStatements(ctx, b, Step{Kind: Sequences, Table: *t}); err != nil {
-			return err
+		for _, seq := range t.Sequences {
+			comment(b, plan.FormatTable(t.Name)+": "+plan.SequenceLine(&seq))
+			if !seq.Called() {
+				continue
+			}
+			one := *t
+			one.Sequences = []plan.Sequence{seq}
+			if err := db.WriteStatements(ctx, b, Step{Kind: Sequences, Table: one, Comment: !seq.Moves()}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -175,6 +175,10 @@ type Session struct {
 	pid         int32
 	// commitSent is true once the commit has gone to the server.
 	commitSent bool
+	// beforeMove, when it is set, runs in the savepoint of the move of each
+	// sequence, right before its statement, for the tests of a move that
+	// PostgreSQL ends part way or that an interrupt stops.
+	beforeMove func(ctx context.Context, tx pgx.Tx) error
 }
 
 var _ plan.Database = (*Session)(nil)

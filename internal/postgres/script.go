@@ -114,7 +114,7 @@ func (s *Session) statements(ctx context.Context, step script.Step) ([]string, e
 		if err != nil {
 			return nil, err
 		}
-		return sequenceStatements(meta, step.Table)
+		return sequenceStatements(meta, step.Table, step.Comment)
 	default:
 		return nil, fmt.Errorf("table %s: unknown kind of step %d", step.Table.Name, step.Kind)
 	}

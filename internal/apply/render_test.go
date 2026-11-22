@@ -5,6 +5,9 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ma-chisuke/kortopi/internal/config"
@@ -49,10 +52,34 @@ var (
 		Diff: plan.TableDiff{Inserts: []plan.Row{{Key: codes("3"), Values: codes("zero")}}},
 		Sequences: []plan.Sequence{{
 			Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "tax_rates_id_seq"}, Next: "3", Goal: "4",
-			Stays: "the role may not update the sequence: grant the role UPDATE on sequence billing.tax_rates_id_seq",
+			Stays:  "the role may not take values from the sequence",
+			Advice: "grant the role USAGE on sequence billing.tax_rates_id_seq, or take 1 value from it as a role that may, with " + nextvalOf("tax_rates_id_seq", 1),
 		}},
 	}
+	// sequencesResult is the result of an apply of feesTable and
+	// taxRatesTable: the first sequence moved, beyond its goal, as a CACHE
+	// above 1 moves it; statement_timeout ended the move of the second part
+	// way; and the role may not move the third.
+	sequencesResult = &Result{
+		Plan: &plan.Plan{Tables: []plan.Table{feesTable, taxRatesTable}}, Inserted: 3, Committed: true,
+		Sequences: []SequenceMove{
+			{Table: tn("billing.fees"), Sequence: plan.Sequence{Column: "id", Name: feesTable.Sequences[0].Name, Next: "3", Goal: "5", After: "23"}},
+			{Table: tn("billing.fees"), Sequence: plan.Sequence{
+				Column: "code", Name: feesTable.Sequences[1].Name, Next: "7", Goal: "100008", After: "50007",
+				Stays: "the statement that moves it failed: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
+					"statement_timeout of the session, or another session, cancelled the statement",
+				Advice: "take 50001 values from it, with " + nextvalOf("fee_codes", 50001),
+			}},
+			{Table: tn("billing.tax_rates"), Sequence: taxRatesTable.Sequences[0]},
+		},
+	}
 )
+
+// nextvalOf returns the statement that takes n values from the sequence
+// name of schema billing.
+func nextvalOf(name string, n int) string {
+	return `SELECT pg_catalog.nextval('"billing"."` + name + `"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, ` + strconv.Itoa(n) + ")"
+}
 
 var (
 	plansTable = withEffect(syncTable("catalog.plans", plan.TableDiff{
@@ -105,18 +132,9 @@ func TestRenderSummary(t *testing.T) {
 			Uneven: []Uneven{{Table: tn("catalog.plans"), Wrote: 0, Planned: 2}},
 		}},
 		// Each sequence of the plan gets a line after the commit: where the
-		// apply moved it, or why it left it (ADR-0045).
-		{name: "sequences", result: &Result{
-			Plan: &plan.Plan{Tables: []plan.Table{feesTable, taxRatesTable}}, Inserted: 3, Committed: true,
-			Sequences: []SequenceMove{
-				{Table: tn("billing.fees"), Sequence: feesTable.Sequences[0]},
-				{Table: tn("billing.fees"), Sequence: plan.Sequence{
-					Column: "code", Name: plan.SequenceName{Schema: "billing", Name: "fee_codes"}, Next: "9",
-					Stays: "it gives values beyond those of the column already, as another session took values from it after the plan",
-				}},
-				{Table: tn("billing.tax_rates"), Sequence: taxRatesTable.Sequences[0]},
-			},
-		}},
+		// apply moved it, as the database read it after the move, or why it
+		// left it, without the advice, which the notes give (ADR-0045).
+		{name: "sequences", result: sequencesResult},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -150,6 +168,37 @@ func TestRenderSummary(t *testing.T) {
 				t.Errorf("output =\n%s\nwant (testdata/%s)\n%s", got, golden, want)
 			}
 		})
+	}
+}
+
+// A sequence that its column still calls to move after the apply gets a
+// note, with the advice and the statement that moves it by hand, from where
+// the apply read it after its move; one that moved gets none, and neither
+// does one that stays for good (ADR-0045).
+func TestSequenceNotes(t *testing.T) {
+	t.Parallel()
+
+	r := *sequencesResult
+	r.Sequences = append(slices.Clone(r.Sequences),
+		SequenceMove{Table: tn("billing.fees"), Sequence: plan.Sequence{
+			Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "cycles"}, Next: "1", Stays: "the sequence cycles",
+		}},
+		SequenceMove{Table: tn("billing.fees"), Sequence: plan.Sequence{
+			Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "locked"}, Unread: true,
+			Stays: "PostgreSQL ended the read before the move: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)",
+		}})
+	want := []string{
+		"note: sequence billing.fee_codes of column code of table billing.fees: next value 7 -> 50007, not to 100008: " +
+			"the statement that moves it failed: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
+			"statement_timeout of the session, or another session, cancelled the statement: take 50001 values from it, with " + nextvalOf("fee_codes", 50001),
+		"note: sequence billing.tax_rates_id_seq of column id of table billing.tax_rates: next value 3, not moved to 4: " +
+			"the role may not take values from the sequence: grant the role USAGE on sequence billing.tax_rates_id_seq, " +
+			"or take 1 value from it as a role that may, with " + nextvalOf("tax_rates_id_seq", 1),
+		"note: sequence billing.locked of column id of table billing.fees: could not be read: " +
+			"PostgreSQL ended the read before the move: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)",
+	}
+	if got := SequenceNotes(&r); !slices.Equal(got, want) {
+		t.Errorf("SequenceNotes() =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

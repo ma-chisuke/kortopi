@@ -52,7 +52,10 @@ const (
 	// Sequences moves the sequences of Step.Table.Sequences whose position
 	// calls for a move, or that the plan could not read
 	// (plan.Sequence.Called), each beyond the values of its column when the
-	// script runs, and never back, as an apply moves them (ADR-0045).
+	// script runs, and never back, as an apply moves them (ADR-0045). A step
+	// that runs, without Comment, moves only as the role of the plan may: a
+	// role that may take values from a sequence and may not set it gets a
+	// statement without setval.
 	Sequences
 )
 

@@ -84,8 +84,13 @@ func runApply(ctx context.Context, args []string, e env) int {
 	switch {
 	case errors.Is(err, apply.ErrUnknownOutcome):
 		// The changes may have been made or not, also after an interrupt:
-		// the error says how to find out, and nothing claims otherwise.
+		// the error says how to find out, and nothing claims otherwise. The
+		// sequences that moved before the commit stay moved either way.
 		printError(e.stderr, err)
+		if moved := movedSequences(err); moved != "" {
+			printError(e.stderr, fmt.Errorf("whether or not the commit was made, the sequences that the apply had moved before it stay moved, "+
+				"which only skips values: %s", moved))
+		}
 		return exitError
 	case err != nil:
 		// An interrupt does not stop a commit that has started, so the error
@@ -109,6 +114,11 @@ func runApply(ctx context.Context, args []string, e env) int {
 		// what was lost.
 		printError(e.stderr, fmt.Errorf("the apply committed its changes, but its result could not be written: %w", err))
 	}
+	// A sequence that the apply left behind the values of its column, or
+	// could not read, gets a note with what to do (ADR-0045).
+	for _, note := range apply.SequenceNotes(r) {
+		_, _ = fmt.Fprintln(e.stderr, note)
+	}
 	if closeErr != nil {
 		printError(e.stderr, fmt.Errorf("the apply committed its changes, but closing the connection failed: %w", closeErr))
 	}
@@ -120,16 +130,33 @@ func runApply(ctx context.Context, args []string, e env) int {
 // names them: a rollback does not move a sequence back, so they stay where
 // the apply moved them, and only skip values (ADR-0045).
 func nothingChanged(err error) error {
+	moved := movedSequences(err)
+	if moved == "" {
+		return errNothingChanged
+	}
+	return fmt.Errorf("%w but the sequences that the apply had moved before its commit, which a rollback does not move back, so they only skip values: %s",
+		errNothingChanged, moved)
+}
+
+// movedSequences names the sequences of the SequencesMovedError in err,
+// each with where the apply read it after its move, as in
+// "app.plans_id_seq to next value 3", or with "which may have moved
+// forward" for one whose move an interrupt stopped before the apply could
+// read it again; or returns "" for none.
+func movedSequences(err error) string {
 	var moved *apply.SequencesMovedError
 	if !errors.As(err, &moved) || len(moved.Moved) == 0 {
-		return errNothingChanged
+		return ""
 	}
 	names := make([]string, len(moved.Moved))
 	for i, m := range moved.Moved {
-		names[i] = plan.FormatSequence(m.Name) + " to next value " + m.Goal
+		if m.Unknown {
+			names[i] = plan.FormatSequence(m.Name) + ", which may have moved forward"
+			continue
+		}
+		names[i] = plan.FormatSequence(m.Name) + " to next value " + m.After
 	}
-	return fmt.Errorf("%w but the sequences that the apply had moved before its commit, which a rollback does not move back, so they only skip values: %s",
-		errNothingChanged, strings.Join(names, ", "))
+	return strings.Join(names, ", ")
 }
 
 // parseApply parses the flags of apply.

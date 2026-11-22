@@ -210,39 +210,33 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 }
 
 // moveSequences moves the sequences that the plan shows an apply to move,
-// table by table in the order of the plan (ADR-0045). It returns every
-// sequence of the plan with what the apply did with it, and the sequences
-// that moved. A sequence that the plan shows staying keeps its reason. err
-// is an error of the database that stops the apply; the sequences that
-// moved before it stay moved.
+// or could not read, table by table in the order of the plan (ADR-0045). It
+// hands the database every sequence of a table that has one to move, or one
+// that stays with a goal, which the database reads again for its advice. It
+// returns every sequence of the plan with what the apply did with it, and
+// the sequences that moved, or may have moved (plan.Sequence.Unknown). A
+// sequence that the plan shows staying for good, as one that cycles, keeps
+// its reason. err is an error of the database that stops the apply; the
+// sequences that moved before it stay moved.
 func moveSequences(ctx context.Context, db Database, p *plan.Plan) (all, moved []SequenceMove, err error) {
 	for i := range p.Tables {
 		t := &p.Tables[i]
-		var moving []plan.Sequence
-		for _, s := range t.Sequences {
-			if s.Moves() {
-				moving = append(moving, s)
-			}
-		}
-		var done []plan.Sequence
-		if len(moving) > 0 {
-			done, err = db.MoveSequences(ctx, t.Name, moving)
+		done := t.Sequences
+		if slices.ContainsFunc(t.Sequences, func(s plan.Sequence) bool { return s.Tries() || s.Goal != "" }) {
+			done, err = db.MoveSequences(ctx, t.Name, t.Sequences)
 			for _, s := range done {
-				if s.Moves() {
+				if s.Moved() || s.Unknown {
 					moved = append(moved, SequenceMove{Table: t.Name, Sequence: s})
 				}
 			}
 			if err != nil {
 				return nil, moved, err
 			}
-			if len(done) != len(moving) {
-				return nil, moved, fmt.Errorf("the database moved %d sequences of table %s, not %d", len(done), t.Name, len(moving))
+			if len(done) != len(t.Sequences) {
+				return nil, moved, fmt.Errorf("the database returned %d sequences of table %s, not %d", len(done), t.Name, len(t.Sequences))
 			}
 		}
-		for _, s := range t.Sequences {
-			if s.Moves() {
-				s, done = done[0], done[1:]
-			}
+		for _, s := range done {
 			all = append(all, SequenceMove{Table: t.Name, Sequence: s})
 		}
 	}

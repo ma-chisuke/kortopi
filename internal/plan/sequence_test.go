@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"cmp"
 	"errors"
 	"reflect"
 	"strings"
@@ -163,17 +164,20 @@ func TestSequenceText(t *testing.T) {
 
 	name := SequenceName{Schema: "a", Name: "t_id_seq"}
 	tests := []struct {
-		seq    Sequence
-		want   string
-		called bool
-		moves  bool
+		name string
+		seq  Sequence
+		// want is SequenceText, and wantState the same without the advice.
+		want, wantState             string
+		called, moves, tries, moved bool
 	}{
 		{
-			seq: Sequence{Name: name, Next: "3", Goal: "4"}, want: "next value 3 -> 4", called: true, moves: true,
+			seq: Sequence{Name: name, Next: "3", Goal: "4"}, want: "next value 3 -> 4", called: true, moves: true, tries: true,
 		},
 		{
-			seq:  Sequence{Name: name, Next: "3", Goal: "4", Stays: "the role may not update the sequence"},
-			want: "next value 3, not moved to 4: the role may not update the sequence", called: true,
+			seq:       Sequence{Name: name, Next: "3", Goal: "4", Stays: "the role may not take values from the sequence", Advice: "grant the role USAGE on sequence a.t_id_seq"},
+			want:      "next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence a.t_id_seq",
+			wantState: "next value 3, not moved to 4: the role may not take values from the sequence",
+			called:    true,
 		},
 		{
 			seq:  Sequence{Name: name, Next: "3", Stays: "the sequence cycles"},
@@ -183,16 +187,55 @@ func TestSequenceText(t *testing.T) {
 			seq:  Sequence{Name: name, Stays: "the role may not read the sequence"},
 			want: "not moved: the role may not read the sequence", called: true,
 		},
+		{
+			name:      "a read that PostgreSQL ended",
+			seq:       Sequence{Name: name, Unread: true, Stays: "PostgreSQL ended the read: lock timeout", Advice: "an apply tries to move it all the same"},
+			want:      "could not be read: PostgreSQL ended the read: lock timeout: an apply tries to move it all the same",
+			wantState: "could not be read: PostgreSQL ended the read: lock timeout",
+			called:    true, tries: true,
+		},
+		{
+			name: "a move, read again after it",
+			seq:  Sequence{Name: name, Next: "3", Goal: "4", After: "23"}, want: "next value 3 -> 23", called: true, moves: true, tries: true, moved: true,
+		},
+		{
+			name: "a move that ended part way",
+			seq: Sequence{Name: name, Next: "2", Goal: "100001", After: "40002", Stays: "the statement that moves it failed: statement timeout",
+				Advice: "take 59999 values from it"},
+			want:      "next value 2 -> 40002, not to 100001: the statement that moves it failed: statement timeout: take 59999 values from it",
+			wantState: "next value 2 -> 40002, not to 100001: the statement that moves it failed: statement timeout",
+			called:    true, moved: true,
+		},
+		{
+			name: "a move that failed before it took a value",
+			seq:  Sequence{Name: name, Next: "3", Goal: "4", After: "3", Stays: "the statement that moves it failed: lock timeout"},
+			want: "next value 3, not moved to 4: the statement that moves it failed: lock timeout", called: true,
+		},
+		{
+			name: "a move that may have moved the sequence",
+			seq:  Sequence{Name: name, Next: "3", Goal: "4", Unknown: true, Stays: "an interrupt stopped the move"},
+			want: "next value 3, may have moved forward: an interrupt stopped the move", called: true,
+		},
 	}
 	for _, tt := range tests {
 		if got := SequenceText(&tt.seq); got != tt.want {
-			t.Errorf("SequenceText(%+v) = %q, want %q", tt.seq, got, tt.want)
+			t.Errorf("%s: SequenceText(%+v) = %q, want %q", tt.name, tt.seq, got, tt.want)
+		}
+		wantState := cmp.Or(tt.wantState, tt.want)
+		if got := SequenceState(&tt.seq); got != wantState {
+			t.Errorf("%s: SequenceState(%+v) = %q, want %q", tt.name, tt.seq, got, wantState)
 		}
 		if got := tt.seq.Called(); got != tt.called {
-			t.Errorf("Called(%+v) = %v, want %v", tt.seq, got, tt.called)
+			t.Errorf("%s: Called(%+v) = %v, want %v", tt.name, tt.seq, got, tt.called)
 		}
 		if got := tt.seq.Moves(); got != tt.moves {
-			t.Errorf("Moves(%+v) = %v, want %v", tt.seq, got, tt.moves)
+			t.Errorf("%s: Moves(%+v) = %v, want %v", tt.name, tt.seq, got, tt.moves)
+		}
+		if got := tt.seq.Tries(); got != tt.tries {
+			t.Errorf("%s: Tries(%+v) = %v, want %v", tt.name, tt.seq, got, tt.tries)
+		}
+		if got := tt.seq.Moved(); got != tt.moved {
+			t.Errorf("%s: Moved(%+v) = %v, want %v", tt.name, tt.seq, got, tt.moved)
 		}
 	}
 	if got, want := FormatSequence(SequenceName{Schema: "a b", Name: "s"}), `"a b".s`; got != want {

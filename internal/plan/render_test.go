@@ -362,7 +362,7 @@ func TestRender(t *testing.T) {
 						{Column: "id", Name: SequenceName{Schema: "billing", Name: "fees_id_seq"}, Next: "3", Goal: "4"},
 						{
 							Column: "amount", Name: SequenceName{Schema: "billing", Name: "fee amount"}, Next: "-2",
-							Stays: "the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it to you",
+							Stays: "the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is",
 						},
 					},
 				},
@@ -371,16 +371,27 @@ func TestRender(t *testing.T) {
 					Diff: TableDiff{Updates: []Update{{Key: values("zero"), Changes: []Change{{Column: "id", Old: text("2"), New: text("30")}}}}},
 					Sequences: []Sequence{{
 						Column: "id", Name: SequenceName{Schema: "billing", Name: "tax_rates_id_seq"}, Next: "3", Goal: "31",
-						Stays: "the role may not update the sequence: grant the role UPDATE on sequence billing.tax_rates_id_seq",
+						Stays: "the role may not take values from the sequence",
+						Advice: "grant the role USAGE on sequence billing.tax_rates_id_seq, or take 28 values from it as a role that may, with " +
+							`SELECT pg_catalog.nextval('"billing"."tax_rates_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 28)`,
 					}},
 				},
 				{
 					Name: name("geo", "regions"), Mode: config.ModeInsert, Key: []string{"id"},
 					Diff: TableDiff{Inserts: []Row{{Key: values("7")}}},
-					Sequences: []Sequence{{
-						Column: "id", Name: SequenceName{Schema: "geo", Name: "regions_id_seq"},
-						Stays: "the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence geo.regions_id_seq",
-					}},
+					Sequences: []Sequence{
+						{
+							Column: "id", Name: SequenceName{Schema: "geo", Name: "regions_id_seq"},
+							Stays:  "the role may not read the sequence, so kortopi cannot tell where it stands",
+							Advice: "grant the role SELECT and UPDATE on sequence geo.regions_id_seq",
+						},
+						{
+							Column: "code", Name: SequenceName{Schema: "geo", Name: "region_codes"}, Unread: true,
+							Stays: "PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
+								"another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence",
+							Advice: "an apply reads it again, and moves it if it can",
+						},
+					},
 				},
 			}},
 		},
