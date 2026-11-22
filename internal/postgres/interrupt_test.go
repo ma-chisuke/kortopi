@@ -99,6 +99,30 @@ func TestKeepAliveFromTheServiceFile(t *testing.T) {
 	}
 }
 
+// Each transaction starts with the lock timeout of --lock-timeout, in whole
+// milliseconds, and none without the flag (ADR-0044).
+func TestBeginSQL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		timeout  time.Duration
+		readOnly bool
+		want     string
+	}{
+		{want: "BEGIN ISOLATION LEVEL REPEATABLE READ"},
+		{readOnly: true, want: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"},
+		{timeout: 10 * time.Second, want: "BEGIN ISOLATION LEVEL REPEATABLE READ; SET LOCAL lock_timeout = 10000"},
+		{timeout: 1500 * time.Millisecond, readOnly: true, want: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL lock_timeout = 1500"},
+		{timeout: 1999 * time.Microsecond, want: "BEGIN ISOLATION LEVEL REPEATABLE READ; SET LOCAL lock_timeout = 1"},
+	}
+	for _, tt := range tests {
+		s := &Session{lockTimeout: tt.timeout}
+		if got := s.beginSQL(tt.readOnly); got != tt.want {
+			t.Errorf("beginSQL(%v) with --lock-timeout %v = %q, want %q", tt.readOnly, tt.timeout, got, tt.want)
+		}
+	}
+}
+
 // The error of a session whose end the server did not confirm says why, and
 // names the session by what pg_stat_activity shows, its process ID only when
 // kortopi read it in the transaction.

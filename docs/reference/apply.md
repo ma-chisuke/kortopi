@@ -29,6 +29,10 @@ flags:
                     would delete or change more than n rows, counting the
                     rows that foreign keys delete or change with them, at
                     every depth (default: 100)
+  --lock-timeout <duration>
+                    stop when a statement waits longer than this for a lock
+                    that another session holds, such as 10s, 500ms, or
+                    1m30s (default: the lock_timeout of the session)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -45,7 +49,8 @@ exit status:
       the outcome of the commit is not known
 ```
 
-`--dir`, `--schema`, and the flags of the connection work as in [kortopi plan](plan.md#connect-to-the-database).
+`--dir`, `--schema`, `--lock-timeout`, and the flags of the connection work as in [kortopi plan](plan.md#connect-to-the-database).
+`--lock-timeout` holds for every wait of an apply for a lock: the wait for another apply, the reads, the writes and the triggers that they fire, and the commit ([Wait for a lock](plan.md#wait-for-a-lock)).
 `--max-delete` takes a whole number from 0, and is a mistake without `--allow-delete`.
 An apply asks no question: review its plan with `kortopi plan` before you run it.
 
@@ -105,6 +110,7 @@ kortopi neither reads nor moves sequences.
 
 An apply reads and compares in the settings that a plan pins ([How values are compared](comparison.md#the-settings-of-the-session)), so the declared values and the values of `on_insert` mean the same in every environment.
 Its inserts, updates, and deletions, and its commit, run with the settings that the session had before kortopi pinned them, but `client_encoding`: what the server, `ALTER DATABASE ... SET`, `ALTER ROLE ... SET`, and `PGOPTIONS` set.
+With `--lock-timeout`, `lock_timeout` is the value of the flag there too.
 So the defaults, the triggers, the actions of the foreign keys, and the deferred checks that the writes fire see what the statements of your application see:
 
 - A default `now()` into a `timestamp` column, or `current_date`, gives the time and the date of the database's `TimeZone`, and a default that turns a value into text gives the form of its `DateStyle` and `IntervalStyle`.
@@ -120,7 +126,7 @@ A trigger that fails in the settings of your application fails the apply too, wi
 In the database, an apply does the following and nothing else, in this order:
 
 1. Right after it connects, outside any transaction, one query reads the settings of the session that its writes use.
-2. It opens one transaction at the isolation level `REPEATABLE READ`, takes the lock of kortopi with `pg_try_advisory_xact_lock`, and pins the settings that change how values are read.
+2. It opens one transaction at the isolation level `REPEATABLE READ`, with the `lock_timeout` of `--lock-timeout` when it is given, takes the lock of kortopi with `pg_try_advisory_xact_lock`, and pins the settings that change how values are read.
 3. It reads the catalogs, and checks each value of `on_insert` in a temporary table of its column alone, inside a savepoint that it rolls back, as a plan does.
 4. For each declared table, it creates a temporary table, loads the declared rows into it, and compares them with the table, as a plan does, and keeps the temporary table until the commit. When rows are to be deleted, it follows the foreign keys of the deletions with queries, and keeps the rows that they reach in one more temporary table ([The guards on deletions](#the-guards-on-deletions)).
 5. When a cycle of foreign keys needs it, it defers their checks with `SET CONSTRAINTS`.
@@ -333,6 +339,13 @@ An interrupted apply ends its transaction before it exits ([Interrupt an apply](
 When kortopi is killed, or its connection is cut, the transaction ends once the server notices that the connection is gone, which can take long when the session waits or runs a statement.
 It is a lock of the server, not an object in the database.
 
+When the wait for another apply reaches the limit of `--lock-timeout`, or of `lock_timeout` of the session, the apply stops:
+
+```text
+kortopi: wait for another apply on database "app": ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): the other apply held the lock of kortopi longer than --lock-timeout 10s allows: run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, as an apply that was stopped may leave it, and end it with pg_terminate_backend
+kortopi: nothing was changed
+```
+
 ## In a deployment
 
 Apply the schema first, with the tool that changes your schema, and the rows second.
@@ -341,7 +354,7 @@ Apply the schema first, with the tool that changes your schema, and the rows sec
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.
-- Set a lock timeout, such as `PGOPTIONS='-c lock_timeout=10s'`, so that an apply does not wait without limit for a lock that another session holds ([kortopi plan](plan.md#connection-settings)). The settings of the connection are those of a plan, and the writes run with them ([The settings of the writes](#the-settings-of-the-writes)).
+- Give the apply a lock timeout with `--lock-timeout`, such as `--lock-timeout 10s`, so that it does not wait without limit for a lock that another session holds ([Wait for a lock](plan.md#wait-for-a-lock)). kortopi sets it in each of its transactions, so it holds behind a connection pooler in transaction mode too, where `PGOPTIONS` does not reach the server.
 - A failed apply changes nothing. Fix the declaration or the database, and run it again.
 
 ### One apply for each schema
@@ -369,7 +382,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
 - An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit. Each of these tables holds a lock until the commit, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default: it then fails with `out of shared memory` and a hint to raise the setting, and nothing is changed.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
-- Not tested: a standby, Aurora PostgreSQL, and a real connection pooler, through which a cancel request is forwarded by design. No test cuts the network either.
+- Not tested: a standby, Aurora PostgreSQL, and a real connection pooler, through which `--lock-timeout` holds and a cancel request is forwarded by design. No test cuts the network either.
 
 ## Common errors
 
@@ -552,4 +565,4 @@ Apply as a role and with options that leave it on, or apply without `--allow-del
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md), and [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md), [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md), and [ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md).

@@ -73,6 +73,68 @@ func TestWatchInterrupts(t *testing.T) {
 	<-stopped
 }
 
+// --lock-timeout takes a duration from 1ms to 24h in each command, and
+// reaches the options of the session.
+func TestLockTimeoutFlag(t *testing.T) {
+	t.Parallel()
+
+	for _, d := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"10s", 10 * time.Second},
+		{"500ms", 500 * time.Millisecond},
+		{"1m30s", 90 * time.Second},
+		{"1ms", time.Millisecond},
+		{"24h", 24 * time.Hour},
+	} {
+		p, err := parsePlan([]string{"--lock-timeout", d.value})
+		if err != nil || p.lockTimeout != d.want {
+			t.Errorf("plan --lock-timeout %s = %v, %v, want %v", d.value, p.lockTimeout, err, d.want)
+		}
+		a, err := parseApply([]string{"--lock-timeout=" + d.value})
+		if err != nil || a.lockTimeout != d.want {
+			t.Errorf("apply --lock-timeout %s = %v, %v, want %v", d.value, a.lockTimeout, err, d.want)
+		}
+		x, err := parseExport([]string{"--lock-timeout", d.value})
+		if err != nil || x.lockTimeout != d.want {
+			t.Errorf("export --lock-timeout %s = %v, %v, want %v", d.value, x.lockTimeout, err, d.want)
+		}
+	}
+	want := "invalid value for flag --lock-timeout: give a duration from 1ms to 24h, such as 10s, 500ms, or 1m30s"
+	for _, value := range []string{"0", "0s", "-1s", "10", "999us", "25h", "soon", ""} {
+		for _, parse := range []func([]string) error{
+			func(args []string) error { _, err := parsePlan(args); return err },
+			func(args []string) error { _, err := parseApply(args); return err },
+			func(args []string) error { _, err := parseExport(args); return err },
+		} {
+			if err := parse([]string{"--lock-timeout", value}); err == nil || err.Error() != want {
+				t.Errorf("--lock-timeout %q: %v, want %q", value, err, want)
+			}
+		}
+	}
+	if _, err := parsePlan([]string{"--lock-timeout"}); err == nil || err.Error() != "flag needs an argument: --lock-timeout" {
+		t.Errorf("--lock-timeout without a value: %v", err)
+	}
+
+	// Each command passes the flag and the second interrupt to the session.
+	dir := writeFiles(t, twoTables)
+	again := make(chan struct{})
+	for _, args := range [][]string{
+		{"plan", "--dir", dir},
+		{"apply", "--dir", dir},
+		{"export", "--dir", filepath.Join(t.TempDir(), "out"), "--table", "app.plans"},
+	} {
+		fd := &fakeDialect{session: &fakeSession{diffs: newPlan, exportable: []declaration.TableName{plans}}}
+		var stdout, stderr strings.Builder
+		code := run(t.Context(), append(args, "--lock-timeout", "2s"), env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t), again: again})
+		if code != exitOK || fd.opts.LockTimeout != 2*time.Second || fd.opts.GiveUp != (<-chan struct{})(again) {
+			t.Errorf("kortopi %s = %d, stderr %q, with the options %+v, want the lock timeout 2s and the channel of the second interrupt",
+				args[0], code, stderr.String(), fd.opts)
+		}
+	}
+}
+
 // notEnded is the error of a session whose end the database did not confirm
 // after an interrupt.
 var notEnded = &dialect.NotEndedError{Message: "the server did not confirm within 5s that the session of the run ended: find it in pg_stat_activity"}

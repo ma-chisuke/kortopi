@@ -22,7 +22,7 @@ var applyOnlyFlags = "  --allow-delete    delete the rows that the declaration l
 	"                    every depth (default: " + strconv.Itoa(apply.DefaultMaxDelete) + ")\n"
 
 // applyFlags lists the flags of apply, for its help.
-var applyFlags = sourceFlags("apply") + applyOnlyFlags + connectionFlags
+var applyFlags = sourceFlags("apply") + applyOnlyFlags + lockTimeoutFlag + connectionFlags
 
 // applyUsage is the short help of apply, which follows an error in its
 // flags.

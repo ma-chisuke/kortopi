@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
@@ -61,6 +62,11 @@ type Options struct {
 	// Wait gets one line when an apply waits for another apply to finish. It
 	// may be nil.
 	Wait io.Writer
+	// LockTimeout is the longest time that a statement of the session waits
+	// for a lock that another session holds, from --lock-timeout: the wait
+	// for another apply, the reads, the writes, and the commit (ADR-0044).
+	// Zero leaves the waits to the settings of the session.
+	LockTimeout time.Duration
 	// GiveUp is closed by a second interrupt. The first interrupt cancels
 	// the context of Open: the session then asks the database to stop the
 	// statement that runs, and waits a short time for it to confirm that the

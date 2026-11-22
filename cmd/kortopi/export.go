@@ -24,6 +24,7 @@ const exportOnlyFlags = "  --schema <name>   export every table of this schema; 
 const exportFlags = "  --dir <path>      the data directory to write into, created if it is\n" +
 	"                    missing (default: the current directory)\n" +
 	exportOnlyFlags +
+	lockTimeoutFlag +
 	connectionFlags
 
 // exportUsage is the short help of export, which follows an error in its

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -403,6 +404,194 @@ func TestInterruptDuringTheCommit(t *testing.T) {
 						t.Errorf("rows after the commit: %v, want the change", got)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestLockTimeoutInEachPhase gives a session --lock-timeout 200ms, and the
+// session a lock_timeout of 20s of its own, as PGOPTIONS would. Each wait for
+// a lock stops after the time of the flag, and its error names the flag:
+// the wait for another apply, the reads of a plan and of an apply, the
+// writes, which run with the settings of the session (ADR-0037), and the
+// commit. The triggers of the writes and of the commit see the value of the
+// flag (ADR-0044).
+func TestLockTimeoutInEachPhase(t *testing.T) {
+	const flag = 200 * time.Millisecond
+	// lockError checks that err is the end of a wait by the lock timeout of
+	// the flag, which came long before the 20s of the session.
+	lockError := func(t *testing.T, err error, start time.Time, parts ...string) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("no error, want the end of the wait for a lock")
+		}
+		wantError(t, err, append(parts, "--lock-timeout 200ms allows")...)
+		if took := time.Since(start); took < flag || took > 10*time.Second {
+			t.Errorf("the wait took %v, want --lock-timeout 200ms, not the lock_timeout of the session", took)
+		}
+	}
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := func(t *testing.T, schema string) (testDB, *pgx.ConnConfig, string) {
+				t.Helper()
+				db := database(t, srv)
+				db.Exec(t, schema)
+				cfg := db.Config.Copy()
+				cfg.RuntimeParams["options"] = "-c lock_timeout=20s"
+				return db, cfg, writeFiles(t, statusFiles)
+			}
+			status := csvTable("m", "status", "code", "label")
+
+			t.Run("the wait for another apply", func(t *testing.T) {
+				db, cfg, dir := setup(t, statusSchema)
+				holder(t, db, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", int64(lockKey)))
+				start := time.Now()
+				_, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true, LockTimeout: flag})
+				lockError(t, err, start, "(SQLSTATE 55P03): the other apply held the lock of kortopi longer than")
+			})
+
+			for _, apply := range []bool{false, true} {
+				t.Run(fmt.Sprintf("the reads of apply %v", apply), func(t *testing.T) {
+					db, cfg, dir := setup(t, statusSchema)
+					holder(t, db, "LOCK TABLE m.status IN ACCESS EXCLUSIVE MODE")
+					s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: apply, LockTimeout: flag})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = s.Close(context.Background()) })
+					req := request(t, s, status, nil, config.ModeUpsert)
+					start := time.Now()
+					_, err = s.Diff(t.Context(), req)
+					lockError(t, err, start, "(SQLSTATE 55P03): another session holds a lock on a table or on rows that the "+s.work()+" needs")
+				})
+			}
+
+			t.Run("the writes", func(t *testing.T) {
+				db, cfg, dir := setup(t, statusSchema)
+				holder(t, db, "SELECT 1 FROM m.status WHERE code = 'paid' FOR UPDATE")
+				s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true, LockTimeout: flag})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close(context.Background()) })
+				req := request(t, s, status, nil, config.ModeUpsert)
+				if _, err := s.Diff(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				start := time.Now()
+				_, err = s.Update(t.Context(), req)
+				lockError(t, err, start, "update table m.status: canceling statement due to lock timeout: another session holds a lock")
+			})
+
+			t.Run("the commit", func(t *testing.T) {
+				db, cfg, dir := setup(t, atCommitSchema)
+				holder(t, db, "SELECT pg_advisory_xact_lock(4242)")
+				s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true, LockTimeout: flag})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close(context.Background()) })
+				req := request(t, s, status, nil, config.ModeUpsert)
+				if _, err := s.Diff(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.Update(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				start := time.Now()
+				err = s.Commit(t.Context())
+				lockError(t, err, start, "commit: canceling statement due to lock timeout")
+				if errors.Is(err, apply.ErrUnknownOutcome) {
+					t.Errorf("Commit = %v, want a commit that PostgreSQL rejected", err)
+				}
+				if got := db.Query(t, statusRows); got[0][0] != "open=Open paid=Paid" {
+					t.Errorf("rows after the rejected commit: %v", got)
+				}
+			})
+
+			t.Run("the settings of the writes and of the commit", func(t *testing.T) {
+				db, cfg, dir := setup(t, atCommitSchema)
+				db.Exec(t, `CREATE FUNCTION m.label() RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN NEW.label := NEW.label || ' ' || current_setting('lock_timeout'); RETURN NEW; END $$;
+					CREATE TRIGGER label BEFORE UPDATE ON m.status FOR EACH ROW EXECUTE FUNCTION m.label();`)
+				s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true, LockTimeout: flag})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close(context.Background()) })
+				req := request(t, s, status, nil, config.ModeUpsert)
+				if _, err := s.Diff(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				if n, err := s.Update(t.Context(), req); err != nil || n != 1 {
+					t.Fatalf("Update = %d, %v", n, err)
+				}
+				if err := s.Commit(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if got := db.Query(t, statusRows); got[0][0] != "open=Open paid=Paid in full 200ms" {
+					t.Errorf("the trigger of the update saw %v, want the lock_timeout of the flag", got)
+				}
+				if got := db.Query(t, "SELECT string_agg(lock_timeout, ' ') FROM m.seen"); got[0][0] != "200ms" {
+					t.Errorf("the trigger of the commit saw %v, want the lock_timeout of the flag", got)
+				}
+				// Without the flag, the writes see the lock_timeout of the
+				// session, as before.
+				// The update fires the triggers too, so m.seen is emptied
+				// after its commit.
+				db.Exec(t, "UPDATE m.status SET label = 'Paid' WHERE code = 'paid'")
+				db.Exec(t, "TRUNCATE m.seen")
+				s, err = ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close(context.Background()) })
+				req = request(t, s, status, nil, config.ModeUpsert)
+				if _, err := s.Diff(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.Update(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Commit(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if got := db.Query(t, statusRows+" UNION ALL SELECT string_agg(lock_timeout, ' ') FROM m.seen"); fmt.Sprint(got) != "[[open=Open paid=Paid in full 20s] [20s]]" {
+					t.Errorf("without the flag, the triggers saw %v, want the lock_timeout of the session", got)
+				}
+			})
+		})
+	}
+}
+
+// The lock timeout of the flag holds in no transaction but kortopi's own:
+// after an apply, the connection has the lock_timeout of the session again.
+func TestLockTimeoutEndsWithTheTransaction(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, statusSchema)
+			dir := writeFiles(t, statusFiles)
+			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true, LockTimeout: 3 * time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = s.Close(context.Background()) }()
+			var inside string
+			if err := s.tx.QueryRow(t.Context(), "SELECT current_setting('lock_timeout')").Scan(&inside); err != nil || inside != "3s" {
+				t.Errorf("lock_timeout in the transaction = %q, %v, want 3s", inside, err)
+			}
+			if err := s.Commit(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			var after string
+			if err := s.conn.QueryRow(t.Context(), "SELECT current_setting('lock_timeout')").Scan(&after); err != nil || after != "0" {
+				t.Errorf("lock_timeout after the transaction = %q, %v, want 0, the value of the session", after, err)
+			}
+			if strings.Contains(s.beginSQL(false), "SESSION") {
+				t.Error("the lock timeout is set for the session, not for the transaction")
 			}
 		})
 	}

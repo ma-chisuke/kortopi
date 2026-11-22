@@ -45,6 +45,9 @@ type Options struct {
 	// Wait gets one line when an apply waits for another apply to finish. It
 	// may be nil.
 	Wait io.Writer
+	// LockTimeout, when it is not zero, is the lock_timeout of every
+	// transaction of the session, as --lock-timeout gives it (ADR-0044).
+	LockTimeout time.Duration
 	// GiveUp is closed by a second interrupt, after the first cancelled the
 	// context of Connect: the session stops waiting for the server at once
 	// (dialect.Options.GiveUp). It may be nil.
@@ -149,6 +152,8 @@ type Session struct {
 	// and commits.
 	sessionSettings [][2]string
 	commitSQL       string
+	// lockTimeout is Options.LockTimeout.
+	lockTimeout time.Duration
 	// guard is what the connection shares with the session, and interrupt
 	// what the session knows of the interrupt of its run, whose context is
 	// run. stopWatch stops watching run (watchInterrupt).
@@ -415,6 +420,9 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	if opts.Apply && opts.Export {
 		return nil, errors.New("a session is for an apply or for an export, not for both")
 	}
+	if opts.LockTimeout < 0 {
+		return nil, errors.New("the lock timeout is negative")
+	}
 	cfg = cfg.Copy()
 	// Describe each query in an unnamed statement, so the session prepares
 	// no statement that outlives a query.
@@ -436,7 +444,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
 		apply: opts.Apply, export: opts.Export, loaded: make(map[declaration.TableName]*loadedTable),
-		guard: g, application: cfg.RuntimeParams["application_name"],
+		lockTimeout: opts.LockTimeout, guard: g, application: cfg.RuntimeParams["application_name"],
 	}
 	s.watchInterrupt(ctx, opts.GiveUp)
 	if s.apply {
@@ -477,9 +485,11 @@ const lockKey = 0x6b6f72746f7069
 // before the lock: an apply that commits in that moment makes the writes of
 // this apply fail with ErrConflict instead of overwriting its rows.
 //
-// On an error, the transaction that began is s.tx, which Close rolls back
-// with a context of its own: a rollback with a context that an interrupt
-// cancelled would break the connection instead.
+// Each transaction of the session, the wait included, starts with the
+// lock_timeout of --lock-timeout, when it is given (beginSQL). On an error,
+// the transaction that began is s.tx, which Close rolls back with a context
+// of its own: a rollback with a context that an interrupt cancelled would
+// break the connection instead.
 func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	waited := false
 	for {
@@ -552,21 +562,35 @@ func (s *Session) beginTx(ctx context.Context, begin, commit string) (pgx.Tx, er
 	return tx, nil
 }
 
-// beginSQL returns the statement that begins a transaction of the session:
+// beginSQL returns the statements that begin a transaction of the session:
 // at the isolation level REPEATABLE READ, and READ ONLY when readOnly is
-// true.
+// true, with the lock_timeout of --lock-timeout, local to the transaction
+// (ADR-0044). Both go in one message, as pgx sends a begin. SET takes no
+// snapshot, so the snapshot of REPEATABLE READ is still taken by the first
+// query of the transaction.
 func (s *Session) beginSQL(readOnly bool) string {
 	sql := "BEGIN ISOLATION LEVEL REPEATABLE READ"
 	if readOnly {
 		sql += " READ ONLY"
 	}
-	return sql
+	return sql + s.lockTimeoutSQL()
+}
+
+// lockTimeoutSQL returns the statement that sets lock_timeout to the value of
+// --lock-timeout for the rest of the transaction, after a semicolon, or
+// nothing without the flag. The value is a whole number of milliseconds, the
+// unit of the setting.
+func (s *Session) lockTimeoutSQL() string {
+	if s.lockTimeout <= 0 {
+		return ""
+	}
+	return "; SET LOCAL lock_timeout = " + strconv.FormatInt(max(s.lockTimeout.Milliseconds(), 1), 10)
 }
 
 // waitForLock waits until the apply that holds the lock of kortopi ends, in
 // a transaction of its own that takes the lock and lets it go at once.
 func (s *Session) waitForLock(ctx context.Context, database string) error {
-	tx, err := s.beginTx(ctx, "BEGIN", "")
+	tx, err := s.beginTx(ctx, "BEGIN"+s.lockTimeoutSQL(), "")
 	if err != nil {
 		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
 	}

@@ -48,5 +48,6 @@
 | [ADR-0040](ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) | 期間は月数・日数・時間で比べる | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.ja.md) | issue は、必須の欄を持つフォームで書く | accepted | 2026-11-21 |
 | [ADR-0043](ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md) | 割り込まれた実行の文はサーバーでキャンセルし、コミットの応答を待つのをやめるのは2度目の割り込みか接続が死んだときだけにする | accepted | 2026-11-22 |
+| [ADR-0044](ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) | 実行のロック待ちの上限は `--lock-timeout` で与え、kortopi の各トランザクションのローカルな設定にする | accepted | 2026-11-22 |
 
-<!-- i18n-source: README.md sha256:1b8ecf4055d83157834841f6d3b297fe2387c0caa3d004d3aff6ec60bd95ceb4 -->
+<!-- i18n-source: README.md sha256:1b41d8a7bee01230ff842a9d2dedf5ea0f50813850af3a9e86b7224ffdfd798a -->

@@ -25,12 +25,11 @@ kortopi が人の手を離れて動く場所は3つある。デプロイのと�
 ```sh
 export PGHOST=db.example.test PGDATABASE=app PGUSER=app_owner
 export PGPASSWORD="$APP_OWNER_PASSWORD"
-export PGOPTIONS='-c lock_timeout=10s'
-kortopi apply --dir data
+kortopi apply --dir data --lock-timeout 10s
 ```
 
 - apply は、宣言したテーブルを所有するロールか、[apply に要るもの](apply.ja.md#apply-に要るもの)を持つロールで実行する。スキーマごとに所有者のロールがあるなら、スキーマごとに1回、`--schema` を付けて apply を実行する（[kortopi apply](apply.ja.md#スキーマごとの-apply)）。
-- ロックのタイムアウトを設定する。設定しなければ、宣言したテーブルのロックをほかのセッションが持っている間、apply は際限なく待ち、デプロイもそれを待つ。設定すれば、apply はそう告げるエラーを出して止まり、何も変えない（[kortopi plan](plan.ja.md#接続の設定)）。
+- `--lock-timeout` で apply にロック待ちの上限を与える。与えなければ、宣言したテーブルや書く行のロックをほかのセッションが持っている間、apply は際限なく待ち、デプロイもそれを待つ。与えれば、apply はそう告げるエラーを出して止まり、何も変えない（[kortopi plan](plan.ja.md#ロックを待つとき)）。`PGOPTIONS` ではなくフラグを使う。トランザクションモードのコネクションプーラーの後ろでは `PGOPTIONS` がサーバーに届かず、実行は接続に失敗するか、上限なしに待つ（[接続の設定](plan.ja.md#接続の設定)）。
 - ジョブをキャンセルする実行役は、kortopi に SIGTERM か SIGINT を送る。コミットの前なら、kortopi は文のキャンセルをサーバーに求め、ロールバックし、5秒以内に終了コード 1 で終わる。最後の行は `kortopi: nothing was changed` である。セッションが終わったという応答がその間にサーバーからなかったときは、その前の行が、セッションを `pg_stat_activity` で見つけて終わらせる方法を伝える。コミットが始まっていれば、kortopi は応答を待つことを伝え、2度目のシグナルで結果の分からないメッセージとともに待つのをやめる。そのときは `kortopi plan` を実行する。それより早くプロセスを強制終了する実行役では、結果はサーバーが決める（[kortopi apply](apply.ja.md#apply-に割り込む)）。
 - 終了コード 1 は、apply が何も変えなかったことを示す。例外は、コミットの結果が分からないとエラーが告げる場合である。直したあとで、デプロイは apply をもう一度実行できる。
 - 削除の扱いは、パイプラインごとに決める。`--allow-delete` がなければ、apply はモード `sync` のテーブルが失うべき行を残し、`Not deleted: ...` の行でそう告げ、0 で終わる。`--allow-delete` があれば、`--max-delete`（既定は 100 行）の範囲でそれらを削除する。この上限は、削除する行と、外部キーがそれと一緒にすべての段で消すか変える行をすべて数える（[kortopi apply](apply.ja.md#削除の安全策)）。上限は、宣言の行だけでなく、パイプラインの削除がそれを参照するテーブルで消し、変える行も見て決める。行を残したデプロイを失敗にしたければ、apply のあとで `kortopi plan --exit-code` を実行する。
@@ -90,4 +89,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
 - スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除だけを示すか、何も示さない。
 
-<!-- i18n-source: automation.md sha256:189179e92fb461c0e70312d28c08914afc631d220a1742cfeb0dfb705b5f482c -->
+<!-- i18n-source: automation.md sha256:c6cd2a569a4a1977a336e3000195b7c0a3d72f1955dc0813f95129e562c1af83 -->

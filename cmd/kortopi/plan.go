@@ -20,7 +20,7 @@ const planOnlyFlags = "  --format <name>   text (the default), or sql: print the
 	"                    instead of showing it as waiting for the schema change\n"
 
 // planFlags lists the flags of plan, for its help.
-var planFlags = sourceFlags("plan") + planOnlyFlags + connectionFlags
+var planFlags = sourceFlags("plan") + planOnlyFlags + lockTimeoutFlag + connectionFlags
 
 // planUsage is the short help of plan, which follows an error in its flags.
 var planUsage = "usage: kortopi plan [flags]\n" +

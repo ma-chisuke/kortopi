@@ -42,14 +42,15 @@ func (Dialect) Open(ctx context.Context, opts dialect.Options) (dialect.Session,
 // every field as it is.
 func options(o dialect.Options) Options {
 	return Options{
-		Host:     o.Host,
-		Port:     o.Port,
-		User:     o.User,
-		Database: o.Database,
-		Dir:      o.Dir,
-		Apply:    o.Apply,
-		Export:   o.Export,
-		Wait:     o.Wait,
-		GiveUp:   o.GiveUp,
+		Host:        o.Host,
+		Port:        o.Port,
+		User:        o.User,
+		Database:    o.Database,
+		Dir:         o.Dir,
+		Apply:       o.Apply,
+		Export:      o.Export,
+		Wait:        o.Wait,
+		LockTimeout: o.LockTimeout,
+		GiveUp:      o.GiveUp,
 	}
 }

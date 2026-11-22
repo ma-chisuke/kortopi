@@ -39,6 +39,16 @@ func sourceFlags(command string) string {
 	return dirFlag + schemaFlag(command)
 }
 
+// lockTimeoutFlag is the help of --lock-timeout, which plan, apply, and
+// export share (ADR-0044).
+const lockTimeoutFlag = "  --lock-timeout <duration>\n" +
+	"                    stop when a statement waits longer than this for a lock\n" +
+	"                    that another session holds, such as 10s, 500ms, or\n" +
+	"                    1m30s (default: the lock_timeout of the session)\n"
+
+// maxLockTimeout is the longest --lock-timeout.
+const maxLockTimeout = 24 * time.Hour
+
 // connectionFlags is the help of the flags of the connection.
 const connectionFlags = "  --host <host>     the host of the database server\n" +
 	"  --port <port>     the port of the database server\n" +
@@ -61,6 +71,8 @@ type common struct {
 	dir     string
 	schemas []string
 	conn    connection
+	// lockTimeout is --lock-timeout, or 0 without it.
+	lockTimeout time.Duration
 }
 
 // connection holds the flags that override the connection settings of libpq.
@@ -75,10 +87,11 @@ type connection struct {
 }
 
 // open opens a session of d on the database that the flags of c name, for
-// what opts say, with the second interrupt of e.
+// what opts say, with the lock timeout of the flags, and the second
+// interrupt of e.
 func (c common) open(ctx context.Context, d dialect.Dialect, opts dialect.Options, e env) (dialect.Session, error) {
 	opts.Host, opts.Port, opts.User, opts.Database = c.conn.host, c.conn.port, c.conn.user, c.conn.dbname
-	opts.GiveUp = e.again
+	opts.LockTimeout, opts.GiveUp = c.lockTimeout, e.again
 	return d.Open(ctx, opts)
 }
 
@@ -110,6 +123,14 @@ func (c *common) define(fs *flag.FlagSet) {
 	})
 	fs.Func("user", "", nameOnly(&c.conn.user, "the name of the user"))
 	fs.Func("dbname", "", nameOnly(&c.conn.dbname, "the name of the database"))
+	fs.Func("lock-timeout", "", func(s string) error {
+		d, err := time.ParseDuration(s)
+		if err != nil || d < time.Millisecond || d > maxLockTimeout {
+			return errors.New("give a duration from 1ms to 24h, such as 10s, 500ms, or 1m30s")
+		}
+		c.lockTimeout = d
+		return nil
+	})
 }
 
 // nameOnly returns the function of a flag of the connection that takes a

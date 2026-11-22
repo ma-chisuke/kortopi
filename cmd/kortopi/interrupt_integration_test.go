@@ -236,3 +236,86 @@ func TestInterruptedCommitCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestLockTimeoutCommand gives each command --lock-timeout 200ms, and the
+// session a lock_timeout of 20s of its own in PGOPTIONS. The run stops after
+// the time of the flag in each phase where it waits for a lock that another
+// session holds, says so, and names the flag (ADR-0044). It sets the
+// environment, so it does not run in parallel with other tests.
+func TestLockTimeoutCommand(t *testing.T) {
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			tableLock := "LOCK TABLE m.status IN ACCESS EXCLUSIVE MODE"
+			for _, tt := range []struct {
+				name     string
+				lock     string
+				schema   string
+				command  string
+				errParts []string
+			}{
+				{
+					name: "the reads of a plan", lock: tableLock, command: "plan",
+					errParts: []string{"another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as --lock-timeout 200ms allows: " +
+						"nothing was changed: run the plan again once that session has released the lock\n"},
+				},
+				{
+					name: "the reads of an export", lock: tableLock, command: "export",
+					errParts: []string{"another session holds a lock on a table or on rows that the export needs, and the export waited for it as long as --lock-timeout 200ms allows: " +
+						"nothing was changed: run the export again once that session has released the lock\n"},
+				},
+				{
+					name: "the reads of an apply", lock: tableLock, command: "apply",
+					errParts: []string{"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as --lock-timeout 200ms allows: " +
+						"run the apply again once that session has released the lock\nkortopi: nothing was changed\n"},
+				},
+				{
+					name: "the wait for another apply", lock: fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", kortopiLock), command: "apply",
+					errParts: []string{"(SQLSTATE 55P03): the other apply held the lock of kortopi longer than --lock-timeout 200ms allows: run the apply again once the other apply has ended, or", "kortopi: nothing was changed\n"},
+				},
+				{
+					name: "the writes", lock: "SELECT 1 FROM m.status WHERE code = 'paid' FOR UPDATE", command: "apply",
+					errParts: []string{"kortopi: update table m.status: canceling statement due to lock timeout: another session holds a lock on a table or on rows that the apply needs, " +
+						"and the apply waited for it as long as --lock-timeout 200ms allows: run the apply again once that session has released the lock\nkortopi: nothing was changed\n"},
+				},
+				{
+					name: "the commit", lock: "SELECT pg_advisory_xact_lock(4242)", schema: atCommitTrigger, command: "apply",
+					errParts: []string{"kortopi: commit: canceling statement due to lock timeout: another session holds a lock on a table or on rows that the apply needs, " +
+						"and the apply waited for it as long as --lock-timeout 200ms allows: run the apply again once that session has released the lock\nkortopi: nothing was changed\n"},
+				},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					db := srv.Database(t)
+					db.Exec(t, statusSchema+tt.schema)
+					e := connect(t, db)
+					t.Setenv("PGOPTIONS", "-c lock_timeout=20s")
+					dir := writeFiles(t, map[string]string{"m/status.csv": interruptFiles["m/status.csv"]})
+					args := []string{tt.command, "--dir", dir, "--lock-timeout", "200ms"}
+					if tt.command == "export" {
+						args = []string{"export", "--dir", t.TempDir(), "--table", "m.status", "--lock-timeout", "200ms"}
+					}
+					holder := lockHolder(t, db, tt.lock)
+					start := time.Now()
+					code, _, stderr := e.command(t, args...)
+					// The rows can be read once the lock is free.
+					if err := holder.Rollback(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					if took := time.Since(start); took > 10*time.Second {
+						t.Errorf("kortopi %s took %v, want it to stop after --lock-timeout 200ms, not after the lock_timeout of the session", tt.command, took)
+					}
+					if code != exitError {
+						t.Errorf("kortopi %s exit status %d, want %d; stderr:\n%s", tt.command, code, exitError, stderr)
+					}
+					for _, p := range tt.errParts {
+						if !strings.Contains(stderr, p) {
+							t.Errorf("kortopi %s stderr:\n%s\nwant it to hold %q", tt.command, stderr, p)
+						}
+					}
+					if got := db.Query(t, "SELECT string_agg(code || '=' || label, ' ' ORDER BY code) FROM m.status"); got[0][0] != "open=Open paid=Paid" {
+						t.Errorf("rows after the lock timeout: %v", got)
+					}
+				})
+			}
+		})
+	}
+}

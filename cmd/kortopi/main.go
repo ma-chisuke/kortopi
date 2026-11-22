@@ -38,6 +38,7 @@ var usage = "kortopi manages the rows of PostgreSQL master tables declaratively.
 	"\n" +
 	"flags of plan, apply, and export:\n" +
 	usageDirFlag +
+	lockTimeoutFlag +
 	connectionFlags +
 	"\n" +
 	"flags of plan and apply:\n" +

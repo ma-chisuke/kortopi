@@ -272,6 +272,8 @@ func (s *Session) Commit(ctx context.Context) (err error) {
 		s.guard.committing.Store(true)
 	}
 	s.commitSent = true
+	// A deferred trigger or constraint can wait for a lock at the commit.
+	defer s.explainWait(ctx, &err)
 	// The transaction commits with commitSQL, which sets the settings of
 	// the session first: the deferred constraints and triggers of the
 	// writes run with them, as the writes do (ADR-0037).
