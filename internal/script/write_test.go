@@ -75,6 +75,15 @@ func (f *fakeDB) WriteStatements(_ context.Context, w io.Writer, step Step) erro
 				return err
 			}
 		}
+	case Sequences:
+		for _, s := range step.Table.Sequences {
+			if !s.Called() {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "%sMOVE SEQUENCE %s BEYOND %s.%s;\n", prefix, s.Name, step.Table.Name, s.Column); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -108,6 +117,12 @@ func table(name declaration.TableName, mode config.Mode, d plan.TableDiff) plan.
 // withEffect returns t with the steps as the effect of its deletions.
 func withEffect(t plan.Table, steps ...plan.Step) plan.Table {
 	t.Effect = plan.Effect{Steps: steps}
+	return t
+}
+
+// withSequences returns t with the sequences.
+func withSequences(t plan.Table, sequences ...plan.Sequence) plan.Table {
+	t.Sequences = sequences
 	return t
 }
 
@@ -252,6 +267,23 @@ func TestWrite(t *testing.T) {
 					config.InsertValue{Column: "created_at", Value: "now"}, config.InsertValue{Column: "note", Value: "line\nbreak"}),
 				withOnInsert(table(regions, config.ModeUpsert, plan.TableDiff{Updates: updates("1")}),
 					config.InsertValue{Column: "created_at", Value: "now"}),
+			}},
+			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			// The sequences that an apply would move, or whose position the
+			// plan could not read, move after every other statement, the
+			// deletions too; one that cycles gets no statement (ADR-0045).
+			name: "sequences",
+			plan: &plan.Plan{Tables: []plan.Table{
+				withSequences(table(cities, config.ModeSync, plan.TableDiff{Inserts: inserts("10"), Deletes: deletes("3")}),
+					plan.Sequence{Column: "id", Name: plan.SequenceName{Schema: "geo", Name: "cities_id_seq"}, Next: "4", Goal: "11"},
+					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "geo", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"}),
+				withSequences(table(regions, config.ModeUpsert, plan.TableDiff{Updates: updates("1")}),
+					plan.Sequence{Column: "name", Name: plan.SequenceName{Schema: "geo", Name: "names"}, Stays: "the role may not read the sequence"}),
+				withSequences(table(plans, config.ModeUpsert, plan.TableDiff{Inserts: inserts("1")}),
+					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "app", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"}),
 			}},
 			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
 			header: Header{Dir: "data", Database: "shop"},

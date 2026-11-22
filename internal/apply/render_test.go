@@ -33,6 +33,27 @@ func codes(texts ...string) []plan.Value {
 	return vs
 }
 
+// feesTable and taxRatesTable insert rows with explicit IDs, whose
+// sequences an apply moves, or leaves, beyond them (ADR-0045).
+var (
+	feesTable = plan.Table{
+		Name: tn("billing.fees"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"code"},
+		Diff: plan.TableDiff{Inserts: []plan.Row{{Key: codes("3"), Values: codes("express")}, {Key: codes("4"), Values: codes("gift")}}},
+		Sequences: []plan.Sequence{
+			{Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "fees_id_seq"}, Next: "3", Goal: "5"},
+			{Column: "code", Name: plan.SequenceName{Schema: "billing", Name: "fee_codes"}, Next: "7", Goal: "8"},
+		},
+	}
+	taxRatesTable = plan.Table{
+		Name: tn("billing.tax_rates"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+		Diff: plan.TableDiff{Inserts: []plan.Row{{Key: codes("3"), Values: codes("zero")}}},
+		Sequences: []plan.Sequence{{
+			Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "tax_rates_id_seq"}, Next: "3", Goal: "4",
+			Stays: "the role may not update the sequence: grant the role UPDATE on sequence billing.tax_rates_id_seq",
+		}},
+	}
+)
+
 var (
 	plansTable = withEffect(syncTable("catalog.plans", plan.TableDiff{
 		Inserts: []plan.Row{{Key: codes("team"), Values: codes("Team")}},
@@ -82,6 +103,19 @@ func TestRenderSummary(t *testing.T) {
 		{name: "committed_without_rows", result: &Result{
 			Plan: &plan.Plan{Tables: []plan.Table{renamed}}, Committed: true, SkippedDeletes: 1,
 			Uneven: []Uneven{{Table: tn("catalog.plans"), Wrote: 0, Planned: 2}},
+		}},
+		// Each sequence of the plan gets a line after the commit: where the
+		// apply moved it, or why it left it (ADR-0045).
+		{name: "sequences", result: &Result{
+			Plan: &plan.Plan{Tables: []plan.Table{feesTable, taxRatesTable}}, Inserted: 3, Committed: true,
+			Sequences: []SequenceMove{
+				{Table: tn("billing.fees"), Sequence: feesTable.Sequences[0]},
+				{Table: tn("billing.fees"), Sequence: plan.Sequence{
+					Column: "code", Name: plan.SequenceName{Schema: "billing", Name: "fee_codes"}, Next: "9",
+					Stays: "it gives values beyond those of the column already, as another session took values from it after the plan",
+				}},
+				{Table: tn("billing.tax_rates"), Sequence: taxRatesTable.Sequences[0]},
+			},
 		}},
 	}
 	for _, tt := range tests {

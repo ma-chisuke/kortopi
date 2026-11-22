@@ -28,12 +28,14 @@ import (
 // table; Effects, through plan.Build; PrepareDeletes, before any write;
 // Insert and Update; Effects again, after the inserts and updates, whose
 // result the apply compares with the first; Delete for every table with rows
-// to delete; CheckEffect; DiffAgain for every table; and Commit. An apply
-// without deletions leaves out PrepareDeletes, the second Effects, Delete,
-// and CheckEffect. When its plan has rows to delete, which it leaves in
-// place, it calls PrepareLeftOut before any write, and CountLeftOut after
-// DiffAgain. An apply that writes nothing calls none of the methods after
-// Diff and Effects (ADR-0042).
+// to delete; CheckEffect; DiffAgain for every table; MoveSequences; and
+// Commit. An apply without deletions leaves out PrepareDeletes, the second
+// Effects, Delete, and CheckEffect. When its plan has rows to delete, which
+// it leaves in place, it calls PrepareLeftOut before any write, and
+// CountLeftOut after DiffAgain. It calls MoveSequences for each table whose
+// plan shows a sequence to move, last before Commit (ADR-0045). An apply
+// that writes nothing calls none of the methods after Diff, Sequences, and
+// Effects (ADR-0042).
 type Database interface {
 	plan.Database
 
@@ -74,7 +76,8 @@ type Database interface {
 	// partition that another transaction added during the apply, a trigger,
 	// or a rule of a table that the deletions reach could make them do. An
 	// error stops the apply, which then rolls back. Nothing that changes rows
-	// runs between it and Commit.
+	// runs between it and Commit: DiffAgain and CountLeftOut read, and
+	// MoveSequences moves sequences alone.
 	CheckEffect(ctx context.Context) error
 
 	// DiffAgain compares the declared rows that Diff loaded for the table of
@@ -101,6 +104,20 @@ type Database interface {
 	// and another inserted: the apply checks such a table by the number of
 	// its rows that the declaration lacks alone.
 	CountLeftOut(ctx context.Context) (map[declaration.TableName]Written, error)
+
+	// MoveSequences moves the sequences of a table that the plan shows an
+	// apply to move (plan.Sequence.Moves), each until its next value lies
+	// beyond the values of its column as the transaction sees them after its
+	// writes, and never back (ADR-0045). The apply calls it last before
+	// Commit, after the comparison before the commit, because a move is not
+	// rolled back with the transaction. It returns each sequence with where
+	// it stood when the move came (Next) and where it stands after it (Goal),
+	// or with why it stays (Stays): another session moved it beyond the
+	// values already, or the statement that moves it failed, which leaves
+	// the rows to commit all the same. Another error, such as an interrupt
+	// or a connection that broke, stops the apply, and the sequences that it
+	// returns with it moved before the error.
+	MoveSequences(ctx context.Context, table declaration.TableName, sequences []plan.Sequence) ([]plan.Sequence, error)
 
 	// Commit makes the changes lasting. Without it, closing the session
 	// leaves the database as it was. When the database rejects the commit,
@@ -166,8 +183,39 @@ type Result struct {
 	// values already (ADR-0042). Any other count that differs from the plan
 	// stops the apply (CheckCount).
 	Uneven []Uneven
+	// Sequences holds each sequence that the plan shows, in the order of
+	// the plan, and what the apply did with it: moved it, or left it where
+	// it was, with the reason (ADR-0045).
+	Sequences []SequenceMove
 	// Committed is true when the apply committed its transaction.
 	Committed bool
+}
+
+// SequenceMove is a sequence of a table of the plan of an apply. After a
+// move, Next holds where the sequence stood when the move came, and Goal
+// where it stands after it. A sequence that the apply left where it was
+// holds the reason in Stays.
+type SequenceMove struct {
+	Table declaration.TableName
+	plan.Sequence
+}
+
+// SequencesMovedError is the error of an apply that moved sequences and
+// then failed: an interrupt or an error after the moves, or a commit that
+// the database rejected. Its rows are not written, but the sequences stay
+// where the apply moved them, because a move is not rolled back with the
+// transaction: they only skip values (ADR-0045).
+type SequencesMovedError struct {
+	Err   error
+	Moved []SequenceMove
+}
+
+func (e *SequencesMovedError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *SequencesMovedError) Unwrap() error {
+	return e.Err
 }
 
 // Uneven is an update of an apply whose pick found fewer rows that still

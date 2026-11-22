@@ -45,6 +45,12 @@ type fakeSession struct {
 	after func(call string)
 	// exportable are the tables that Tables returns.
 	exportable []declaration.TableName
+	// sequences holds what Sequences returns for the tables that it names,
+	// whose column id then owns a sequence, and moved what MoveSequences
+	// returns; without it, MoveSequences moves each sequence as the plan
+	// shows.
+	sequences map[declaration.TableName][]plan.Sequence
+	moved     map[declaration.TableName][]plan.Sequence
 
 	described []declaration.TableName
 	// calls holds every call after Describe, such as "Diff app.plans".
@@ -70,13 +76,33 @@ func (s *fakeSession) Describe(_ context.Context, names []declaration.TableName)
 			infos[n] = plan.TableInfo{}
 			continue
 		}
+		_, owns := s.sequences[n]
 		infos[n] = plan.TableInfo{
 			Exists:     true,
-			Columns:    []plan.ColumnInfo{{Name: "id", NotNull: true}, {Name: "name"}},
+			Columns:    []plan.ColumnInfo{{Name: "id", NotNull: true, Sequence: owns, HasDefault: owns}, {Name: "name"}},
 			PrimaryKey: []string{"id"},
 		}
 	}
 	return infos, nil
+}
+
+// Sequences returns what sequences holds for the table. It records no call:
+// the tests of plan.Build show when it is called.
+func (s *fakeSession) Sequences(_ context.Context, table declaration.TableName, _ []string) ([]plan.Sequence, error) {
+	return s.sequences[table], nil
+}
+
+// MoveSequences records the call, and returns what moved holds for the
+// table, or the sequences as moved. With a failure, it returns the first
+// sequence as moved, as a database whose second move failed.
+func (s *fakeSession) MoveSequences(_ context.Context, table declaration.TableName, sequences []plan.Sequence) ([]plan.Sequence, error) {
+	if err := s.record("MoveSequences " + table.String()); err != nil {
+		return sequences[:1], err
+	}
+	if m, ok := s.moved[table]; ok {
+		return m, nil
+	}
+	return sequences, nil
 }
 
 // Diff returns the difference of the table, without the kinds that the mode

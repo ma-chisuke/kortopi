@@ -87,8 +87,10 @@ func (d *TableDiff) changes() bool {
 // match key, a line for each pending column, a line of the values of
 // on_insert when the table has rows to insert, a line for each row to insert
 // (+), update (~), and delete (-), the counts of the table, and, after them,
-// the lines of EffectLines: what the deletions of the table also do through
-// foreign keys. A table that the database does not have yet gets one line.
+// the lines of SequenceLines, the sequences that an apply would move beyond
+// the values that it writes, and the lines of EffectLines: what the
+// deletions of the table also do through foreign keys. A table that the
+// database does not have yet gets one line.
 // Tables without changes get no block, and the summary at the end counts
 // them, with the lines of EffectSummary. An empty plan prints the lines of
 // EmptyLines.
@@ -203,6 +205,9 @@ func writeTable(b *strings.Builder, t *Table) error {
 		counts = append(counts, fmt.Sprintf("%d to delete", len(t.Diff.Deletes)))
 	}
 	fmt.Fprintf(b, "  %s\n", strings.Join(counts, ", "))
+	for _, line := range SequenceLines(t) {
+		b.WriteString("  " + line + "\n")
+	}
 	for _, line := range EffectLines(t) {
 		b.WriteString("  " + line + "\n")
 	}

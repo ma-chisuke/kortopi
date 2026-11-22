@@ -47,6 +47,9 @@ type Header struct {
 //     left out of the statements of its table, as in a plan.
 //   - The INSERT of a table with values of on_insert follows a comment that
 //     names them, and says that PostgreSQL reads them when the script runs.
+//   - Last come the statements that move the sequences of the columns that
+//     the script writes explicit values into, beyond those values, as an
+//     apply moves them last before its commit (ADR-0045).
 //
 // An empty plan gives one comment line, and a second one that names the
 // tables of mode insert, whose values were not compared, when the plan has
@@ -160,8 +163,48 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 			}
 		}
 	}
+
+	if err := writeSequences(ctx, &b, p, db); err != nil {
+		return err
+	}
 	_, err = w.Write(b.Bytes())
 	return err
+}
+
+// writeSequences writes the statements that move the sequences of the
+// columns that the script writes explicit values into, after every other
+// statement, as an apply moves them last before its commit (ADR-0045): a
+// statement for each sequence whose position the plan found calling for a
+// move, or could not read. Each statement reads the sequence and the column
+// when it runs, and does nothing to a sequence that gives values beyond the
+// column already, so it moves no sequence back when the script runs later
+// than the plan.
+func writeSequences(ctx context.Context, b *bytes.Buffer, p *plan.Plan, db Database) error {
+	var tables []*plan.Table
+	for i := range p.Tables {
+		if slices.ContainsFunc(p.Tables[i].Sequences, func(s plan.Sequence) bool { return s.Called() }) {
+			tables = append(tables, &p.Tables[i])
+		}
+	}
+	if len(tables) == 0 {
+		return nil
+	}
+	b.WriteString("\n")
+	comment(b, "The sequences of the columns that the statements above write values into, moved as an apply moves them, last before its commit.")
+	comment(b, "Each statement reads the largest value of its column when it runs, or the smallest for a sequence that counts down, then its")
+	comment(b, "sequence, and takes values from the sequence with nextval until the next one lies beyond them, or, to move it further than")
+	comment(b, "100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not rolled")
+	comment(b, "back with the transaction. It needs SELECT and UPDATE on the sequence; without them, it fails, and so does the script.")
+	for _, t := range tables {
+		b.WriteString("\n")
+		for _, line := range plan.SequenceLines(t) {
+			comment(b, plan.FormatTable(t.Name)+": "+line)
+		}
+		if err := db.WriteStatements(ctx, b, Step{Kind: Sequences, Table: *t}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // insertsOnInsert reports whether the script writes values of on_insert: a

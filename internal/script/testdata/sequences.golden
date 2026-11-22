@@ -1,0 +1,34 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 2 to insert, 1 to update, 1 to delete in 3 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- app.plans: 1 to insert
+INSERT INTO app.plans (1, n1);
+
+-- geo.regions: 1 to update
+UPDATE geo.regions SET 1 columns WHERE (1);
+
+-- geo.cities: 1 to insert
+INSERT INTO geo.cities (10, n10);
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- geo.cities: 1 to delete
+-- DELETE FROM geo.cities WHERE (3);
+
+-- The sequences of the columns that the statements above write values into, moved as an apply moves them, last before its commit.
+-- Each statement reads the largest value of its column when it runs, or the smallest for a sequence that counts down, then its
+-- sequence, and takes values from the sequence with nextval until the next one lies beyond them, or, to move it further than
+-- 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not rolled
+-- back with the transaction. It needs SELECT and UPDATE on the sequence; without them, it fails, and so does the script.
+
+-- geo.cities: sequence geo.cities_id_seq of column id: next value 4 -> 11
+-- geo.cities: sequence geo.ranks of column rank: next value 2, not moved: the sequence cycles
+MOVE SEQUENCE geo.cities_id_seq BEYOND geo.cities.id;
+
+-- geo.regions: sequence geo.names of column name: not moved: the role may not read the sequence
+MOVE SEQUENCE geo.names BEYOND geo.regions.name;

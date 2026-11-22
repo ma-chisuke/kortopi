@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/dialect"
@@ -38,7 +39,9 @@ var applyHelp = "usage: kortopi apply [flags]\n" +
 	"and delete the rows that a plan shows, in one transaction. The plan is\n" +
 	"printed before the first change, and what was written after the commit.\n" +
 	"When any check or statement fails, nothing is changed. Rows are deleted\n" +
-	"only in tables of mode sync, and only with --allow-delete.\n" +
+	"only in tables of mode sync, and only with --allow-delete. Last before the\n" +
+	"commit, the sequence of a column that the apply writes values into moves\n" +
+	"beyond them; a commit that fails then leaves it moved.\n" +
 	"\n" +
 	"flags:\n" +
 	applyFlags +
@@ -93,7 +96,7 @@ func runApply(ctx context.Context, args []string, e env) int {
 		} else {
 			printError(e.stderr, interrupted(ctx, err, errApplyInterrupted))
 		}
-		printError(e.stderr, errNothingChanged)
+		printError(e.stderr, nothingChanged(err))
 		return exitError
 	}
 	if err := apply.RenderSummary(e.stdout, r); err != nil {
@@ -110,6 +113,23 @@ func runApply(ctx context.Context, args []string, e env) int {
 		printError(e.stderr, fmt.Errorf("the apply committed its changes, but closing the connection failed: %w", closeErr))
 	}
 	return exitOK
+}
+
+// nothingChanged returns the last line of a failed apply: errNothingChanged,
+// or, when the apply had moved sequences before it failed, a line that
+// names them: a rollback does not move a sequence back, so they stay where
+// the apply moved them, and only skip values (ADR-0045).
+func nothingChanged(err error) error {
+	var moved *apply.SequencesMovedError
+	if !errors.As(err, &moved) || len(moved.Moved) == 0 {
+		return errNothingChanged
+	}
+	names := make([]string, len(moved.Moved))
+	for i, m := range moved.Moved {
+		names[i] = plan.FormatSequence(m.Name) + " to next value " + m.Goal
+	}
+	return fmt.Errorf("%w but the sequences that the apply had moved before its commit, which a rollback does not move back, so they only skip values: %s",
+		errNothingChanged, strings.Join(names, ", "))
 }
 
 // parseApply parses the flags of apply.

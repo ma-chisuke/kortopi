@@ -49,6 +49,11 @@ const (
 	Update
 	// Delete removes the rows of Step.Table.Diff.Deletes.
 	Delete
+	// Sequences moves the sequences of Step.Table.Sequences whose position
+	// calls for a move, or that the plan could not read
+	// (plan.Sequence.Called), each beyond the values of its column when the
+	// script runs, and never back, as an apply moves them (ADR-0045).
+	Sequences
 )
 
 // Step is one group of statements of a script: one kind for one table, or

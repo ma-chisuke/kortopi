@@ -109,6 +109,12 @@ func (s *Session) statements(ctx context.Context, step script.Step) ([]string, e
 			return nil, err
 		}
 		return s.deleteStatement(meta, step.Table, onlyTable(meta, step.Table.Name))
+	case script.Sequences:
+		meta, err := s.scriptTable(ctx, step.Table.Name)
+		if err != nil {
+			return nil, err
+		}
+		return sequenceStatements(meta, step.Table)
 	default:
 		return nil, fmt.Errorf("table %s: unknown kind of step %d", step.Table.Name, step.Kind)
 	}

@@ -14,7 +14,8 @@ import (
 // also deleted and changed through foreign keys (ADR-0039). When updates
 // found fewer rows to update than the plan shows, a line says which, and that
 // the other writes of the apply had done their work already, as the check
-// before the commit confirmed (ADR-0042). When
+// before the commit confirmed (ADR-0042). A line follows for each sequence
+// of the plan: where the apply moved it, or why it left it (ADR-0045). When
 // deletions were left out, a line counts them, with what they would also
 // do, and names the flag that allows them (ADR-0018); when they were all that
 // differed, that line stands alone and says that nothing was written. An
@@ -39,6 +40,10 @@ func RenderSummary(w io.Writer, r *Result) error {
 		}
 		for _, line := range unevenLines(r.Uneven) {
 			b.WriteString(line + "\n")
+		}
+		for _, s := range r.Sequences {
+			fmt.Fprintf(&b, "Sequence %s of %s (%s): %s.\n",
+				plan.FormatSequence(s.Name), plan.FormatTable(s.Table), plan.FormatName(s.Column), plan.SequenceText(&s.Sequence))
 		}
 	}
 	if r.SkippedDeletes > 0 {

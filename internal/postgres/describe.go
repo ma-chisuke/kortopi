@@ -93,6 +93,9 @@ type columnMeta struct {
 	selectable bool
 	insertable bool
 	updatable  bool
+	// sequence is the sequence that the column owns and takes its values
+	// from, or nil (ownedSequenceSQL).
+	sequence *ownedSequence
 }
 
 // info returns what the plan needs to know about the table.
@@ -106,6 +109,7 @@ func (m *tableMeta) info() plan.TableInfo {
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
 			Name: c.name, NotNull: c.notNull, Generated: c.generated, IdentityAlways: c.identityAlways, HasDefault: c.hasDefault,
+			Sequence: c.sequence != nil,
 		})
 	}
 	return info
@@ -276,7 +280,8 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 				JOIN pg_catalog.pg_namespace AS partns ON partns.oid = pc.relnamespace
 				WHERE c.relkind = 'p' AND pt.relid <> c.oid
 				ORDER BY pt.level, partns.nspname COLLATE pg_catalog."C", pc.relname COLLATE pg_catalog."C"),
-			c.relhasrules
+			c.relhasrules,
+			`+ownedSequenceSQL+`
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 		JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 		JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
@@ -300,8 +305,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var collatable *bool
 		var typ *uint32
 		var partitionOf, partitions [][]string
+		var sequence []string
 		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
-			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions, &hasRules); err != nil {
+			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions, &hasRules, &sequence); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
@@ -335,6 +341,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			if len(typeName) == 2 {
 				col.typeName = quoteIdent(typeName[0]) + "." + quoteIdent(typeName[1])
 			}
+			col.sequence = ownedSequenceOf(sequence)
 			m.columns = append(m.columns, col)
 		}
 	}
