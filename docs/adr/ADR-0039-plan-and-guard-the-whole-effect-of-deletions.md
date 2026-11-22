@@ -45,6 +45,7 @@ The rules are as follows.
 The effect:
 
 - For the rows to delete of each table, kortopi follows every foreign key that references them: from any table in any schema, from the table itself, to one of its partitions, or to a partitioned table above it. It then follows, in the same way, the foreign keys that reference the rows that a cascade deletes, level by level, until a level deletes no new row. A table that references itself and a cycle of cascades end, because each row is reached once.
+- A foreign key `NOT ENFORCED`, which PostgreSQL 18 allows, has no triggers: PostgreSQL neither runs its action nor checks it, so a deletion does nothing through it, and the walk leaves it out. The query names the column `conenforced` on PostgreSQL 18 and later alone, which have it.
 - What the action `ON DELETE` of a foreign key does to the rows that reference a deleted row:
   - `CASCADE` deletes them, and the walk follows the foreign keys that reference them.
   - `SET NULL` and `SET DEFAULT` change them, in the columns of the key or in the columns that the list of PostgreSQL 15 and later names. The walk does not follow further from a changed row.
@@ -196,6 +197,7 @@ What this refines:
   - `TestApplyEffectAgainAfterTheWrites`: the second walk;
   - `TestApplyEffectAfterConcurrentChanges`: through a second connection, a referencing row that another transaction inserts, deletes, or points at another row, a foreign key and a partition that it adds; and a trigger that keeps a row, a rule that PostgreSQL refuses, and a trigger that deletes rows of another table;
   - `TestEffectsOnLargeTables`: the cost on large tables, on the newest version alone;
+  - `TestEffectsLeaveOutKeysNotEnforced`: keys `NOT ENFORCED` under `CASCADE` and `NO ACTION`, on PostgreSQL 18;
   - `TestApplyNeedsTrackCounts`: `track_counts` off in the options of the session and in the settings of the role;
   - `TestEffectsOfForeignKeysOfIntervals`: a foreign key over intervals that equal each other with different texts, which fails when the walk compares the text;
   - `TestApplyWhenRowLevelSecurityComesToApply` of ADR-0037, which now follows the foreign keys before its deletion.

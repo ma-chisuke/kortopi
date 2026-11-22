@@ -381,6 +381,7 @@ Through foreign keys, the deletions also delete 52001 rows.
 - カスケードが消す行も、続けてたどる。これはすべての段で続き、自分自身を参照するテーブルや循環もたどる。n+1 段目の行は、それが参照するテーブルの行を消す最初の n 段目の行の下に、2文字深く字下げして置く。そして、それらの行のどれかを参照する行を数える。n 段目の別の行が消した行を参照する行も含む。
 - `SET NULL` と `SET DEFAULT` の行は、設定する列を挙げる。PostgreSQL 15 以降の列の一覧が挙げる列も同じである。変わる行から先はたどらない。
 - どの外部キーもたどる。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでもたどる。テーブルの1つのパーティションを指すキーも、テーブルの上にあるパーティションテーブルを指すキーも同じである。件数は、照合キーではなく、外部キーの列で、そのキー自身の演算子と照合順序を使って結び付ける。参照しているテーブルが宣言したテーブル自身・そのパーティション・その上にあるパーティションテーブルのどれかなら、その行のうち宣言したテーブルに属する行を、宣言したテーブルの行とみなす。そのため、外部キーをパーティションテーブルに定義してそのパーティションを宣言したときも、その逆のときも、宣言した行を宣言した行として数える。
+- PostgreSQL 18 が許す `NOT ENFORCED` の外部キーは、削除のときに何もしない。PostgreSQL はその動作も検査も働かせないので、まとまりはそれを除く。
 - 計画が自分で削除する行は数えない。計画が削除の前に別の行を指すように変える行も数えない。apply は削除より先に挿入と更新をするからである。上の例では、`m.plan_feature` の行が `ON DELETE CASCADE` で行 `legacy` を参照しているが、計画がそれらを自分で削除するので、削除する行として1回だけ数える。
 - どの行も1回だけ数える。カスケードが消す行は、変わる行にも、削除を妨げる行にも数えない。2つの外部キーがたどり着く行は、最も浅い段の、最初の外部キーのもとで数える。2つのテーブルの削除がたどり着く行は、先に来るテーブルのものとして数える。
 - 件数に行を足さない外部キーは除く。それを通じて参照する行がないとき、参照している行を計画が自分で削除するか別の行を指すように変えるとき、それを通じて参照する行をすべて前の行が数えたときである。そのため、消える行を参照する行があっても、その外部キーがまとまりにないことがある。
@@ -639,4 +640,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:ae95c70d1b0c670fa2e654ada4b794e6710c3edd154e9c69412b0bf1c4f731fe -->
+<!-- i18n-source: plan.md sha256:1d24321aae77afd481a67be4e140ac677a3e280186de6606c25f81b18aa6dd9a -->

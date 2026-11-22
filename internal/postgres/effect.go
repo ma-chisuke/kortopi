@@ -734,6 +734,22 @@ func (w *walk) targets(ctx context.Context, i, lv int) ([]uint32, error) {
 	return targets, nil
 }
 
+// enforcedSince is the first major version of PostgreSQL whose foreign keys
+// can be NOT ENFORCED.
+const enforcedSince = 18
+
+// enforced returns the condition of the walk on a foreign key co of the
+// catalogs that PostgreSQL enforces it: a key NOT ENFORCED has no triggers,
+// so PostgreSQL neither runs its action nor checks it, and a deletion does
+// nothing through it. Servers before enforcedSince have no such keys, and no
+// column conenforced.
+func (w *walk) enforced() string {
+	if w.s.major < enforcedSince {
+		return ""
+	}
+	return " AND co.conenforced"
+}
+
 // onUpdate returns a foreign key that references a column that e sets, and
 // its referencing table, or nothing. Its action ON UPDATE would follow the
 // change, which the walk does not count.
@@ -744,7 +760,7 @@ func (w *walk) onUpdate(ctx context.Context, e edge) (string, declaration.TableN
 		FROM pg_catalog.pg_constraint AS co
 		JOIN pg_catalog.pg_class AS r ON r.oid = co.conrelid
 		JOIN pg_catalog.pg_namespace AS n ON n.oid = r.relnamespace
-		WHERE co.contype = 'f' AND co.conparentid = 0
+		WHERE co.contype = 'f' AND co.conparentid = 0`+w.enforced()+`
 			AND co.confrelid IN (SELECT $1::pg_catalog.oid
 				UNION SELECT p.relid FROM pg_catalog.pg_partition_tree($1::pg_catalog.oid::pg_catalog.regclass) AS p
 				UNION SELECT a.relid FROM pg_catalog.pg_partition_ancestors($1::pg_catalog.oid::pg_catalog.regclass) AS a)
@@ -826,7 +842,7 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 		JOIN pg_catalog.pg_namespace AS n ON n.oid = r.relnamespace
 		JOIN pg_catalog.pg_class AS t ON t.oid = co.confrelid
 		JOIN pg_catalog.pg_namespace AS tn ON tn.oid = t.relnamespace
-		WHERE co.contype = 'f' AND co.conparentid = 0 AND co.confrelid IN (SELECT relid FROM target)
+		WHERE co.contype = 'f' AND co.conparentid = 0`+w.enforced()+` AND co.confrelid IN (SELECT relid FROM target)
 		ORDER BY n.nspname COLLATE pg_catalog."C", r.relname COLLATE pg_catalog."C", co.conname COLLATE pg_catalog."C"`, targets)
 	if err != nil {
 		return nil, fmt.Errorf("read the foreign keys that reference the rows to delete: %w", err)

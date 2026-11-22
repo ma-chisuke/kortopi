@@ -45,6 +45,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 削除の波及：
 
 - kortopi は、テーブルごとに、その削除する行を参照するすべての外部キーをたどる。どのスキーマのどのテーブルからでも、そのテーブル自身からでもたどる。そのテーブルのパーティションを指すキーも、テーブルの上にあるパーティションテーブルを指すキーも同じである。続けて、カスケードが消す行を参照する外部キーを、同じように1段ずつたどる。新しい行を消さない段に着いたら終わる。どの行にも1回しかたどり着かないので、自分自身を参照するテーブルやカスケードの循環でも、たどる処理は終わる。
+- PostgreSQL 18 が許す `NOT ENFORCED` の外部キーには、トリガーがない。PostgreSQL はその動作も検査も働かせないので、削除はそれを通じて何もせず、たどる処理はそれを除く。問い合わせが列 `conenforced` を挙げるのは、その列を持つ PostgreSQL 18 以降だけである。
 - 外部キーの `ON DELETE` の動作は、消える行を参照する行に、次のことをする。
   - `CASCADE` はそれらを消す。たどる処理は、それらを参照する外部キーへ続く。
   - `SET NULL` と `SET DEFAULT` は、キーの列か、PostgreSQL 15 以降の列の一覧が挙げる列を設定して、それらを変える。変わる行から先はたどらない。
@@ -196,6 +197,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
   - `TestApplyEffectAgainAfterTheWrites`：2回目のたどる処理。
   - `TestApplyEffectAfterConcurrentChanges`：2つ目の接続から、別のトランザクションが参照している行を挿入・削除するか別の行を指すように変え、外部キーとパーティションを足す。行を残すトリガー、PostgreSQL が拒むルール、ほかのテーブルの行を消すトリガーも使う。
   - `TestEffectsOnLargeTables`：大きなテーブルでの費用。最新のバージョンだけで測る。
+  - `TestEffectsLeaveOutKeysNotEnforced`：`CASCADE` と `NO ACTION` の `NOT ENFORCED` のキー。PostgreSQL 18 で確かめる。
   - `TestApplyNeedsTrackCounts`：セッションのオプションとロールの設定で off にした `track_counts`。
   - `TestEffectsOfForeignKeysOfIntervals`：テキストは違うが互いに等しい interval の外部キー。たどる処理がテキストで比べると、このテストは失敗する。
   - ADR-0037 の `TestApplyWhenRowLevelSecurityComesToApply`。いまは削除の前に外部キーをたどる。
@@ -232,4 +234,4 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - [トランザクションの分離](https://www.postgresql.org/docs/current/transaction-iso.html)：`REPEATABLE READ` と直列化の失敗について
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#削除がほかの行にすること) と [docs/reference/apply.ja.md](../reference/apply.ja.md#削除の安全策)
 
-<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:5842d6f99461822f5d5de3ffdd7d1e12bc63dc75d141876a8aad729e53efdd9b -->
+<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:5863293de8d877bf2cb5fd22f2d4716249572d41640bdf6ef4cf80755c30b0fa -->
