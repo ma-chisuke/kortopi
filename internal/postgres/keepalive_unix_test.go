@@ -113,6 +113,18 @@ func TestDialKeepAlive(t *testing.T) {
 	}
 	_ = conn.Close()
 
+	// The system refuses an idle time this long, on Linux and on macOS. The
+	// connection stays, with the keepalive on: the tuning is best effort, as
+	// the dialer of Go does it, and some systems cannot set every value.
+	_, conn, err = dial(t, map[string]string{"keepalives_idle": "5000000"})
+	if err != nil {
+		t.Fatalf("a keepalive that the system refuses made the dial fail: %v", err)
+	}
+	if got := keepAliveOf(t, conn); !got.on {
+		t.Errorf("keepalive after a value that the system refuses = %+v, want it on", got)
+	}
+	_ = conn.Close()
+
 	g.committing.Store(true)
 	if conn, err := g.dial((&net.Dialer{}).DialContext)(t.Context(), "tcp", ln.Addr().String()); !errors.Is(err, errNoCancel) {
 		t.Errorf("a dial during the commit = %v, %v, want errNoCancel", conn, err)

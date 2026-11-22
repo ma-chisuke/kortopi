@@ -96,9 +96,9 @@ func (g *guard) handler(conn *pgconn.PgConn) ctxwatch.Handler {
 	}
 }
 
-// dial wraps the dialer of the driver: it turns the keepalive of each TCP
-// connection on, as keepAlive says, and refuses the connection of a cancel
-// request during the commit. The driver dials for the session and for each
+// dial wraps the dialer of the driver: it sets the keepalive of each TCP
+// connection as keepAlive says, as far as the system lets it, and refuses
+// the connection of a cancel request during the commit. The driver dials for the session and for each
 // cancel request.
 func (g *guard) dial(dial pgconn.DialFunc) pgconn.DialFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -110,13 +110,28 @@ func (g *guard) dial(dial pgconn.DialFunc) pgconn.DialFunc {
 			return nil, err
 		}
 		if tcp, ok := conn.(*net.TCPConn); ok {
-			if err := tcp.SetKeepAliveConfig(g.keepAlive); err != nil {
-				_ = conn.Close()
-				return nil, fmt.Errorf("turn on the keepalive of the connection: %w", err)
-			}
+			tuneKeepAlive(tcp, g.keepAlive)
 		}
 		return conn, nil
 	}
+}
+
+// tuneKeepAlive sets the keepalive of conn to ka, as far as the system lets
+// it, and keeps the connection whatever it refuses, as the dialer of Go does.
+// A system can refuse one value, as Windows before 10 version 1709 refuses
+// the count of probes, and Linux and macOS an idle time of millions of
+// seconds: kortopi then sets what it can, and at least turns the keepalive
+// on or off.
+func tuneKeepAlive(conn *net.TCPConn, ka net.KeepAliveConfig) {
+	if conn.SetKeepAliveConfig(ka) == nil {
+		return
+	}
+	withoutCount := ka
+	withoutCount.Count = -1
+	if conn.SetKeepAliveConfig(withoutCount) == nil {
+		return
+	}
+	_ = conn.SetKeepAlive(ka.Enable)
 }
 
 // watcher ends the wait of a statement whose context is done. Unless the
