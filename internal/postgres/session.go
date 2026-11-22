@@ -518,6 +518,8 @@ func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 		if err := tx.Rollback(ctx); err != nil {
 			return fmt.Errorf("take the lock of kortopi: %w", err)
 		}
+		// The transaction has ended, and so has its process ID.
+		s.pid = 0
 		if !waited && wait != nil {
 			_, _ = fmt.Fprintf(wait, "kortopi: waiting for another apply on database %q to finish\n", database)
 		}
@@ -553,6 +555,10 @@ func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 // an interrupt cancelled, it sends nothing: pgx breaks the connection when a
 // begin fails without an answer.
 func (s *Session) beginTx(ctx context.Context, begin, commit string) (pgx.Tx, error) {
+	// The process ID of the transaction before is no longer the session's,
+	// whether this one begins or not: behind a connection pooler in
+	// transaction mode, that process may serve another client by now.
+	s.pid = 0
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -560,7 +566,7 @@ func (s *Session) beginTx(ctx context.Context, begin, commit string) (pgx.Tx, er
 	if err != nil {
 		return nil, err
 	}
-	s.tx, s.pid = tx, 0
+	s.tx = tx
 	return tx, nil
 }
 
@@ -608,6 +614,7 @@ func (s *Session) waitForLock(ctx context.Context, database string) error {
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
 	}
+	s.pid = 0
 	return nil
 }
 

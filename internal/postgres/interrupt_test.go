@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"net"
@@ -125,6 +126,25 @@ func TestBeginSQL(t *testing.T) {
 		if got := s.beginSQL(tt.readOnly); got != tt.want {
 			t.Errorf("beginSQL(%v) with --lock-timeout %v = %q, want %q", tt.readOnly, tt.timeout, got, tt.want)
 		}
+	}
+}
+
+// The process ID that the message of a session names is that of the
+// transaction that the message is about: a begin that fails, also one that
+// an interrupt keeps from going out, forgets the ID of the transaction
+// before it, whose server process may serve another client by then, behind
+// a connection pooler in transaction mode.
+func TestBeginForgetsTheProcessID(t *testing.T) {
+	t.Parallel()
+
+	done, cancel := context.WithCancel(t.Context())
+	cancel()
+	s := &Session{pid: 386}
+	if _, err := s.beginTx(done, "BEGIN", ""); err == nil {
+		t.Fatal("beginTx with a done context = nil, want its error")
+	}
+	if s.pid != 0 {
+		t.Errorf("after a begin that failed, the process ID is %d, the one of the transaction before it, want 0", s.pid)
 	}
 }
 
