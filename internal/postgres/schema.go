@@ -251,22 +251,21 @@ func schemaChanges(snapshot, now map[string]schemaObject) []schemaChange {
 			changes = append(changes, schemaChange{object: o, removed: true})
 		}
 	}
+	// derived sorts an object that PostgreSQL made from another last.
+	derived := func(o schemaObject) int {
+		if o.derived {
+			return 1
+		}
+		return 0
+	}
 	slices.SortFunc(changes, func(a, b schemaChange) int {
 		x, y := a.object, b.object
-		return cmp.Or(cmp.Compare(boolInt(x.derived), boolInt(y.derived)), cmp.Compare(x.kind, y.kind),
+		return cmp.Or(cmp.Compare(derived(x), derived(y)), cmp.Compare(x.kind, y.kind),
 			cmp.Compare(x.table.Schema, y.table.Schema), cmp.Compare(x.table.Name, y.table.Name), cmp.Compare(x.name, y.name),
 			cmp.Compare(x.otherTable.Schema, y.otherTable.Schema), cmp.Compare(x.otherTable.Name, y.otherTable.Name),
 			cmp.Compare(x.relid, y.relid), cmp.Compare(x.other, y.other))
 	})
 	return changes
-}
-
-// boolInt returns 1 for true and 0 for false, to sort by a condition.
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // text says what another session did to the object.
