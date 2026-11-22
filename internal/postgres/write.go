@@ -120,7 +120,8 @@ type batchStatement struct {
 
 // execWrite runs write, a statement of an apply that writes rows of a
 // table, with the settings that the session had before kortopi pinned them,
-// and returns its command tag (ADR-0037). The statements of prepare run
+// and returns the command tags of the first statement of prepare, the pick,
+// and of write (ADR-0037). The statements of prepare run
 // first, in the pinned settings: they pick the rows that write writes, with
 // the conditions of the plan, so that every value is compared as the plan
 // compared it. The settings are pinned again after write, for what the apply
@@ -129,7 +130,7 @@ type batchStatement struct {
 //
 // On an error, failed says what the statement that failed did, and
 // isWrite is true when it is write itself.
-func (s *Session) execWrite(ctx context.Context, prepare []batchStatement, write batchStatement) (_ pgconn.CommandTag, failed string, isWrite bool, _ error) {
+func (s *Session) execWrite(ctx context.Context, prepare []batchStatement, write batchStatement) (pick, wrote pgconn.CommandTag, failed string, isWrite bool, _ error) {
 	b := &pgconn.Batch{}
 	whats := make([]string, 0, len(prepare)+3)
 	for _, p := range prepare {
@@ -144,10 +145,10 @@ func (s *Session) execWrite(ctx context.Context, prepare []batchStatement, write
 	results, err := s.tx.Conn().PgConn().ExecBatch(ctx, b).ReadAll()
 	written := len(prepare) + 1
 	if err == nil {
-		return results[written].CommandTag, "", false, nil
+		return results[0].CommandTag, results[written].CommandTag, "", false, nil
 	}
 	i := min(failedStatement(results), len(whats)-1)
-	return pgconn.CommandTag{}, whats[i], i == written, err
+	return pgconn.CommandTag{}, pgconn.CommandTag{}, whats[i], i == written, err
 }
 
 // failedStatement returns the index of the statement of a batch that failed,

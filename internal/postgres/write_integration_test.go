@@ -297,14 +297,14 @@ func TestSettingsAroundTheWrites(t *testing.T) {
 			if got := read(s.tx); !slices.Equal(got, pinned) {
 				t.Errorf("the settings before the writes = %v, want %v", got, pinned)
 			}
-			if n, err := s.Insert(ctx, req); err != nil || n != 1 {
-				t.Fatalf("Insert = %d, %v", n, err)
+			if c, err := s.Insert(ctx, req); err != nil || c.Wrote != 1 {
+				t.Fatalf("Insert = %+v, %v", c, err)
 			}
 			if got := read(s.tx); !slices.Equal(got, pinned) {
 				t.Errorf("the settings after an insert = %v, want %v", got, pinned)
 			}
-			if n, err := s.Update(ctx, req); err != nil || n != 1 {
-				t.Fatalf("Update = %d, %v", n, err)
+			if c, err := s.Update(ctx, req); err != nil || c.Wrote != 1 {
+				t.Fatalf("Update = %+v, %v", c, err)
 			}
 			if got := read(s.tx); !slices.Equal(got, pinned) {
 				t.Errorf("the settings after an update = %v, want %v", got, pinned)
@@ -645,21 +645,24 @@ func TestApplyWhenRowLevelSecurityComesToApply(t *testing.T) {
 						write, pick = s.Delete, "pick the rows to delete from table app.items: "
 					}
 					// The pick names itself, keeps the message of PostgreSQL,
-					// and gets the advice of a missing privilege. Or the write
-					// misses the row that the policy hides, and the apply
-					// stops on the count of a deletion, or on the row to
-					// update that the comparison before the commit finds
-					// (ADR-0042).
-					n, err := write(ctx, req)
+					// and gets the advice of a missing privilege. Or, when the
+					// session has not seen the change of the role at the pick,
+					// the write misses the row that the policy hides, and its
+					// count stops the apply (ADR-0042). The comparison before
+					// the commit, which reads the table with row_security off as
+					// the pick does, then fails on the policy.
+					c, err := write(ctx, req)
 					picked := err != nil && strings.HasPrefix(err.Error(), pick+"query would be affected by row-level security policy") &&
 						strings.HasSuffix(err.Error(), ": the role lacks a privilege that the statement needs: grant it to the role")
-					counted := err == nil && n == 0
-					if counted && kind == "update" {
-						left, againErr := s.DiffAgain(ctx, req)
-						counted = againErr != nil || len(left.Updates) == 1
-					}
-					if !picked && !counted {
-						t.Errorf("%s after the role lost BYPASSRLS = %d, %v, want the error of the pick, or no row written", kind, n, err)
+					if !picked {
+						if countErr := apply.CheckCount(req.Table.Name, kind, 1, c); err != nil || countErr == nil {
+							t.Errorf("%s after the role lost BYPASSRLS = %+v, %v, want the error of the pick, or a count that stops the apply", kind, c, err)
+						}
+						_, againErr := s.DiffAgain(ctx, req)
+						if againErr == nil || !strings.HasPrefix(againErr.Error(), "the check before the commit, which compares table app.items again, failed, so nothing was written: ") ||
+							!strings.Contains(againErr.Error(), "query would be affected by row-level security policy") {
+							t.Errorf("DiffAgain after the role lost BYPASSRLS: %v, want the error of the policy", againErr)
+						}
 					}
 					if err := s.Close(ctx); err != nil {
 						t.Fatal(err)

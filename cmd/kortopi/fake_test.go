@@ -125,24 +125,24 @@ func (s *fakeSession) Defer(_ context.Context, keys []apply.ForeignKey) error {
 	return s.record("Defer " + strings.Join(names, " "))
 }
 
-// write records the call of a write, and returns the number of rows that
-// written gives it, or else n.
-func (s *fakeSession) write(call string, n int) (int, error) {
+// write records the call of a write, and returns that it picked and wrote
+// the number of rows that written gives it, or else n.
+func (s *fakeSession) write(call string, n int) (apply.Count, error) {
 	if w, ok := s.written[call]; ok {
 		n = w
 	}
-	return n, s.record(call)
+	return apply.Count{Picked: n, Wrote: n}, s.record(call)
 }
 
-func (s *fakeSession) Insert(_ context.Context, req plan.DiffRequest) (int, error) {
+func (s *fakeSession) Insert(_ context.Context, req plan.DiffRequest) (apply.Count, error) {
 	return s.write("Insert "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Inserts))
 }
 
-func (s *fakeSession) Update(_ context.Context, req plan.DiffRequest) (int, error) {
+func (s *fakeSession) Update(_ context.Context, req plan.DiffRequest) (apply.Count, error) {
 	return s.write("Update "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Updates))
 }
 
-func (s *fakeSession) Delete(_ context.Context, req plan.DiffRequest) (int, error) {
+func (s *fakeSession) Delete(_ context.Context, req plan.DiffRequest) (apply.Count, error) {
 	return s.write("Delete "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Deletes))
 }
 

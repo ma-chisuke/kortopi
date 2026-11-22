@@ -170,10 +170,10 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 						"Plan: 3 to insert, 0 to update, 0 to delete in 1 table.",
 					),
 					wantErr: lines(
-						"kortopi: {dir}/app/t.csv: after the writes of the apply, table app.t still differs from the declaration in 1 row to insert: + id=2  v=b: "+
-							"declare only rows that the table keeps after the writes, or change what takes them away",
-						resultCauses+", and the writes that wrote fewer rows than the plan shows are the place to look first: "+
-							"the insert into table app.t wrote 2 rows, and the plan has 3",
+						"kortopi: the insert into table app.t inserted 2 rows, but its pick took 3 rows: a trigger BEFORE INSERT that returns NULL, "+
+							"a policy of row-level security, or a rule created after the plan changed what the statement did, "+
+							"and an apply writes exactly the rows that it picks, so it stops: change the trigger, the policy, or the rule of table app.t, "+
+							"or leave the table out of the declaration",
 						"kortopi: nothing was changed",
 					),
 				},
@@ -257,7 +257,10 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 						"",
 						"Plan: 1 to insert, 1 to update, 0 to delete in 2 tables.",
 					),
-					wantErr: lines("kortopi: the update of table b.y updated 2 rows, but the plan has 1 row to update: another write of the apply, through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table b.y when the apply writes another table, or declare the values that it writes", "kortopi: nothing was changed"),
+					wantErr: lines("kortopi: the update of table b.y found 2 rows that differ from the declaration, but the plan has 1: "+
+						"another write of the apply changed declared rows of the table after the plan, through a trigger of this table or of another, "+
+						"or a cascade or another action of a foreign key, and an apply writes only the rows that its plan shows, so it stops: "+
+						"declare the values that those writes give, or change the trigger or the foreign key", "kortopi: nothing was changed"),
 				},
 				{
 					name:   "a table of mode insert, compared by its key alone",
@@ -448,6 +451,80 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 						t.Errorf("plan after the apply: exit status %d, stdout:\n%s\nstderr:\n%s\nwant %d, stdout:\n%s", code, stdout, stderr, wantPlanCode, wantPlan)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestApplyCascadeIntoTheMatchKey runs apply as the binary does, against each
+// version, on the tables of issue 26 with the cascaded column in the match
+// key of sales.price. The plan shows an insert and a deletion for what the
+// cascade does as one change of the key, so the apply stops on the insert,
+// which finds its row there already, and changes nothing (ADR-0042). The
+// advice of the error works: an apply of the referenced schema alone, and
+// then of all, brings the tables to the declaration.
+func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			t.Setenv("PGSSLMODE", "disable")
+			t.Setenv("PGCONNECT_TIMEOUT", "10")
+			db := srv.Database(t)
+			db.Exec(t, `CREATE SCHEMA m; CREATE SCHEMA sales;
+				CREATE TABLE m.currency (id int PRIMARY KEY, iso text NOT NULL UNIQUE, name text);
+				CREATE TABLE sales.price (currency_iso text NOT NULL REFERENCES m.currency (iso) ON UPDATE CASCADE,
+					product text NOT NULL, amount numeric(10,2), PRIMARY KEY (currency_iso, product));
+				INSERT INTO m.currency VALUES (1, 'JPY', 'Yen'), (2, 'USD', 'Dollar');
+				INSERT INTO sales.price VALUES ('USD', 'p2', 1.50), ('JPY', 'p1', 100);`)
+			t.Setenv("PGPASSWORD", db.Config.Password)
+			dir := writeFiles(t, map[string]string{
+				"m/currency.csv":  "id,iso,name\n1,JPN,Yen\n2,USD,Dollar\n",
+				"sales/price.csv": "currency_iso,product,amount\nJPN,p1,100\nUSD,p2,1.50\n",
+			})
+			conn := []string{"--dir", dir, "--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", db.Config.User, "--dbname", db.Name}
+			rows := func() []string {
+				var got []string
+				for _, r := range db.Query(t, `SELECT 'currency ' || string_agg(iso, ' ' ORDER BY id) FROM m.currency
+					UNION ALL SELECT 'price ' || string_agg(currency_iso || '/' || product, ' ' ORDER BY product) FROM sales.price`) {
+					got = append(got, r[0])
+				}
+				return got
+			}
+
+			code, stdout, stderr := runTest(t, slices.Concat([]string{"apply"}, conn), buildDialects(t))
+			checkRun(t, code, stdout, stderr, exitError, lines(
+				"m.currency (upsert, key: id)",
+				"  ~ id=1  iso: JPY -> JPN",
+				"  0 to insert, 1 to update",
+				"",
+				"sales.price (upsert, key: currency_iso, product)",
+				"  + currency_iso=JPN  product=p1  amount=100.00",
+				"  1 to insert, 0 to update",
+				"",
+				"Plan: 1 to insert, 1 to update, 0 to delete in 2 tables.",
+			), "kortopi: the insert into table sales.price found 0 rows to insert, but the plan has 1: "+
+				"another write of the apply had written declared rows of the table before the insert, "+
+				"through a trigger, a rule, or the cascade of a foreign key into a column of the match key, "+
+				"and an apply writes only the rows that its plan shows, the way that it shows them, so it stops: "+
+				"apply the table whose write writes those rows first, in an apply of its own, with --schema when it is in another schema, and then table sales.price, "+
+				"or change what writes them\nkortopi: nothing was changed\n")
+			if got := rows(); !slices.Equal(got, []string{"currency JPY USD", "price JPY/p1 USD/p2"}) {
+				t.Errorf("rows after the failed apply: %v", got)
+			}
+
+			code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--schema", "m"}, conn), buildDialects(t))
+			checkRun(t, code, stdout, stderr, exitOK, lines(
+				"m.currency (upsert, key: id)",
+				"  ~ id=1  iso: JPY -> JPN",
+				"  0 to insert, 1 to update",
+				"",
+				"Plan: 0 to insert, 1 to update, 0 to delete in 1 table.",
+				"",
+				"Applied: 0 inserted, 1 updated, 0 deleted.",
+			))
+			code, stdout, stderr = runTest(t, slices.Concat([]string{"apply"}, conn), buildDialects(t))
+			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
+			if got := rows(); !slices.Equal(got, []string{"currency JPN USD", "price JPN/p1 USD/p2"}) {
+				t.Errorf("rows after the two applies: %v", got)
 			}
 		})
 	}

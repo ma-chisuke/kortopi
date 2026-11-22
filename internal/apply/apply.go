@@ -50,22 +50,20 @@ type Database interface {
 	// writes.
 	PrepareDeletes(ctx context.Context) error
 
-	// Insert adds the declared rows that the table lacks when it runs, and
-	// returns the number of rows that its statement inserted, which the
-	// apply compares with the plan. The request is the one that Diff got for
-	// the table.
-	Insert(ctx context.Context, req plan.DiffRequest) (int, error)
+	// Insert picks the declared rows that the table lacks when it runs, with
+	// the conditions of the plan, adds them, and returns both numbers, which
+	// the apply holds to the plan (CheckCount). The request is the one that
+	// Diff got for the table.
+	Insert(ctx context.Context, req plan.DiffRequest) (Count, error)
 
-	// Update sets the compared columns of the rows that differ when it runs
-	// to the declared values, and returns the number of rows that its
-	// statement updated.
-	Update(ctx context.Context, req plan.DiffRequest) (int, error)
+	// Update picks the rows that differ when it runs, sets their compared
+	// columns to the declared values, and returns both numbers.
+	Update(ctx context.Context, req plan.DiffRequest) (Count, error)
 
-	// Delete removes the rows that the declaration lacks, and returns the
-	// number of rows that its statement deleted, which must be the number of
-	// the plan. Effects must have computed the effect of the deletions after
-	// the inserts and updates, before the first Delete.
-	Delete(ctx context.Context, req plan.DiffRequest) (int, error)
+	// Delete picks the rows that the declaration lacks, removes them, and
+	// returns both numbers. Effects must have computed the effect of the
+	// deletions after the inserts and updates, before the first Delete.
+	Delete(ctx context.Context, req plan.DiffRequest) (Count, error)
 
 	// CheckEffect checks, after the deletions and before the commit, that
 	// they did what the last call of Effects counted: every row that it
@@ -143,25 +141,32 @@ type Result struct {
 	// SkippedDeletes counts the rows to delete that the apply left in place
 	// because Options.AllowDelete was false.
 	SkippedDeletes int
-	// Uneven holds the inserts and updates that wrote fewer rows than the
-	// plan shows, in the order of the writes. The check before the commit
-	// found the declared tables as declared all the same: the other writes of
-	// the apply had brought the rows to their declared values already
-	// (ADR-0042). A write that writes more rows than the plan shows stops the
-	// apply.
+	// Uneven holds the updates whose picks found fewer rows that still
+	// differ than the plan shows, in the order of the writes. The check
+	// before the commit found the declared tables as declared all the same:
+	// the other writes of the apply had brought the rows to their declared
+	// values already (ADR-0042). Any other count that differs from the plan
+	// stops the apply (CheckCount).
 	Uneven []Uneven
 	// Committed is true when the apply committed its transaction.
 	Committed bool
 }
 
-// Uneven is an insert or an update of an apply that wrote fewer rows than
-// the plan shows.
+// Uneven is an update of an apply whose pick found fewer rows that still
+// differ than the plan shows, and that wrote the rows that it picked.
 type Uneven struct {
 	Table declaration.TableName
-	// Kind is "insert" or "update".
-	Kind string
-	// Wrote is the number of rows that the statement wrote, and Planned the
-	// number that the plan shows.
+	// Wrote is the number of rows that the update picked and wrote, and
+	// Planned the number that the plan shows.
 	Wrote   int
 	Planned int
+}
+
+// Count is what one write of an apply did: Picked is the number of rows
+// that its pick took, with the conditions of the plan, when the write ran,
+// and Wrote the number of rows that its statement then inserted, updated, or
+// deleted, as the database reports it (ADR-0037).
+type Count struct {
+	Picked int
+	Wrote  int
 }

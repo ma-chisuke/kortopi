@@ -150,7 +150,11 @@ func (s *Session) DiffAgain(ctx context.Context, req plan.DiffRequest) (_ plan.T
 	if err != nil {
 		return plan.TableDiff{}, err
 	}
-	return compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync)
+	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync)
+	if err != nil {
+		return plan.TableDiff{}, fmt.Errorf("the check before the commit, which compares table %s again, failed, so nothing was written: %w", req.Table.Name, err)
+	}
+	return diff, nil
 }
 
 // prepare checks req against what the catalogs say about the table, and

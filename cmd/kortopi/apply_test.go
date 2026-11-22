@@ -98,6 +98,20 @@ const planOfGoldAndOld = "app.plans (sync, key: id)\n" +
 	"Plan: 1 to insert, 0 to update, 1 to delete in 2 tables.\n" +
 	"1 table without changes is not shown.\n"
 
+// renamedPlan is the difference of a database whose plan 1 has another
+// name, Bronze.
+var renamedPlan = map[declaration.TableName]plan.TableDiff{plans: {
+	Updates: []plan.Update{{Key: []plan.Value{{Text: "1"}}, Changes: []plan.Change{{Column: "name", Old: plan.Value{Text: "Bronze"}, New: plan.Value{Text: "Basic"}}}}},
+}}
+
+// planOfRenamed is the plan of renamedPlan, with app.plans in mode upsert.
+const planOfRenamed = "app.plans (upsert, key: id)\n" +
+	"  ~ id=1  name: Bronze -> Basic\n" +
+	"  0 to insert, 1 to update\n" +
+	"\n" +
+	"Plan: 0 to insert, 1 to update, 0 to delete in 2 tables.\n" +
+	"1 table without changes is not shown.\n"
+
 // planOfGold is the plan of newPlan, with app.plans in mode upsert.
 const planOfGold = "app.plans (upsert, key: id)\n" +
 	"  + id=2  name=Gold\n" +
@@ -249,58 +263,73 @@ func TestRunApply(t *testing.T) {
 			wantStderr: "kortopi: the apply committed its changes, but closing the connection failed: connection reset\n",
 		},
 		{
-			// The other writes of the apply had inserted the row already,
+			// The other writes of the apply had updated the row already,
 			// and the comparison before the commit found the tables as
 			// declared (ADR-0042).
-			name:     "an insert that wrote fewer rows than the plan shows",
+			name:     "an update that found fewer rows to update than the plan shows",
 			files:    twoTables,
-			session:  &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 0}},
+			session:  &fakeSession{diffs: renamedPlan, written: map[string]int{"Update app.plans": 0}},
 			wantCode: exitOK,
-			wantStdout: planOfGold + "\nApplied: 0 inserted, 0 updated, 0 deleted.\n" +
-				"Fewer than planned: 1 row to insert into app.plans was there already, after the other writes of the apply.\n",
-			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
+			wantStdout: planOfRenamed + "\nApplied: 0 inserted, 0 updated, 0 deleted.\n" +
+				"Fewer than planned: 1 row to update of app.plans held its declared values already, after the other writes of the apply.\n",
+			wantCalls: append(diffs, "ForeignKeys", "Update app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
 		},
 		{
 			// A commit whose statements wrote no row is a commit all the
 			// same: closing the connection after it does not undo it.
 			name:     "closing fails after a commit that wrote no row",
 			files:    twoTables,
-			session:  &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 0}, closeErr: errDB},
+			session:  &fakeSession{diffs: renamedPlan, written: map[string]int{"Update app.plans": 0}, closeErr: errDB},
 			wantCode: exitOK,
-			wantStdout: planOfGold + "\nApplied: 0 inserted, 0 updated, 0 deleted.\n" +
-				"Fewer than planned: 1 row to insert into app.plans was there already, after the other writes of the apply.\n",
+			wantStdout: planOfRenamed + "\nApplied: 0 inserted, 0 updated, 0 deleted.\n" +
+				"Fewer than planned: 1 row to update of app.plans held its declared values already, after the other writes of the apply.\n",
 			wantStderr: "kortopi: the apply committed its changes, but closing the connection failed: connection reset\n",
 		},
 		{
-			// An apply writes only the rows that its plan shows (ADR-0042).
-			name:       "an insert that wrote more rows than the plan shows",
+			// An insert keeps its strict count (ADR-0042).
+			name:       "an insert that found fewer rows to insert than the plan shows",
 			files:      twoTables,
-			session:    &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 2}},
+			session:    &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 0}},
 			wantCode:   exitError,
 			wantStdout: planOfGold,
-			wantStderr: "kortopi: the insert into table app.plans inserted 2 rows, but the plan has 1 row to insert: another write of the apply, " +
-				"through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, " +
-				"or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: " +
-				"change the trigger or the foreign key that writes rows of table app.plans when the apply writes another table, or declare the values that it writes\n" +
-				nothingChanged,
+			wantStderr: "kortopi: the insert into table app.plans found 0 rows to insert, but the plan has 1: " +
+				"another write of the apply had written declared rows of the table before the insert, " +
+				"through a trigger, a rule, or the cascade of a foreign key into a column of the match key, " +
+				"and an apply writes only the rows that its plan shows, the way that it shows them, so it stops: " +
+				"apply the table whose write writes those rows first, in an apply of its own, with --schema when it is in another schema, and then table app.plans, " +
+				"or change what writes them\n" + nothingChanged,
 			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans"),
+		},
+		{
+			// An apply writes only the rows that its plan shows (ADR-0042).
+			name:       "an update that found more rows to update than the plan shows",
+			files:      twoTables,
+			session:    &fakeSession{diffs: renamedPlan, written: map[string]int{"Update app.plans": 2}},
+			wantCode:   exitError,
+			wantStdout: planOfRenamed,
+			wantStderr: "kortopi: the update of table app.plans found 2 rows that differ from the declaration, but the plan has 1: " +
+				"another write of the apply changed declared rows of the table after the plan, through a trigger of this table or of another, " +
+				"or a cascade or another action of a foreign key, and an apply writes only the rows that its plan shows, so it stops: " +
+				"declare the values that those writes give, or change the trigger or the foreign key\n" + nothingChanged,
+			wantCalls: append(diffs, "ForeignKeys", "Update app.plans"),
 		},
 		{
 			name:  "a difference that is left after the writes",
 			files: twoTables,
-			session: &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 0}, left: map[declaration.TableName]plan.TableDiff{
-				plans: newPlan[plans],
+			session: &fakeSession{diffs: renamedPlan, written: map[string]int{"Update app.plans": 0}, left: map[declaration.TableName]plan.TableDiff{
+				plans: renamedPlan[plans],
 			}},
 			wantCode:   exitError,
-			wantStdout: planOfGold,
-			wantStderr: "kortopi: {dir}/app/plans.csv: after the writes of the apply, table app.plans still differs from the declaration in 1 row to insert: + id=2  name=Gold: " +
-				"declare only rows that the table keeps after the writes, or change what takes them away\n" +
+			wantStdout: planOfRenamed,
+			wantStderr: "kortopi: {dir}/app/plans.csv: after the writes of the apply, table app.plans still differs from the declaration in 1 row to update: " +
+				"~ id=1  name: Bronze -> Basic: declare each value as the table stores it after the writes, or leave its column out of {dir}/app/plans.csv, " +
+				`and give the column a value in on_insert of [tables."app.plans"] in {dir}/kortopi.toml if new rows need one` + "\n" +
 				"kortopi: the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: " +
 				"a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, " +
 				"the cascade or another action of a foreign key, or a rule created after the plan can do that, " +
-				"and the writes that wrote fewer rows than the plan shows are the place to look first: " +
-				"the insert into table app.plans wrote 0 rows, and the plan has 1\n" + nothingChanged,
-			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries"),
+				"and the updates that found fewer rows to update than the plan shows are the place to look first: " +
+				"the update of table app.plans wrote 0 rows, and the plan has 1\n" + nothingChanged,
+			wantCalls: append(diffs, "ForeignKeys", "Update app.plans", "DiffAgain app.plans", "DiffAgain geo.countries"),
 		},
 		{
 			name:       "closing fails without a commit",

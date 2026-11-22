@@ -48,6 +48,14 @@ var (
 	regionsTable = syncTable("geo.regions", plan.TableDiff{Deletes: []plan.Row{{Key: codes("north")}, {Key: codes("south")}}})
 	unchanged    = syncTable("geo.countries", plan.TableDiff{})
 	onlyLegacy   = syncTable("catalog.plans", plan.TableDiff{Deletes: []plan.Row{{Key: codes("legacy")}}})
+	// renamed has two rows to update and one to delete.
+	renamed = syncTable("catalog.plans", plan.TableDiff{
+		Updates: []plan.Update{
+			{Key: codes("basic"), Changes: []plan.Change{{Column: "name", Old: plan.Value{Text: "Basic"}, New: plan.Value{Text: "Basic Plan"}}}},
+			{Key: codes("pro"), Changes: []plan.Change{{Column: "name", Old: plan.Value{Text: "Pro"}, New: plan.Value{Text: "Pro Plan"}}}},
+		},
+		Deletes: []plan.Row{{Key: codes("legacy")}},
+	})
 )
 
 func TestRenderSummary(t *testing.T) {
@@ -63,17 +71,17 @@ func TestRenderSummary(t *testing.T) {
 		{name: "deletions_left_out", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{plansTable, regionsTable}}, Inserted: 1, Updated: 1, SkippedDeletes: 3}},
 		{name: "only_one_deletion_left_out", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{onlyLegacy}}, SkippedDeletes: 1}},
 		{name: "only_deletions_left_out", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{regionsTable, unchanged}}, SkippedDeletes: 2}},
-		// The writes of other tables had done the work of an update and of
-		// an insert, as a cascade ON UPDATE does (ADR-0042).
+		// The writes of other tables had done the work of an update, as a
+		// cascade ON UPDATE does (ADR-0042).
 		{name: "fewer_than_planned", result: &Result{
-			Plan: &plan.Plan{Tables: []plan.Table{plansTable, regionsTable}}, Inserted: 0, Updated: 1, Deleted: 3, Committed: true,
-			Uneven: []Uneven{{Table: tn("catalog.plans"), Kind: "insert", Wrote: 0, Planned: 1}},
+			Plan: &plan.Plan{Tables: []plan.Table{renamed, regionsTable}}, Updated: 1, Deleted: 3, Committed: true,
+			Uneven: []Uneven{{Table: tn("catalog.plans"), Wrote: 1, Planned: 2}},
 		}},
 		// A commit whose statements wrote no row, next to deletions that it
 		// left out, still says that it applied.
 		{name: "committed_without_rows", result: &Result{
-			Plan: &plan.Plan{Tables: []plan.Table{plansTable}}, Committed: true, SkippedDeletes: 1,
-			Uneven: []Uneven{{Table: tn("catalog.plans"), Kind: "insert", Wrote: 0, Planned: 1}, {Table: tn("catalog.plans"), Kind: "update", Wrote: 0, Planned: 1}},
+			Plan: &plan.Plan{Tables: []plan.Table{renamed}}, Committed: true, SkippedDeletes: 1,
+			Uneven: []Uneven{{Table: tn("catalog.plans"), Wrote: 0, Planned: 2}},
 		}},
 	}
 	for _, tt := range tests {

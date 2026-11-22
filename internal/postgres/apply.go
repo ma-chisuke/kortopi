@@ -150,14 +150,14 @@ func (s *Session) checkConstraintNames(ctx context.Context, keys []apply.Foreign
 		k.Name, k.Table, other, k.Table.Schema)
 }
 
-// Insert adds the declared rows that the table lacks when it runs, from the
-// rows that Diff loaded, and returns the number of rows that its statement
-// inserted. The apply compares it with the plan (ADR-0042).
-func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
+// Insert picks the declared rows that the table lacks when it runs, from the
+// rows that Diff loaded, inserts them, and returns both numbers, which the
+// apply holds to the plan (ADR-0042).
+func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ apply.Count, err error) {
 	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil || lt.inserts == 0 {
-		return 0, err
+		return apply.Count{}, err
 	}
 	table := lt.meta.name
 	picked, values := s.nextTemp(), ""
@@ -177,32 +177,32 @@ func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ int, err 
 	return s.write(ctx, lt, "insert into", prepare, lt.c.insertSQL(picked, values))
 }
 
-// Update sets the compared columns that differ when it runs to the declared
-// values, and returns the number of rows that its statement updated.
-func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
+// Update picks the rows whose compared columns differ when it runs, sets
+// those columns to the declared values, and returns both numbers.
+func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (_ apply.Count, err error) {
 	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil || lt.updates == 0 || !req.Updates {
-		return 0, err
+		return apply.Count{}, err
 	}
 	picked := s.nextTemp()
 	pick := batchStatement{what: "pick the rows to update in table " + lt.meta.name.String(), sql: lt.c.pickUpdatesSQL(picked)}
 	return s.write(ctx, lt, "update", []batchStatement{pick}, lt.c.updateSQL(picked))
 }
 
-// Delete removes the rows that the declaration lacks, and returns the number
-// of rows that its statement deleted, which the apply holds to the number of
-// the plan. The first call checks that the role may delete from every loaded
-// table that has rows to delete, before the first row is deleted.
-func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
+// Delete picks the rows that the declaration lacks, removes them, and
+// returns both numbers. The first call checks that the role may delete from
+// every loaded table that has rows to delete, before the first row is
+// deleted.
+func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ apply.Count, err error) {
 	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil || lt.deletes == 0 || !req.Deletes {
-		return 0, err
+		return apply.Count{}, err
 	}
 	if !s.deletesChecked {
 		if err := s.checkDeletes(ctx); err != nil {
-			return 0, err
+			return apply.Count{}, err
 		}
 		s.deletesChecked = true
 	}
@@ -334,17 +334,18 @@ func (lt *loadedTable) matchKeyIndex(index string) bool {
 }
 
 // write runs one statement of an apply, after the statements of prepare,
-// which pick its rows, and returns the number of rows that it changed, as
-// PostgreSQL reports it: the rows of the statement itself, without those of
-// the triggers and the actions of foreign keys that it fires. The statement
-// runs with the settings of the session, and the others with the pinned
-// settings (execWrite).
-func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepare []batchStatement, sql string) (int, error) {
-	tag, failed, isWrite, err := s.execWrite(ctx, prepare, batchStatement{what: verb + " table " + lt.meta.name.String(), sql: sql})
+// the first of which picks its rows, and returns the number of rows that the
+// pick took and the number that the statement changed, as PostgreSQL reports
+// them: the rows of the statement itself, without those of the triggers and
+// the actions of foreign keys that it fires. The statement runs with the
+// settings of the session, and the others with the pinned settings
+// (execWrite).
+func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepare []batchStatement, sql string) (apply.Count, error) {
+	pick, wrote, failed, isWrite, err := s.execWrite(ctx, prepare, batchStatement{what: verb + " table " + lt.meta.name.String(), sql: sql})
 	if err != nil {
-		return 0, lt.writeFailure(failed, isWrite, verb, err)
+		return apply.Count{}, lt.writeFailure(failed, isWrite, verb, err)
 	}
-	return int(tag.RowsAffected()), nil
+	return apply.Count{Picked: int(pick.RowsAffected()), Wrote: int(wrote.RowsAffected())}, nil
 }
 
 // writeFailure returns the error of a statement of the batch of a write

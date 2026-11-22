@@ -26,15 +26,17 @@ const resultCauses = "a trigger that changes the values that a write gives, skip
 // checkResult compares every declared table with the database again, after
 // the writes of an apply and before its commit, and returns an error when a
 // difference is left that the run does not report (ADR-0042): a row to
-// insert or to update, and a row to delete, but, without allowDelete, the
-// rows to delete that the plan shows, which must all be left as they are.
+// insert or to update, and a row to delete with allowDelete. Without it,
+// each table must hold as many rows to delete as the plan shows: they are
+// counted, not matched by their keys, because a cascade of the writes can
+// change the key of a stored row that the declaration lacks.
 //
 // The error has a line for each table with such a difference, which lists
 // its rows as a plan does, at most maxLeftRows of them, with their number,
 // and says what to do. A last line says what can make the database do
 // something else with the writes than the declaration says, and names the
-// inserts and updates of uneven, which wrote fewer rows than the plan
-// shows: they point at where it happened.
+// updates of uneven, which found fewer rows to update than the plan shows:
+// they point at where it happened.
 func checkResult(ctx context.Context, decl *declaration.Declaration, db Database, p *plan.Plan, requests map[declaration.TableName]plan.DiffRequest,
 	allowDelete bool, uneven []Uneven,
 ) error {
@@ -69,7 +71,7 @@ func checkResult(ctx context.Context, decl *declaration.Declaration, db Database
 		for i, u := range uneven {
 			writes[i] = u.phrase()
 		}
-		last += ", and the writes that wrote fewer rows than the plan shows are the place to look first: " + joinAnd(writes)
+		last += ", and the updates that found fewer rows to update than the plan shows are the place to look first: " + joinAnd(writes)
 	}
 	return errors.New(strings.Join(append(lines, last), "\n"))
 }
@@ -80,60 +82,84 @@ func checkResult(ctx context.Context, decl *declaration.Declaration, db Database
 // when nothing is left that the run does not report.
 func leftLines(file, settingsFile string, t *plan.Table, left plan.TableDiff, allowDelete bool) ([]string, error) {
 	d := plan.TableDiff{Inserts: left.Inserts, Updates: left.Updates, Deletes: left.Deletes}
-	var gone []plan.Row
 	if !allowDelete {
-		// The rows to delete that the run left out stay, and they alone.
-		d.Deletes, gone = otherRows(left.Deletes, t.Diff.Deletes)
+		// The rows to delete that the run left out stay, as many as the plan
+		// shows: they are compared below by their number.
+		d.Deletes = nil
 	}
+	table := strconv.Quote(t.Name.String())
 	var lines []string
 	if n := len(d.Inserts) + len(d.Updates) + len(d.Deletes); n > 0 {
-		rows, err := plan.RowLines(t, d)
+		listed, err := firstRows(t, d)
 		if err != nil {
 			return nil, err
 		}
 		var kinds, advice []string
 		if len(d.Inserts) > 0 {
-			kinds = append(kinds, rowsTo(len(d.Inserts), "insert"))
+			kinds = append(kinds, rowsTo(len(d.Inserts), KindInsert))
 			advice = append(advice, "declare only rows that the table keeps after the writes, or change what takes them away")
 		}
 		if len(d.Updates) > 0 {
-			kinds = append(kinds, rowsTo(len(d.Updates), "update"))
+			kinds = append(kinds, rowsTo(len(d.Updates), KindUpdate))
 			advice = append(advice, fmt.Sprintf("declare each value as the table stores it after the writes, or leave its column out of %s, "+
-				"and give the column a value in on_insert of [tables.%s] in %s if new rows need one",
-				file, strconv.Quote(t.Name.String()), settingsFile))
+				"and give the column a value in on_insert of [tables.%s] in %s if new rows need one", file, table, settingsFile))
 		}
 		if len(d.Deletes) > 0 {
-			kinds = append(kinds, rowsTo(len(d.Deletes), "delete"))
+			kinds = append(kinds, rowsTo(len(d.Deletes), KindDelete))
 			advice = append(advice, fmt.Sprintf("declare the rows that the writes add to the table, or give the table mode %s in [tables.%s] of %s, which deletes no row",
-				config.ModeUpsert, strconv.Quote(t.Name.String()), settingsFile))
+				config.ModeUpsert, table, settingsFile))
 		}
 		lines = append(lines, fmt.Sprintf("%s: after the writes of the apply, table %s still differs from the declaration in %s: %s: %s",
-			file, t.Name, joinAnd(kinds), listRows(rows, n), joinAnd(advice)))
+			file, t.Name, joinAnd(kinds), listRows(listed, n), joinAnd(advice)))
 	}
-	if len(gone) > 0 {
-		keys, err := plan.RowLines(t, plan.TableDiff{Deletes: gone})
+	if allowDelete {
+		return lines, nil
+	}
+	now, planned := len(left.Deletes), len(t.Diff.Deletes)
+	switch {
+	case now > planned:
+		listed, err := firstRows(t, plan.TableDiff{Deletes: left.Deletes})
 		if err != nil {
 			return nil, err
 		}
-		them := "them"
-		if len(gone) == 1 {
-			them = "it"
-		}
-		lines = append(lines, fmt.Sprintf("%s: after the writes of the apply, table %s no longer holds %s that the plan shows to delete, "+
-			"which an apply without --allow-delete leaves in place: %s: delete %s in an apply of its own with --allow-delete first, or change what deletes %s",
-			file, t.Name, rows(len(gone)), listRows(keys, len(gone)), them, them))
+		lines = append(lines, fmt.Sprintf("%s: after the writes of the apply, table %s holds %s that the declaration lacks, %d more than the plan shows to delete, "+
+			"which an apply without --allow-delete leaves in place: %s: the writes added rows that the declaration lacks: "+
+			"declare the rows that the writes add to the table, or give the table mode %s in [tables.%s] of %s, which deletes no row",
+			file, t.Name, rows(now), now-planned, listRows(listed, now), config.ModeUpsert, table, settingsFile))
+	case now < planned:
+		lines = append(lines, fmt.Sprintf("%s: after the writes of the apply, table %s holds %s that the declaration lacks, %d fewer than the plan shows to delete, "+
+			"which an apply without --allow-delete leaves in place, so the writes deleted rows, which such an apply never does: "+
+			"change the trigger, the rule, or the foreign key that deletes rows of table %s while the apply writes, "+
+			"or delete those rows first, in an apply with --allow-delete whose declaration changes nothing else",
+			file, t.Name, rows(now), planned-now, t.Name))
 	}
 	return lines, nil
 }
 
-// listRows returns the first maxLeftRows of lines, the lines of n rows, as
-// one list, and the number of the others.
-func listRows(lines []string, n int) string {
-	listed := lines[:min(len(lines), maxLeftRows)]
-	if more := n - len(listed); more > 0 {
-		listed = append(listed[:len(listed):len(listed)], strconv.Itoa(more)+" more")
+// firstRows returns the lines of the first maxLeftRows rows of d, a
+// difference of table t, as a plan prints them: rows to insert first, then
+// rows to update, then rows to delete. The other rows are only counted.
+func firstRows(t *plan.Table, d plan.TableDiff) ([]string, error) {
+	n := maxLeftRows
+	take := func(k int) int {
+		k = min(k, n)
+		n -= k
+		return k
 	}
-	return joinAnd(listed)
+	return plan.RowLines(t, plan.TableDiff{
+		Inserts: d.Inserts[:take(len(d.Inserts))],
+		Updates: d.Updates[:take(len(d.Updates))],
+		Deletes: d.Deletes[:take(len(d.Deletes))],
+	})
+}
+
+// listRows returns lines, the first of n rows, as one list, with the number
+// of the others.
+func listRows(lines []string, n int) string {
+	if more := n - len(lines); more > 0 {
+		lines = append(lines[:len(lines):len(lines)], strconv.Itoa(more)+" more")
+	}
+	return joinAnd(lines)
 }
 
 // rowsTo returns n rows to do something, as in "1 row to update".
@@ -141,50 +167,8 @@ func rowsTo(n int, kind string) string {
 	return rows(n) + " to " + kind
 }
 
-// otherRows returns the rows of now that planned lacks, and the rows of
-// planned that now lacks, by their keys.
-func otherRows(now, planned []plan.Row) (added, gone []plan.Row) {
-	keys := func(rs []plan.Row) map[string]bool {
-		m := make(map[string]bool, len(rs))
-		for _, r := range rs {
-			m[keyText(r.Key)] = true
-		}
-		return m
-	}
-	inNow, inPlanned := keys(now), keys(planned)
-	for _, r := range now {
-		if !inPlanned[keyText(r.Key)] {
-			added = append(added, r)
-		}
-	}
-	for _, r := range planned {
-		if !inNow[keyText(r.Key)] {
-			gone = append(gone, r)
-		}
-	}
-	return added, gone
-}
-
-// keyText returns the values of a key as one string that tells every two
-// keys apart.
-func keyText(key []plan.Value) string {
-	parts := make([]string, len(key))
-	for i, v := range key {
-		if v.Null {
-			parts[i] = "NULL"
-		} else {
-			parts[i] = strconv.Quote(v.Text)
-		}
-	}
-	return strings.Join(parts, ",")
-}
-
-// phrase says what the write did and what the plan shows, as in "the update
-// of table sales.price wrote 0 rows, and the plan has 1".
+// phrase says what the update did and what the plan shows, as in "the
+// update of table sales.price wrote 0 rows, and the plan has 1".
 func (u Uneven) phrase() string {
-	what := "the update of table "
-	if u.Kind == "insert" {
-		what = "the insert into table "
-	}
-	return fmt.Sprintf("%s%s wrote %s, and the plan has %d", what, u.Table, rows(u.Wrote), u.Planned)
+	return fmt.Sprintf("the update of table %s wrote %s, and the plan has %d", u.Table, rows(u.Wrote), u.Planned)
 }

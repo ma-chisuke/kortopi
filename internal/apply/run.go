@@ -34,12 +34,13 @@ import (
 // Last, before the commit, Run lets the database compare every declared
 // table again, and stops when a difference is left that the run does not
 // report: a row to insert or to update, or a row to delete but those that it
-// left out without Options.AllowDelete (ADR-0042). A deletion must delete as
-// many rows as the plan shows. An apply writes only the rows that its plan
-// shows, so an insert or an update that writes more rows stops it too. One
-// that writes fewer goes on, because the other writes of the apply can have
-// done its work already: the comparison decides, and the result names such
-// writes in Result.Uneven.
+// left out without Options.AllowDelete (ADR-0042), as many of them as the
+// plan shows. An apply writes only the rows that its plan shows, so every
+// write is held to the plan (CheckCount): an insert and a deletion must write
+// as many rows as the plan shows. An update must not pick more, and one that
+// picks fewer goes on, because the other writes of the apply can have done
+// its work already: the comparison decides, and the result names such
+// updates in Result.Uneven.
 //
 // On any error before the commit, Run returns without committing, so the
 // transaction is rolled back when the session closes, and the database is
@@ -112,23 +113,23 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		t, req := tables[name], rec.requests[name]
 		for _, w := range []struct {
 			kind      string
-			statement func(context.Context, plan.DiffRequest) (int, error)
+			statement func(context.Context, plan.DiffRequest) (Count, error)
 			planned   int
 			total     *int
 		}{
-			{"insert", db.Insert, len(t.Diff.Inserts), &r.Inserted},
-			{"update", db.Update, len(t.Diff.Updates), &r.Updated},
+			{KindInsert, db.Insert, len(t.Diff.Inserts), &r.Inserted},
+			{KindUpdate, db.Update, len(t.Diff.Updates), &r.Updated},
 		} {
-			n, err := write(ctx, w.statement, req, w.planned)
+			c, err := write(ctx, w.statement, req, w.planned)
 			if err != nil {
 				return nil, err
 			}
-			if n > w.planned {
-				return nil, wroteMoreRows(name, w.kind, n, w.planned)
+			if err := CheckCount(name, w.kind, w.planned, c); err != nil {
+				return nil, err
 			}
-			*w.total += n
-			if n < w.planned {
-				r.Uneven = append(r.Uneven, Uneven{Table: name, Kind: w.kind, Wrote: n, Planned: w.planned})
+			*w.total += c.Wrote
+			if c.Wrote < w.planned {
+				r.Uneven = append(r.Uneven, Uneven{Table: name, Wrote: c.Wrote, Planned: w.planned})
 			}
 		}
 	}
@@ -138,14 +139,14 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 		for _, name := range DeletionOrder(sorted, keys, deferred, p) {
 			t, req := tables[name], rec.requests[name]
-			n, err := write(ctx, db.Delete, req, len(t.Diff.Deletes))
+			c, err := write(ctx, db.Delete, req, len(t.Diff.Deletes))
 			if err != nil {
 				return nil, err
 			}
-			if n != len(t.Diff.Deletes) {
-				return nil, deletedOtherRows(name, n, len(t.Diff.Deletes))
+			if err := CheckCount(name, KindDelete, len(t.Diff.Deletes), c); err != nil {
+				return nil, err
 			}
-			r.Deleted += n
+			r.Deleted += c.Wrote
 		}
 		if err := db.CheckEffect(ctx); err != nil {
 			return nil, err
@@ -182,38 +183,12 @@ func Writes(p *plan.Plan, deletes bool) map[declaration.TableName]bool {
 }
 
 // write runs one statement of a table when the plan has rows for it, and
-// returns the number of rows that it wrote.
-func write(ctx context.Context, statement func(context.Context, plan.DiffRequest) (int, error), req plan.DiffRequest, planned int) (int, error) {
+// returns what it did.
+func write(ctx context.Context, statement func(context.Context, plan.DiffRequest) (Count, error), req plan.DiffRequest, planned int) (Count, error) {
 	if planned == 0 {
-		return 0, nil
+		return Count{}, nil
 	}
 	return statement(ctx, req)
-}
-
-// wroteMoreRows is the error of an insert or an update that wrote more rows
-// than the plan shows (ADR-0042). Its pick, made when the write runs, found
-// declared rows that the plan did not show: another write of the apply had
-// taken them away from their declared values, and an apply writes only the
-// rows that its plan shows.
-func wroteMoreRows(table declaration.TableName, kind string, got, want int) error {
-	what, verb := "the update of table ", "updated"
-	if kind == "insert" {
-		what, verb = "the insert into table ", "inserted"
-	}
-	return fmt.Errorf("%s%s %s %s, but the plan has %s: another write of the apply, through a trigger, or a cascade or another action of a foreign key, "+
-		"took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, "+
-		"and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table %s "+
-		"when the apply writes another table, or declare the values that it writes",
-		what, table, verb, rows(got), rowsTo(want, kind), table)
-}
-
-// deletedOtherRows is the error of a deletion that deleted another number of
-// rows than the plan shows. A deletion keeps its strict count (ADR-0042):
-// the check after the deletions counts on it (ADR-0039).
-func deletedOtherRows(table declaration.TableName, got, want int) error {
-	return fmt.Errorf("the deletion from table %s deleted %s, but the plan has %s to delete: "+
-		"a trigger, a rule created after the plan, or the cascade of a foreign key changed what the statement did, "+
-		"and an apply deletes exactly the rows that its plan shows, so it stops", table, rows(got), rows(want))
 }
 
 // pending returns an error for each table and column that the database does

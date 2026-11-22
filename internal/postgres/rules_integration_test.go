@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/export"
@@ -114,8 +115,8 @@ func TestWritesThroughRules(t *testing.T) {
 			if _, err := s.Diff(t.Context(), instead); err != nil {
 				t.Fatal(err)
 			}
-			if n, err := s.Update(t.Context(), instead); n != 1 || err != nil {
-				t.Errorf("Update through the rule DO INSTEAD = %d, %v, want the planned count, 1", n, err)
+			if c, err := s.Update(t.Context(), instead); c != (apply.Count{Picked: 1, Wrote: 1}) || err != nil {
+				t.Errorf("Update through the rule DO INSTEAD = %+v, %v, want the planned count, 1", c, err)
 			}
 			left, err := s.DiffAgain(t.Context(), instead)
 			if lines := diffLines(left); err != nil || !slices.Equal(lines, []string{`~ "1" | name: "one" -> "ONE"`}) {

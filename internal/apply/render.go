@@ -11,8 +11,8 @@ import (
 // RenderSummary writes what an apply wrote, for the lines after its plan,
 // which Options.Planned shows: a blank line and the count of the rows
 // inserted, updated, and deleted, and a line of the rows that the deletions
-// also deleted and changed through foreign keys (ADR-0039). When inserts or
-// updates wrote fewer rows than the plan shows, a line says which, and that
+// also deleted and changed through foreign keys (ADR-0039). When updates
+// found fewer rows to update than the plan shows, a line says which, and that
 // the other writes of the apply had done their work already, as the check
 // before the commit confirmed (ADR-0042). When
 // deletions were left out, a line counts them, with what they would also
@@ -65,21 +65,17 @@ func RenderSummary(w io.Writer, r *Result) error {
 	return err
 }
 
-// unevenLines returns the line of the writes that wrote fewer rows than the
-// plan shows, whose rows the other writes of the apply had brought to their
-// declared values already, or nothing.
+// unevenLines returns the line of the updates that found fewer rows to
+// update than the plan shows, whose rows the other writes of the apply had
+// brought to their declared values already, or nothing.
 func unevenLines(uneven []Uneven) []string {
-	var fewer []string
-	for _, u := range uneven {
-		n := u.Planned - u.Wrote
-		if u.Kind == "insert" {
-			fewer = append(fewer, rowsTo(n, "insert")+" into "+u.Table.String()+" "+word(n, "was", "were")+" there already")
-		} else {
-			fewer = append(fewer, rowsTo(n, "update")+" of "+u.Table.String()+" held "+word(n, "its", "their")+" declared values already")
-		}
-	}
-	if len(fewer) == 0 {
+	if len(uneven) == 0 {
 		return nil
+	}
+	fewer := make([]string, len(uneven))
+	for i, u := range uneven {
+		n := u.Planned - u.Wrote
+		fewer[i] = rowsTo(n, KindUpdate) + " of " + u.Table.String() + " held " + word(n, "its", "their") + " declared values already"
 	}
 	return []string{"Fewer than planned: " + joinAnd(fewer) + ", after the other writes of the apply."}
 }

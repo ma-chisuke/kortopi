@@ -85,15 +85,12 @@ func TestRunChecksTheResult(t *testing.T) {
 				valueAdvice + "\n" + causes,
 		},
 		{
-			name:    "a row that the table did not keep, after a write that wrote fewer rows",
-			opts:    all,
-			changed: map[string]int{"Insert a.child": 0},
-			left:    map[declaration.TableName]plan.TableDiff{child: {Inserts: []plan.Row{row("2", "x")}}},
-			want:    slices.Concat(planned, deletes, again),
+			name: "a row that the table did not keep after the writes",
+			opts: all,
+			left: map[declaration.TableName]plan.TableDiff{child: {Inserts: []plan.Row{row("2", "x")}}},
+			want: slices.Concat(planned, deletes, again),
 			wantErr: "a/child.csv: after the writes of the apply, table a.child still differs from the declaration in 1 row to insert: + id=2  name=x: " +
-				"declare only rows that the table keeps after the writes, or change what takes them away\n" +
-				causes + ", and the writes that wrote fewer rows than the plan shows are the place to look first: " +
-				"the insert into table a.child wrote 0 rows, and the plan has 1",
+				"declare only rows that the table keeps after the writes, or change what takes them away\n" + causes,
 		},
 		{
 			name: "a row to delete that is left with --allow-delete, in two tables",
@@ -110,19 +107,30 @@ func TestRunChecksTheResult(t *testing.T) {
 				causes,
 		},
 		{
-			name: "a row to delete that the run did not report, without --allow-delete",
+			// The left-out deletions are counted, not matched by their keys:
+			// a cascade into a column of the key of a stored row that the
+			// declaration lacks leaves one row to delete, with another key.
+			name: "a row to delete that the run left out, with another key after the writes",
+			left: map[declaration.TableName]plan.TableDiff{parent: {Deletes: []plan.Row{keyRow("7")}}},
+			want: slices.Concat(planned, writes, again, []string{"Commit"}),
+		},
+		{
+			name: "more rows to delete than the run left out, without --allow-delete",
 			left: map[declaration.TableName]plan.TableDiff{parent: {Deletes: []plan.Row{keyRow("8"), keyRow("9")}}},
 			want: slices.Concat(planned, writes, again),
-			wantErr: "z/parent.csv: after the writes of the apply, table z.parent still differs from the declaration in 1 row to delete: - id=9: " +
+			wantErr: "z/parent.csv: after the writes of the apply, table z.parent holds 2 rows that the declaration lacks, 1 more than the plan shows to delete, " +
+				"which an apply without --allow-delete leaves in place: - id=8 and - id=9: the writes added rows that the declaration lacks: " +
 				`declare the rows that the writes add to the table, or give the table mode upsert in [tables."z.parent"] of kortopi.toml, which deletes no row` + "\n" +
 				causes,
 		},
 		{
-			name: "a row to delete that the run left out is gone",
+			name: "fewer rows to delete than the run left out, without --allow-delete",
 			left: map[declaration.TableName]plan.TableDiff{parent: {}},
 			want: slices.Concat(planned, writes, again),
-			wantErr: "z/parent.csv: after the writes of the apply, table z.parent no longer holds 1 row that the plan shows to delete, " +
-				"which an apply without --allow-delete leaves in place: - id=8: delete it in an apply of its own with --allow-delete first, or change what deletes it\n" +
+			wantErr: "z/parent.csv: after the writes of the apply, table z.parent holds 0 rows that the declaration lacks, 1 fewer than the plan shows to delete, " +
+				"which an apply without --allow-delete leaves in place, so the writes deleted rows, which such an apply never does: " +
+				"change the trigger, the rule, or the foreign key that deletes rows of table z.parent while the apply writes, " +
+				"or delete those rows first, in an apply with --allow-delete whose declaration changes nothing else\n" +
 				causes,
 		},
 		{
@@ -137,7 +145,7 @@ func TestRunChecksTheResult(t *testing.T) {
 				"+ id=0  name=z, ~ id=1  name: A -> a, ~ id=2  name: A -> a, ~ id=3  name: A -> a, ~ id=4  name: A -> a, and 4 more: " +
 				"declare only rows that the table keeps after the writes, or change what takes them away, " + valueAdvice + ", and " +
 				`declare the rows that the writes add to the table, or give the table mode upsert in [tables."z.parent"] of kortopi.toml, which deletes no row` + "\n" +
-				causes + ", and the writes that wrote fewer rows than the plan shows are the place to look first: " +
+				causes + ", and the updates that found fewer rows to update than the plan shows are the place to look first: " +
 				"the update of table z.parent wrote 0 rows, and the plan has 1",
 		},
 	}
