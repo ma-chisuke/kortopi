@@ -126,7 +126,7 @@ apply と SQL としての計画：
 費用：
 
 - モード `upsert` か `insert` のテーブルの計画は、テーブルのすべての保存された行のキーを読むようになる。以前は、宣言したキーだけを読んでいた。モード `sync` の計画は、削除する行を見つけるために同じ行を読む。
-- 費用の目安として、`TestCountRowsThatTheDeclarationLacksOnALargeTable` で測った値がある。コマンドは `go test -tags integration -run TestCountRowsThatTheDeclarationLacksOnALargeTable ./internal/postgres/` である。2026-11-22 に3回実行した。競合検出器はなしで、Apple M2 とメモリ 8 GB のノートPC上のコンテナの PostgreSQL 18.7 に対して測った。テーブルは 200,000 行と主キーと5つの列を持ち、そのうち4つの列を宣言する。モードは `upsert` である。数える時間は、計画が読み込んだ行に対して、その問い合わせを2回目に実行して測った。
+- 費用の目安として、`TestCountRowsThatTheDeclarationLacksOnALargeTable` で測った値がある。コマンドは `go test -tags integration -run TestCountRowsThatTheDeclarationLacksOnALargeTable ./internal/postgres/` である。2026-11-22 に3回実行した。データ競合の検出器は使わず、Apple M2 とメモリ 8 GB のノートPC上のコンテナの PostgreSQL 18.7 に対して測った。テーブルは 200,000 行と主キーと5つの列を持ち、そのうち4つの列を宣言する。モードは `upsert` である。数える時間は、計画が読み込んだ行に対して、その問い合わせを2回目に実行して測った。
   - 199,000 行を持つ宣言に対しては、計画がテーブルを読み込んで比べるのに 612、653、695 ミリ秒かかった。宣言にない 1,000 行を数えるのには 38〜42 ミリ秒かかった。これは比較の6パーセントで、3回の実行では 5.6〜6.4 パーセントである。
   - 1,000 行を持つ宣言に対しては、計画がテーブルを読み込んで比べるのに 28、30、74 ミリ秒かかった。199,000 行を数えるのには 12〜34 ミリ秒かかり、これは比較の 42〜46 パーセントである。大きなテーブルの小さな宣言では、比較は数えないときの約 1.7〜1.8 倍の時間がかかる。
 
