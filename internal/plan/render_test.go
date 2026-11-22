@@ -47,6 +47,14 @@ func withUndeclared(t Table, n int) Table {
 	return t
 }
 
+// withUncounted returns t whose stored rows that the declaration lacks the
+// database could not count, because a statement timeout ended the count.
+func withUncounted(t Table) Table {
+	t.Diff.Uncounted = "PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
+		"statement_timeout of the session, or another session, cancelled it: allow the session more time to count them"
+	return t
+}
+
 // insertTable is a table of schema app in mode insert without rows to
 // insert.
 func insertTable(table string) Table {
@@ -302,6 +310,25 @@ func TestRender(t *testing.T) {
 					Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}},
 				}, 1000),
 				unchangedTable("app", "towns"),
+			}},
+		},
+		{
+			// A count that the database could not make says why, and the
+			// empty plan claims no match (ADR-0046).
+			name: "no_changes_uncounted",
+			plan: &Plan{Tables: []Table{withUncounted(unchangedTable("app", "big")), unchangedTable("app", "small")}},
+		},
+		{
+			// The summary counts the rows of the tables that the database
+			// counted, and the tables that it did not count.
+			name: "uncounted",
+			plan: &Plan{Tables: []Table{
+				withUncounted(Table{
+					Name: name("app", "big"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("1"), Values: values("a")}}},
+				}),
+				withUndeclared(insertTable("codes"), 2),
+				withUncounted(unchangedTable("app", "huge")),
 			}},
 		},
 		{

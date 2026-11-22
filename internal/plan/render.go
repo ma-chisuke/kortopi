@@ -130,7 +130,7 @@ func Render(w io.Writer, p *Plan) error {
 		deletes += len(t.Diff.Deletes)
 		pendingColumns += len(t.PendingColumns) + len(t.PendingOnInsert)
 		switch {
-		case t.unchanged() && t.Diff.Undeclared > 0:
+		case t.unchanged() && t.counts():
 			// A table without a block still shows the stored rows that the
 			// declaration lacks, on a line of its own (ADR-0046).
 			b.WriteString(FormatTable(t.Name) + ": " + UndeclaredLine(t) + "\n\n")

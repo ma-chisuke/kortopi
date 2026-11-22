@@ -93,7 +93,10 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		if err := s.checkNotNull(ctx, tx, table, c, req.Updates); err != nil {
 			return err
 		}
-		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes, !req.Deletes)
+		if diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes); err != nil || req.Deletes {
+			return err
+		}
+		diff.Undeclared, diff.Uncounted, err = s.countUndeclared(ctx, tx, table.Name, c)
 		return err
 	})
 	if err != nil {
@@ -114,13 +117,10 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 
 // compareRows compares the declared rows in the temporary table of c with
 // the stored rows of table, and returns the rows to insert, and the rows to
-// update and to delete when updates and deletes say so. With undeclared, it
-// counts the stored rows that no declared row matches, for a table whose
-// mode deletes no row (ADR-0046). It is the comparison of a plan, which Diff
-// runs once the rows are loaded and checked, and DiffAgain runs again after
-// the writes of an apply (ADR-0042), without the count, which no check of
-// an apply needs.
-func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison, updates, deletes, undeclared bool) (plan.TableDiff, error) {
+// update and to delete when updates and deletes say so. It is the comparison
+// of a plan, which Diff runs once the rows are loaded and checked, and
+// DiffAgain runs again after the writes of an apply (ADR-0042).
+func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison, updates, deletes bool) (plan.TableDiff, error) {
 	var diff plan.TableDiff
 	var err error
 	if diff.Inserts, err = queryRows(ctx, tx, c.insertsSQL(), len(c.key), len(c.compare)); err != nil {
@@ -136,14 +136,62 @@ func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c 
 			return plan.TableDiff{}, fmt.Errorf("find the rows to delete from table %s: %w", table, err)
 		}
 	}
-	if undeclared {
-		var n int64
-		if err := tx.QueryRow(ctx, c.undeclaredSQL()).Scan(&n); err != nil {
-			return plan.TableDiff{}, fmt.Errorf("count the stored rows of table %s that the declaration lacks: %w", table, err)
-		}
-		diff.Undeclared = int(n)
-	}
 	return diff, nil
+}
+
+// countUndeclared counts, for a table whose mode deletes no row, the stored
+// rows of table that no declared row matches (ADR-0046), in a savepoint of
+// its own. The count reads the key of every stored row, so it can take
+// longer than the rest of the comparison, and it must not turn a plan that
+// would succeed into a failure: when PostgreSQL ends it with an error, such
+// as a statement_timeout, countUndeclared rolls back to the savepoint and
+// returns why it did not count, and the plan goes on. err is an interrupt,
+// a connection that broke, or an error that ended the session, which stop
+// the run as before. The comparison before the commit of an apply does not
+// count (ADR-0042).
+func (s *Session) countUndeclared(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison) (n int, uncounted string, err error) {
+	what := "count the stored rows of table " + table.String() + " that the declaration lacks"
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s: %w", what, err)
+	}
+	var count int64
+	err = func() error {
+		if s.beforeCount != nil {
+			if err := s.beforeCount(ctx, sp); err != nil {
+				return err
+			}
+		}
+		return sp.QueryRow(ctx, c.undeclaredSQL()).Scan(&count)
+	}()
+	if err == nil {
+		if err := sp.Commit(ctx); err != nil {
+			return 0, "", fmt.Errorf("%s: %w", what, err)
+		}
+		return int(count), "", nil
+	}
+	var pgErr *pgconn.PgError
+	if ctx.Err() != nil || !errors.As(err, &pgErr) || pgErr.SeverityUnlocalized == "FATAL" || pgErr.SeverityUnlocalized == "PANIC" {
+		return 0, "", fmt.Errorf("%s: %w", what, err)
+	}
+	if rbErr := sp.Rollback(ctx); rbErr != nil {
+		return 0, "", fmt.Errorf("%s: %w", what, errors.Join(err, rbErr))
+	}
+	return 0, s.uncounted(pgErr), nil
+}
+
+// uncounted says why PostgreSQL ended the count of countUndeclared, with
+// what the user can do for a statement that took too long or waited too
+// long for a lock.
+func (s *Session) uncounted(err *pgconn.PgError) string {
+	why := "PostgreSQL ended the count: " + err.Error()
+	switch err.Code {
+	case queryCanceled:
+		why += ": statement_timeout of the session, or another session, cancelled it: allow the session more time to count them"
+	case lockNotAvailable:
+		why += ": another session held a lock that the count needed longer than " + s.lockLimit() + " allows: plan again once the lock is gone" + s.moreTime()
+	}
+	return why
 }
 
 // DiffAgain compares the declared rows that Diff loaded for the table of req
@@ -160,7 +208,7 @@ func (s *Session) DiffAgain(ctx context.Context, req plan.DiffRequest) (_ plan.T
 	if err != nil {
 		return plan.TableDiff{}, err
 	}
-	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync, false)
+	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync)
 	if err != nil {
 		return plan.TableDiff{}, fmt.Errorf("the check before the commit, which compares table %s again, failed, so the apply stops, and nothing was changed: %w", req.Table.Name, err)
 	}

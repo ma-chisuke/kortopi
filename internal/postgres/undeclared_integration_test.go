@@ -4,11 +4,15 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 	"github.com/ma-chisuke/kortopi/internal/plan"
@@ -158,6 +162,82 @@ func TestDiffAgainCountsNothing(t *testing.T) {
 			again, err := s.DiffAgain(t.Context(), req)
 			if err != nil || again.Undeclared != 0 {
 				t.Errorf("DiffAgain = %+v, %v, want no count", again, err)
+			}
+		})
+	}
+}
+
+// A count that PostgreSQL ends with an error turns no plan or apply into a
+// failure (ADR-0046): it runs in a savepoint of its own, the plan goes on
+// and says why it did not count, and the apply commits its rows. Here a
+// statement_timeout of 1 millisecond, set in the savepoint of the count,
+// ends the count of a table of 200,000 rows. An interrupt during the count
+// stops the run, as before.
+func TestCountThatPostgreSQLEnds(t *testing.T) {
+	servers := eachServer(t)
+	for _, srv := range servers[len(servers)-1:] {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
+				INSERT INTO app.t SELECT g, 'v' FROM generate_series(1, 200000) AS g; ANALYZE app.t;`)
+			timeout := func(ctx context.Context, tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, "SET LOCAL statement_timeout = 1")
+				return err
+			}
+			for _, tt := range []struct {
+				name, file string
+				empty      bool
+			}{
+				{name: "without changes", file: "id,v\n1,v\n", empty: true},
+				{name: "with a row to insert", file: "id,v\n1,v\n0,new\n"},
+			} {
+				dir := writeFiles(t, map[string]string{"app/t.csv": tt.file})
+				decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}
+				s := db.session(t, dir)
+				s.beforeCount = timeout
+				p, err := plan.Build(t.Context(), decl, nil, s, plan.Options{})
+				if err != nil {
+					t.Fatalf("%s: plan: %v", tt.name, err)
+				}
+				d := p.Tables[0].Diff
+				if d.Undeclared != 0 || !strings.Contains(d.Uncounted, "canceling statement due to statement timeout (SQLSTATE 57014)") || p.Empty() != tt.empty {
+					t.Errorf("%s: plan = %d rows that the declaration lacks, not counted %q, empty %t, want the statement timeout",
+						tt.name, d.Undeclared, d.Uncounted, p.Empty())
+				}
+				if lines := p.EmptyLines(); tt.empty && lines[0] != "No changes. There is nothing to apply." {
+					t.Errorf("%s: empty plan = %q, want no claim of a match", tt.name, lines)
+				}
+			}
+
+			// An apply commits its rows all the same.
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,v\n0,new\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}
+			a, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.beforeCount = timeout
+			r, err := apply.Run(t.Context(), decl, nil, a, apply.Options{})
+			if closeErr := a.Close(context.Background()); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			if err != nil || !r.Committed || r.Inserted != 1 || r.Plan.Tables[0].Diff.Uncounted == "" {
+				t.Errorf("apply = %+v, %v, want the row inserted and the count not done", r, err)
+			}
+			if got := db.Query(t, "SELECT v FROM app.t WHERE id = 0"); fmt.Sprint(got) != "[[new]]" {
+				t.Errorf("row 0 after the apply: %v, want it inserted", got)
+			}
+
+			// An interrupt during the count stops the plan.
+			ctx, cancel := context.WithCancel(t.Context())
+			s := db.session(t, dir)
+			s.beforeCount = func(ctx context.Context, tx pgx.Tx) error {
+				cancel()
+				_, err := tx.Exec(ctx, "SELECT pg_catalog.pg_sleep(10)")
+				return err
+			}
+			if _, err := plan.Build(ctx, decl, nil, s, plan.Options{}); !errors.Is(err, context.Canceled) {
+				t.Errorf("plan interrupted during the count: %v, want %v", err, context.Canceled)
 			}
 		})
 	}
