@@ -47,4 +47,4 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0039](ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md) | Plan the whole effect of deletions through foreign keys, show it apart from the rows, and count all of it in the guards | accepted | 2026-11-21 |
 | [ADR-0040](ADR-0040-compare-an-interval-by-its-months-days-and-time.md) | Compare an interval by its months, days, and time | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.md) | Write issues through forms with required fields | accepted | 2026-11-21 |
-| [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md) | Compare every declared table again before the commit of an apply, and let that comparison decide for inserts and updates that write fewer rows than the plan | accepted | 2026-11-22 |
+| [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md) | Compare every declared table again before the commit of an apply, and let that comparison decide for updates whose rows already hold their declared values | accepted | 2026-11-22 |
