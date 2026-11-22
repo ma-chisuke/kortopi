@@ -254,12 +254,14 @@ func TestCheckThatWaitsForACatalog(t *testing.T) {
 					ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 					defer cancel()
 					err = s.CheckEffect(ctx)
+					// The whole error: the advice of a wait of the apply itself,
+					// which --lock-timeout governs, is not added to it.
 					want := "the check after the deletions reads the schema of the tables that they reach through a second connection, " +
-						"and its read waited " + tt.bound + " for a lock on a system catalog, so the apply stops before its commit, and nothing was changed: " +
+						"and its read waited " + tt.bound + ", for a lock on a system catalog, so the apply stops before its commit, and nothing was changed: " +
 						"another session holds such a lock, or waits for one behind the apply itself, as VACUUM FULL of a catalog waits for the lock of the apply on it: " +
-						"run the apply again once that session has ended: "
-					if err == nil || ctx.Err() != nil || !strings.HasPrefix(err.Error(), want) || !strings.Contains(err.Error(), "lock timeout") {
-						t.Errorf("check: %v\nwant %s...", err, want)
+						"run the apply again once that session has ended: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)"
+					if err == nil || ctx.Err() != nil || err.Error() != want {
+						t.Errorf("check: %v\nwant %s", err, want)
 					}
 					waitNoSecondSession(t, db, s)
 					if err := s.Close(context.Background()); err != nil {

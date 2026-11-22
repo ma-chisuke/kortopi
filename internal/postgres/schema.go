@@ -357,15 +357,15 @@ func (s *Session) readNewestSchema(ctx context.Context) (schemaReading, error) {
 			if errors.As(err, &notEnded) {
 				s.newestNotEnded = notEnded
 			}
-			return schemaReading{}, fmt.Errorf("the check after the deletions could not open its second connection: %w", ctx.Err())
+			return schemaReading{}, &checkError{message: "the check after the deletions could not open its second connection", err: ctx.Err()}
 		}
 		if pgconn.Timeout(err) || errors.Is(err, context.DeadlineExceeded) {
-			return schemaReading{}, fmt.Errorf("the check after the deletions could not open its second connection within %s, so the apply stops before its commit, "+
+			return schemaReading{}, &checkError{message: fmt.Sprintf("the check after the deletions could not open its second connection within %s, so the apply stops before its commit, "+
 				"and nothing was changed: the server, or a connection pooler in front of it, did not accept a new connection in time, as a pooler whose pool is full holds one back: "+
-				"run the apply again when the server accepts a connection, or apply without deleting rows: %w", boundText(connect, checkConnectWait, "connect_timeout"), err)
+				"run the apply again when the server accepts a connection, or apply without deleting rows", boundText(connect, checkConnectWait, "connect_timeout")), err: err}
 		}
-		return schemaReading{}, fmt.Errorf("the check after the deletions, which reads the schema of the tables that they reach through a second connection, "+
-			"could not open it, so the apply stops, and nothing was changed: %w", err)
+		return schemaReading{}, &checkError{message: "the check after the deletions, which reads the schema of the tables that they reach through a second connection, " +
+			"could not open it, so the apply stops, and nothing was changed", err: err}
 	}
 	reading := make(chan newestRead, 1)
 	go func() {
@@ -389,7 +389,7 @@ func (s *Session) readNewestSchema(ctx context.Context) (schemaReading, error) {
 		peek.waitFromClose = true
 		s.waitFromClose = true
 		s.peek = peek
-		return schemaReading{}, fmt.Errorf("the check after the deletions, which reads the schema of the tables that they reach through a second connection: %w", ctx.Err())
+		return schemaReading{}, &checkError{message: "the check after the deletions, which reads the schema of the tables that they reach through a second connection", err: ctx.Err()}
 	}
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
 	defer cancel()
@@ -402,13 +402,31 @@ func (s *Session) readNewestSchema(ctx context.Context) (schemaReading, error) {
 	case err == nil:
 		return now, nil
 	case errors.As(err, &pgErr) && pgErr.Code == lockNotAvailable:
-		return schemaReading{}, fmt.Errorf("the check after the deletions reads the schema of the tables that they reach through a second connection, "+
-			"and its read waited %s for a lock on a system catalog, so the apply stops before its commit, and nothing was changed: "+
+		return schemaReading{}, &checkError{message: fmt.Sprintf("the check after the deletions reads the schema of the tables that they reach through a second connection, "+
+			"and its read waited %s, for a lock on a system catalog, so the apply stops before its commit, and nothing was changed: "+
 			"another session holds such a lock, or waits for one behind the apply itself, as VACUUM FULL of a catalog waits for the lock of the apply on it: "+
-			"run the apply again once that session has ended: %w", boundText(lock, checkLockWait, "--lock-timeout"), err)
+			"run the apply again once that session has ended", boundText(lock, checkLockWait, "--lock-timeout")), err: err}
 	}
-	return schemaReading{}, fmt.Errorf("the check after the deletions, which reads the schema of the tables that they reach through a second connection, failed, "+
-		"so the apply stops, and nothing was changed: read the foreign keys, the triggers, the rules, and the partitions of the tables as they are now: %w", err)
+	return schemaReading{}, &checkError{message: "the check after the deletions, which reads the schema of the tables that they reach through a second connection, failed, " +
+		"so the apply stops, and nothing was changed: read the foreign keys, the triggers, the rules, and the partitions of the tables as they are now", err: err}
+}
+
+// checkError is an error of the second session of the check after the
+// deletions. Its message says what failed in that session, so explainWait,
+// which explains a wait of the session of the apply, by its own lock timeout
+// and its own locks, leaves it as it is.
+type checkError struct {
+	message string
+	err     error
+}
+
+func (e *checkError) Error() string {
+	return e.message + ": " + e.err.Error()
+}
+
+// Unwrap returns the error of the second session.
+func (e *checkError) Unwrap() error {
+	return e.err
 }
 
 // boundText says which bound a wait of the second session reached: the

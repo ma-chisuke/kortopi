@@ -57,7 +57,9 @@ func (s *Session) moreTime() string {
 // lock without limit unless one of these settings is set, as --lock-timeout
 // sets lock_timeout. A plan and an export change nothing, and a failed apply
 // rolls back, so the advice is to run the command again. After an interrupt,
-// the cancel is kortopi's own, and the error stays as it is.
+// the cancel is kortopi's own, and the error stays as it is, and so does an
+// error of the second session of the check after the deletions, which says
+// what happened in that session (checkError).
 func (s *Session) explainWait(ctx context.Context, err *error) {
 	s.explain(ctx, err, true)
 }
@@ -76,7 +78,8 @@ func (s *Session) explainRead(ctx context.Context, err *error) {
 func (s *Session) explain(ctx context.Context, err *error, waits bool) {
 	var pgErr *pgconn.PgError
 	var explained *waitError
-	if *err == nil || ctx.Err() != nil || !errors.As(*err, &pgErr) || errors.As(*err, &explained) {
+	var check *checkError
+	if *err == nil || ctx.Err() != nil || !errors.As(*err, &pgErr) || errors.As(*err, &explained) || errors.As(*err, &check) {
 		return
 	}
 	// The last line of a failed apply says that nothing was changed.
