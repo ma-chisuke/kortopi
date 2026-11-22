@@ -34,6 +34,10 @@ const maxFlaggedRows = 5
 // delete, each sorted by the match key in the order of the key's types.
 // Values are text as PostgreSQL prints them.
 //
+// After the first read of the table, Diff checks that the table is the one
+// that the snapshot shows (ADR-0047): another session can have rewritten or
+// truncated it after the snapshot, which would make it look empty.
+//
 // The work of one table runs inside a savepoint, so that an error leaves the
 // session usable. The savepoint is released, and the declared rows stay
 // loaded until the session ends: Effects reads them for every table, and in
@@ -96,6 +100,16 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes)
 		return err
 	})
+	// The first read of the table took a lock that keeps a rewrite out until
+	// the transaction ends, so the table is now what it stays (ADR-0047). A
+	// read that failed may have failed because of such a change too, such as
+	// a type that a rewrite changed, and the change is the better error.
+	if err == nil || ctx.Err() == nil {
+		var changed *storageError
+		if serr := s.checkStorage(ctx, []readTable{{oid: meta.oid, name: table.Name}}); serr != nil && (err == nil || errors.As(serr, &changed)) {
+			return plan.TableDiff{}, serr
+		}
+	}
 	if err != nil {
 		return plan.TableDiff{}, err
 	}

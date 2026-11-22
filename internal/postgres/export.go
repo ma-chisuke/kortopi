@@ -74,6 +74,8 @@ func (s *Session) Tables(ctx context.Context, schemas []string) (_ []declaration
 //
 // Like a plan, an export needs USAGE on the schema and SELECT on the
 // columns that it reads, and row-level security that hides rows is an error.
+// After the read, Write checks that the table is the one that the snapshot
+// shows, as Diff does (ADR-0047).
 func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_ int, err error) {
 	defer s.explainWait(ctx, &err)
 	meta, err := s.table(ctx, req.Table)
@@ -125,6 +127,7 @@ func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_
 		order = " ORDER BY " + strings.Join(parts, ", ")
 	}
 
+	var n int
 	switch req.Format {
 	case declaration.CSV:
 		sql := "COPY (SELECT " + quoteColumns("", req.Columns) + " FROM " + from + order + ") TO STDOUT WITH (FORMAT csv, HEADER)"
@@ -132,11 +135,22 @@ func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_
 		if err != nil {
 			return 0, readError(req.Table, err)
 		}
-		return int(tag.RowsAffected()), nil
+		n = int(tag.RowsAffected())
 	case declaration.SQL:
-		return s.writeInserts(ctx, w, meta, req, from, order)
+		if n, err = s.writeInserts(ctx, w, meta, req, from, order); err != nil {
+			return 0, err
+		}
+	default:
+		return 0, fmt.Errorf("table %s: unknown format %d", req.Table, req.Format)
 	}
-	return 0, fmt.Errorf("table %s: unknown format %d", req.Table, req.Format)
+	// The read took a lock that keeps a rewrite out until the transaction
+	// ends, so the table is now what it stays (ADR-0047). The rows are in a
+	// temporary file, which the export puts in place only when every table
+	// was written.
+	if err := s.checkStorage(ctx, []readTable{{oid: meta.oid, name: req.Table}}); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // writeInserts writes the rows of a table as one INSERT for each row, with

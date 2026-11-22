@@ -73,8 +73,9 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 	if !deletes {
 		return out, nil
 	}
+	w := &walk{s: s, table: s.nextTemp(), updates: make(map[uint32]int64), moves: make(map[uint32]bool), read: make(map[uint32]declaration.TableName)}
 	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
-		w := &walk{s: s, tx: tx, table: s.nextTemp(), updates: make(map[uint32]int64), moves: make(map[uint32]bool)}
+		w.tx = tx
 		if err := w.partitionTrees(ctx); err != nil {
 			return err
 		}
@@ -109,10 +110,33 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 		s.effect, s.effectUpdates, s.effectMoves, s.effectGone = w.table, w.updates, w.moves, w.gone
 		return nil
 	})
+	// The walk read referencing tables that the declaration does not hold,
+	// each for the first time, perhaps: a rewrite of one after the snapshot
+	// would make the effect look smaller than it is (ADR-0047). A read that
+	// failed may have failed because of such a change too.
+	if err == nil || ctx.Err() == nil {
+		var changed *storageError
+		if serr := s.checkStorage(ctx, w.readTables()); serr != nil && (err == nil || errors.As(serr, &changed)) {
+			err = serr
+		}
+	}
 	if err != nil {
 		return plan.Effects{}, fmt.Errorf("follow the foreign keys that reference the rows to delete: %w", err)
 	}
 	return out, nil
+}
+
+// readTables returns the referencing tables whose rows the walk read, sorted
+// by name.
+func (w *walk) readTables() []readTable {
+	tables := make([]readTable, 0, len(w.read))
+	for oid, name := range w.read {
+		tables = append(tables, readTable{oid: oid, name: name})
+	}
+	slices.SortFunc(tables, func(a, b readTable) int {
+		return cmp.Or(cmp.Compare(a.name.Schema, b.name.Schema), cmp.Compare(a.name.Name, b.name.Name))
+	})
+	return tables
 }
 
 // walk follows the foreign keys from the rows to delete, in the transaction
@@ -135,6 +159,9 @@ type walk struct {
 	// gone holds the pairs of updates that PostgreSQL never makes when the
 	// rows go first, which CheckEffect takes off the most updates.
 	gone []goneFirst
+	// read holds the referencing relations whose rows the walk read, by
+	// OID, for the check that they are those of the snapshot (ADR-0047).
+	read map[uint32]declaration.TableName
 }
 
 // goneFirst counts the pairs of the most updates of the table at the top
@@ -245,8 +272,10 @@ func (w *walk) partitionTrees(ctx context.Context) error {
 }
 
 // refsOf returns the referencing side of e, with the declared tables that
-// cover its rows, sorted by name.
+// cover its rows, sorted by name. The walk reads the rows of the relation
+// next, so refsOf records it.
 func (w *walk) refsOf(e edge) refs {
+	w.read[e.fromOID] = e.table
 	r := refs{e: e}
 	for _, name := range sortedNames(w.s.loaded) {
 		lt := w.s.loaded[name]
