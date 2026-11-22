@@ -432,6 +432,7 @@ the wait for the lock of kortopi, which the other apply held, was cancelled, by 
 Apply the schema first, with the tool that changes your schema, and the rows second.
 
 - A table or a column that the declaration names and the database lacks is an error of an apply, so an apply never runs ahead of its schema change.
+- Start the apply once the schema change has committed, not while it runs. A change that rewrites or replaces a declared table, or a table that the deletions reach, after the apply began, stops the apply before it writes anything, with an error that says so ([A schema change during a run](plan.md#a-schema-change-during-a-run)).
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.

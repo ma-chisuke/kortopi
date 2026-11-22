@@ -28,6 +28,7 @@ export PGPASSWORD="$APP_OWNER_PASSWORD"
 kortopi apply --dir data --lock-timeout 10s
 ```
 
+- Start the apply once the schema change of the deployment has committed. A change that rewrites, truncates, or replaces a declared table, or attaches or detaches one of its partitions, after the apply began stops the apply before it writes anything, with exit status 1: run it again then ([kortopi plan](plan.md#a-schema-change-during-a-run)).
 - Run the apply as the role that owns the declared tables, or as a role that has [what an apply needs](apply.md#what-an-apply-needs). With one owner role for each schema, run one apply for each schema, with `--schema` ([kortopi apply](apply.md#one-apply-for-each-schema)).
 - Give the apply a lock timeout with `--lock-timeout`. Without one, an apply waits without limit while another session holds a lock on a declared table, or on the rows that it writes, and the deployment waits with it. With one, the apply stops with an error that says so, and changes nothing ([kortopi plan](plan.md#wait-for-a-lock)). Use the flag, not `PGOPTIONS`: behind a connection pooler in transaction mode, `PGOPTIONS` does not reach the server, and the run fails to connect or waits without the limit ([Connection settings](plan.md#connection-settings)).
 - A runner that cancels a job sends kortopi SIGTERM, or SIGINT. Before the commit, kortopi asks the server to cancel its statement, rolls back, and exits with status 1 within 5 seconds, with `kortopi: nothing was changed` last; when the server did not confirm the end of the session in that time, a line before it says how to find the session in `pg_stat_activity` and end it. Once the commit has started, kortopi says that it waits for the answer, and a second signal gives up the wait with the message of the unknown outcome: run `kortopi plan` then. A runner that kills the process before that leaves the outcome to the server ([kortopi apply](apply.md#interrupt-an-apply)).
@@ -78,6 +79,7 @@ esac
 ```
 
 - Status 2 counts every row to insert, to update, or to delete, and every table or column that waits for a schema change.
+- A schema change that another team commits while the plan runs, and that rewrites, truncates, or replaces a declared table, or attaches or detaches one of its partitions, makes the plan fail with status 1, not report a drift: the plan cannot read the table as its snapshot holds it, and a rewritten table would look empty to it. The check failed, and passes on its next run ([kortopi plan](plan.md#a-schema-change-during-a-run)).
 - A table of mode `insert` is compared by its keys only, so a changed value of one of its rows is no drift.
 - The role needs [what the session of a plan needs](plan.md#what-the-session-needs), on the primary.
 - `|| status=$?` keeps a shell with `set -e` from stopping on status 2.

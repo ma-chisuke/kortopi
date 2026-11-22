@@ -138,6 +138,7 @@ A service file can change this with the settings of libpq for it, which have no 
 ### Wait for a lock
 
 A plan, an apply, and an export wait while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`, or on rows that an apply updates or deletes.
+A schema change that they waited for can change the table that they then read: they stop when it did ([A schema change during a run](#a-schema-change-during-a-run)).
 Without a lock timeout, they wait without limit, and without a word.
 `--lock-timeout` gives the run one, as a duration such as `10s`, `500ms`, or `1m30s`, from `1ms` to `24h`:
 
@@ -157,6 +158,40 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 A limit that the session set says `as long as lock_timeout of the session allows`, and adds `or allow the wait more time with --lock-timeout`.
 `statement_timeout` of the session ends a statement that runs too long, for whatever reason, a wait for a lock among them. The error then says that the statement was cancelled, by `statement_timeout` or by another session, and names no flag: kortopi has no flag for it.
 Give every run at deploy time a lock timeout, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
+
+### A schema change during a run
+
+A plan, an apply, and an export take their snapshot with the first statement of their transaction, and read every table in it.
+They take no lock on a declared table until they read it, after they have read the catalogs.
+A schema change that another session commits in between is seen by the read, and not by the snapshot.
+A change that gives the table new storage, as the forms of `ALTER TABLE` that rewrite a table, such as `ALTER COLUMN ... TYPE`, and `TRUNCATE` do, makes the table look empty to a transaction whose snapshot predates it: PostgreSQL calls these commands not MVCC-safe.
+
+So right after kortopi first reads a table, it checks that the table is the one of its snapshot, and stops when another session, after the snapshot:
+
+- rewrote or truncated the table, or a partition of it;
+- dropped or renamed the table, or replaced it with another table of the same name;
+- attached or detached a partition of it, or created or dropped one.
+
+```text
+kortopi: another session rewrote or truncated table geo.postal_codes after the plan began, so what the plan read from the table may not be what it holds: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+The run exits with status 1, also with `--exit-code`, because a table that a schema change emptied for the run is no drift: a plan prints no plan, an apply writes nothing, and an export writes no file.
+Run it again once the schema change has committed.
+kortopi checks the declared tables of the run, and the tables that the deletions reach through foreign keys, which a plan reads to count what the deletions also do ([What the deletions also do](#what-the-deletions-also-do)).
+Once a run has read a table, it holds a lock on it until it ends, so a schema change of that table waits for the run, and the check is final.
+
+`VACUUM FULL`, `CLUSTER`, and `ALTER TABLE ... SET TABLESPACE` give a table new storage too, but keep its rows: the run read what the table holds.
+kortopi cannot tell them apart from a rewrite in the catalogs, and stops after them as well.
+
+kortopi does not check what leaves the storage of a table as it is:
+
+- A column dropped after the snapshot makes the read fail with the error of PostgreSQL, such as `column s.lat does not exist`.
+- A declared column added after the snapshot is shown as known after the schema is applied, as the snapshot holds the table ([Tables and columns that wait for a schema change](#tables-and-columns-that-wait-for-a-schema-change)), and gives status 2 with `--exit-code`.
+- A table dropped after the snapshot and before the run reads the catalogs makes the read of the catalogs fail, with an error that starts with `read the columns of the tables:` and does not name the cause.
+
+Make schema changes before a run of kortopi, not during one.
+In a deployment, apply the schema first and the rows second, one after the other ([kortopi apply](apply.md#in-a-deployment)). A scheduled drift check that meets a schema change fails with status 1, and passes on its next run ([Run kortopi from scripts](automation.md#a-scheduled-drift-check)).
 
 ## What the session needs
 
@@ -630,7 +665,7 @@ kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
 2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, that no declared name differs from a name of the database only in white space or case, and that no table has a rule that would rewrite the statements of an apply ([Declaration files](declaration.md#a-table-with-a-rule)). With `--no-pending`, it also checks that the database has every declared table and column. It checks the columns of `on_insert` too, and lets PostgreSQL read their values. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
-3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
+3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, a table that another session changed after the plan began ([A schema change during a run](#a-schema-change-during-a-run)), or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that neither the declaration nor `on_insert` names is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 5. When rows are to be deleted, it follows the foreign keys that reference them. A declared row that the deletions would delete, or whose declared column they would set to NULL or to its default, is a mistake, reported with those of step 4 ([kortopi apply](apply.md#declared-rows-in-the-way)).
 6. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
@@ -642,7 +677,7 @@ kortopi checks in this order:
 | Status | Meaning |
 |---|---|
 | 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare. |
-| 1 | The plan failed: a wrong flag, a mistake in the declaration, a table or a column that the database lacks with `--no-pending`, a database error, or an interrupt. |
+| 1 | The plan failed: a wrong flag, a mistake in the declaration, a table or a column that the database lacks with `--no-pending`, a table that another session changed during the plan, a database error, or an interrupt. |
 | 2 | Only with `--exit-code`: the plan is not empty. |
 
 Without `--exit-code`, a plan that shows changes exits with 0, so a pull request that changes master data does not fail on its own plan.
