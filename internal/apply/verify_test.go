@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,6 +30,19 @@ func changed(id, stored, declared string) plan.Update {
 	return plan.Update{Key: []plan.Value{{Text: id}}, Changes: []plan.Change{{Column: "name", Old: plan.Value{Text: stored}, New: plan.Value{Text: declared}}}}
 }
 
+// leftOutError is the error of an apply without --allow-delete whose writes
+// deleted rows of a table whose rows to delete the run left out, or inserted
+// other rows into it than its insert wrote, by the counts of the database.
+func leftOutError(file, table, deleted, inserted string, wrote int) string {
+	return file + ": after the writes of the apply, table " + table + " holds as many rows that the declaration lacks as the plan shows, " +
+		"but the writes deleted " + deleted + " of the table and inserted " + inserted + " into it, by the counts of the database, " +
+		"of which the insert of the apply wrote " + strconv.Itoa(wrote) + ": " +
+		"an apply without --allow-delete deletes no row of a table of mode sync and inserts into it only the rows of its insert, " +
+		"so a trigger or a rule of a write deleted or inserted rows of the table, and the apply stops before its commit: " +
+		"change the trigger or the rule that deletes or inserts rows of table " + table + " while the apply writes, " +
+		`or give the table mode upsert in [tables."` + table + `"] of kortopi.toml, which leaves the rows that the declaration lacks to other writes`
+}
+
 // After the writes and the check of the deletions, and before the commit,
 // the apply compares every declared table again (ADR-0042). A row to insert
 // or to update that is left, a row to delete that is left with
@@ -36,6 +50,13 @@ func changed(id, stored, declared string) plan.Update {
 // left out and reported, stop the apply before its commit. The error lists
 // the rows as a plan does, at most five of each table, and names the writes
 // whose counts differed from the plan.
+//
+// Without --allow-delete, a table whose rows to delete the run left out must
+// also have lost no row and gained none but those of its insert, by the
+// counts of the database, which show a row deleted and another added. A table
+// that the database does not count is checked by the number of its rows that
+// the declaration lacks alone, and a database that cannot count stops the
+// apply before its first write.
 func TestRunChecksTheResult(t *testing.T) {
 	t.Parallel()
 
@@ -45,7 +66,7 @@ func TestRunChecksTheResult(t *testing.T) {
 		child:  {Inserts: []plan.Row{row("2", "x")}},
 	}
 	planned := []string{"Describe a.child z.parent", "Diff a.child", "Diff z.parent"}
-	writes := []string{"ForeignKeys a.child z.parent", "Insert a.child", "Update z.parent"}
+	writes := []string{"PrepareLeftOut z.parent", "ForeignKeys a.child z.parent", "Insert a.child", "Update z.parent"}
 	deletes := []string{"PrepareDeletes", "ForeignKeys a.child z.parent", "Insert a.child", "Update z.parent", "Delete z.parent", "CheckEffect"}
 	again := []string{"DiffAgain a.child", "DiffAgain z.parent"}
 	all := Options{AllowDelete: true, MaxDelete: DefaultMaxDelete}
@@ -58,11 +79,18 @@ func TestRunChecksTheResult(t *testing.T) {
 	for i := range many {
 		many[i] = changed(string(rune('1'+i)), "A", "a")
 	}
+	// inserting is a plan that inserts into z.parent too.
+	inserting := map[declaration.TableName]plan.TableDiff{
+		parent: {Inserts: []plan.Row{row("2", "x"), row("3", "y")}, Deletes: []plan.Row{keyRow("8")}},
+	}
 	tests := []struct {
 		name    string
+		diffs   map[declaration.TableName]plan.TableDiff
 		opts    Options
 		left    map[declaration.TableName]plan.TableDiff
 		changed map[string]int
+		counted map[declaration.TableName]Written
+		fail    map[string]error
 		want    []string
 		// wantErr is the whole error; the run commits without one.
 		wantErr string
@@ -74,7 +102,55 @@ func TestRunChecksTheResult(t *testing.T) {
 		},
 		{
 			name: "as declared, with the deletions left out",
-			want: slices.Concat(planned, writes, again, []string{"Commit"}),
+			want: slices.Concat(planned, writes, again, []string{"CountLeftOut", "Commit"}),
+		},
+		{
+			// A row that the declaration lacks deleted, and another added:
+			// the number of such rows is as the plan shows.
+			name:    "a row deleted and another added where the run left the deletions out",
+			counted: map[declaration.TableName]Written{parent: {Deleted: 1, Inserted: 1}},
+			want:    slices.Concat(planned, writes, again, []string{"CountLeftOut"}),
+			wantErr: leftOutError("z/parent.csv", "z.parent", "1 row", "1 row", 0),
+		},
+		{
+			name:    "a row deleted where the run left the deletions out",
+			counted: map[declaration.TableName]Written{parent: {Deleted: 1}},
+			want:    slices.Concat(planned, writes, again, []string{"CountLeftOut"}),
+			wantErr: leftOutError("z/parent.csv", "z.parent", "1 row", "0 rows", 0),
+		},
+		{
+			name:  "rows to insert into a table whose deletions the run left out, as the plan shows",
+			diffs: inserting,
+			want: slices.Concat([]string{"Describe a.child z.parent", "Diff a.child", "Diff z.parent", "PrepareLeftOut z.parent", "ForeignKeys a.child z.parent",
+				"Insert z.parent"}, again, []string{"CountLeftOut", "Commit"}),
+		},
+		{
+			name:    "a row inserted beside those of the insert where the run left the deletions out",
+			diffs:   inserting,
+			counted: map[declaration.TableName]Written{parent: {Inserted: 3}},
+			want: slices.Concat([]string{"Describe a.child z.parent", "Diff a.child", "Diff z.parent", "PrepareLeftOut z.parent", "ForeignKeys a.child z.parent",
+				"Insert z.parent"}, again, []string{"CountLeftOut"}),
+			wantErr: leftOutError("z/parent.csv", "z.parent", "0 rows", "3 rows", 2),
+		},
+		{
+			// A partitioned table, whose rows can move between its
+			// partitions.
+			name:    "a table that the database does not count",
+			counted: map[declaration.TableName]Written{},
+			want:    slices.Concat(planned, writes, again, []string{"CountLeftOut", "Commit"}),
+		},
+		{
+			// track_counts off, in PostgreSQL.
+			name:    "a database that cannot count what the writes do to the tables whose deletions the run left out",
+			fail:    map[string]error{"PrepareLeftOut z.parent": errors.New("an apply without --allow-delete that leaves rows to delete in place needs the counts")},
+			want:    slices.Concat(planned, []string{"PrepareLeftOut z.parent"}),
+			wantErr: "an apply without --allow-delete that leaves rows to delete in place needs the counts",
+		},
+		{
+			name:    "the counts fail",
+			fail:    map[string]error{"CountLeftOut": errors.New("connection reset")},
+			want:    slices.Concat(planned, writes, again, []string{"CountLeftOut"}),
+			wantErr: "connection reset",
 		},
 		{
 			name: "a value that a trigger changed",
@@ -112,7 +188,7 @@ func TestRunChecksTheResult(t *testing.T) {
 			// declaration lacks leaves one row to delete, with another key.
 			name: "a row to delete that the run left out, with another key after the writes",
 			left: map[declaration.TableName]plan.TableDiff{parent: {Deletes: []plan.Row{keyRow("7")}}},
-			want: slices.Concat(planned, writes, again, []string{"Commit"}),
+			want: slices.Concat(planned, writes, again, []string{"CountLeftOut", "Commit"}),
 		},
 		{
 			name: "more rows to delete than the run left out, without --allow-delete",
@@ -155,7 +231,11 @@ func TestRunChecksTheResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			db := &fakeDB{diffs: diffs, left: tt.left, changed: tt.changed}
+			d := tt.diffs
+			if d == nil {
+				d = diffs
+			}
+			db := &fakeDB{diffs: d, left: tt.left, changed: tt.changed, counted: tt.counted, fail: tt.fail}
 			decl := &declaration.Declaration{Tables: []declaration.Table{csv("a.child"), csv("z.parent")}}
 			r, err := Run(t.Context(), decl, sync, db, tt.opts)
 			if !reflect.DeepEqual(db.calls, tt.want) {

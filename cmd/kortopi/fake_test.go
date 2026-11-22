@@ -34,6 +34,10 @@ type fakeSession struct {
 	written map[string]int
 	// left holds what DiffAgain returns for the tables that it names.
 	left map[declaration.TableName]plan.TableDiff
+	// counted, when it is not nil, holds what CountLeftOut returns, and
+	// leftOut the tables that PrepareLeftOut named.
+	counted map[declaration.TableName]apply.Written
+	leftOut []declaration.TableName
 	// fail makes a write or Commit return an error, by call, such as
 	// "Insert app.plans" or "Commit".
 	fail map[string]error
@@ -166,6 +170,32 @@ func (s *fakeSession) DiffAgain(_ context.Context, req plan.DiffRequest) (plan.T
 		d.Deletes = s.diffs[name].Deletes
 	}
 	return d, nil
+}
+
+func (s *fakeSession) PrepareLeftOut(_ context.Context, names []declaration.TableName) error {
+	s.leftOut = names
+	return s.record("PrepareLeftOut")
+}
+
+// CountLeftOut returns what counted holds, or what a database counts that
+// did what the plan shows: for each table that PrepareLeftOut named, the rows
+// that its insert wrote.
+func (s *fakeSession) CountLeftOut(context.Context) (map[declaration.TableName]apply.Written, error) {
+	if err := s.record("CountLeftOut"); err != nil {
+		return nil, err
+	}
+	if s.counted != nil {
+		return s.counted, nil
+	}
+	counts := make(map[declaration.TableName]apply.Written, len(s.leftOut))
+	for _, name := range s.leftOut {
+		n := len(s.diffs[name].Inserts)
+		if w, ok := s.written["Insert "+name.String()]; ok {
+			n = w
+		}
+		counts[name] = apply.Written{Inserted: n}
+	}
+	return counts, nil
 }
 
 func (s *fakeSession) Commit(context.Context) error {

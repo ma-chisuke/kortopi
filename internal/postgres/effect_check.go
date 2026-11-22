@@ -18,11 +18,16 @@ type written struct {
 }
 
 // writtenRows returns the rows that the transaction deleted, updated, and
-// inserted so far in each table that is not temporary, by the partitioned
-// table at the top of each relation: PostgreSQL counts the rows of a
-// partitioned table in its partitions.
-func (s *Session) writtenRows(ctx context.Context) (map[uint32]written, error) {
-	rows, err := s.tx.Query(ctx, `SELECT COALESCE(pg_catalog.pg_partition_root(t.relid)::pg_catalog.oid, t.relid),
+// inserted so far in each table that is not temporary. With byTop, it adds
+// them up by the partitioned table at the top of each relation: PostgreSQL
+// counts the rows of a partitioned table in its partitions. Without it, it
+// returns them by relation, so a partition has its own counts.
+func (s *Session) writtenRows(ctx context.Context, byTop bool) (map[uint32]written, error) {
+	group := "t.relid"
+	if byTop {
+		group = "COALESCE(pg_catalog.pg_partition_root(t.relid)::pg_catalog.oid, t.relid)"
+	}
+	rows, err := s.tx.Query(ctx, `SELECT `+group+`,
 			pg_catalog.sum(t.n_tup_del)::pg_catalog.int8, pg_catalog.sum(t.n_tup_upd)::pg_catalog.int8, pg_catalog.sum(t.n_tup_ins)::pg_catalog.int8
 		FROM pg_catalog.pg_stat_xact_user_tables AS t
 		JOIN pg_catalog.pg_class AS c ON c.oid = t.relid
@@ -94,17 +99,24 @@ func (s *Session) PrepareDeletes(ctx context.Context) (err error) {
 	if !s.apply {
 		return errNotApply
 	}
+	counts, err := s.trackCounts(ctx)
+	if err != nil || counts == "on" {
+		return err
+	}
+	return fmt.Errorf("an apply that deletes rows needs track_counts = on, but the session has %q: "+
+		"the apply checks before its commit what its deletions did by the counts of the rows that its transaction deleted and updated, "+
+		"which PostgreSQL keeps only with track_counts on: apply in a session that leaves track_counts on, as it is by default", counts)
+}
+
+// trackCounts returns the setting track_counts of the session: with it off,
+// PostgreSQL counts none of the rows that the transaction writes, which
+// writtenRows reads.
+func (s *Session) trackCounts(ctx context.Context) (string, error) {
 	var counts string
 	if err := s.tx.QueryRow(ctx, "SELECT pg_catalog.current_setting('track_counts')").Scan(&counts); err != nil {
-		return fmt.Errorf("read track_counts: %w", err)
+		return "", fmt.Errorf("read track_counts: %w", err)
 	}
-	if counts != "on" {
-		return fmt.Errorf("an apply that deletes rows needs track_counts = on, but the session has %q: "+
-			"the apply checks before its commit what its deletions did by the counts of the rows that its transaction deleted and updated, "+
-			"which PostgreSQL keeps only with track_counts on: apply in a session that leaves track_counts on, as it is by default, "+
-			"or apply without deleting rows", counts)
-	}
-	return nil
+	return counts, nil
 }
 
 // reachedTable is a relation through which Effects reached rows.
@@ -167,7 +179,7 @@ func (s *Session) checkReachedRows(ctx context.Context) error {
 // in each table, by the counters of the transaction, with the rows that the
 // plan deletes and that Effects counted.
 func (s *Session) checkWrittenRows(ctx context.Context) error {
-	now, err := s.writtenRows(ctx)
+	now, err := s.writtenRows(ctx, true)
 	if err != nil {
 		return err
 	}

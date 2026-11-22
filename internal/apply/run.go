@@ -35,7 +35,13 @@ import (
 // table again, and stops when a difference is left that the run does not
 // report: a row to insert or to update, or a row to delete but those that it
 // left out without Options.AllowDelete (ADR-0042), as many of them as the
-// plan shows. An apply writes only the rows that its plan shows, so every
+// plan shows. Without Options.AllowDelete, a table whose rows to delete the
+// apply leaves in place must also have lost no row to the writes, and gained
+// none but those of its insert. The database counts the rows that the writes
+// delete and insert, from PrepareLeftOut, before the first write, to
+// CountLeftOut, and its counts show a row deleted and another added, which
+// leave the number of rows as it was.
+// An apply writes only the rows that its plan shows, so every
 // write is held to the plan (CheckCount): an insert and a deletion must write
 // as many rows as the plan shows. An update must not pick more, and one that
 // picks fewer goes on, because the other writes of the apply can have done
@@ -89,8 +95,13 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		return r, nil
 	}
 	deleting := plan.Deleting(p.Tables)
-	if opts.AllowDelete && len(deleting) > 0 {
+	switch {
+	case opts.AllowDelete && len(deleting) > 0:
 		if err := db.PrepareDeletes(ctx); err != nil {
+			return nil, err
+		}
+	case len(deleting) > 0:
+		if err := db.PrepareLeftOut(ctx, deleting); err != nil {
 			return nil, err
 		}
 	}
@@ -109,6 +120,8 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 	}
 
+	// inserted holds the rows that the insert of each table wrote.
+	inserted := make(map[declaration.TableName]int)
 	for _, name := range sorted {
 		t, req := tables[name], rec.requests[name]
 		for _, w := range []struct {
@@ -128,6 +141,9 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 				return nil, err
 			}
 			*w.total += c.Wrote
+			if w.kind == KindInsert {
+				inserted[name] = c.Wrote
+			}
 			if c.Wrote < w.planned {
 				r.Uneven = append(r.Uneven, Uneven{Table: name, Wrote: c.Wrote, Planned: w.planned})
 			}
@@ -154,6 +170,11 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	}
 	if err := checkResult(ctx, decl, db, p, rec.requests, opts.AllowDelete, r.Uneven); err != nil {
 		return nil, err
+	}
+	if !opts.AllowDelete && len(deleting) > 0 {
+		if err := checkLeftOut(ctx, decl, db, p, inserted); err != nil {
+			return nil, err
+		}
 	}
 
 	// An interrupt before this point rolls back. Once the commit starts, it

@@ -44,6 +44,14 @@ type fakeDB struct {
 	// the plan shows: the rows to delete of a table that Delete did not
 	// write.
 	left map[declaration.TableName]plan.TableDiff
+	// counted holds what CountLeftOut returns. Without it, CountLeftOut
+	// returns what a database counts that did what the plan shows: for each
+	// table that PrepareLeftOut named, the rows that its insert wrote.
+	counted map[declaration.TableName]Written
+	// leftOut and inserted hold the tables that PrepareLeftOut named, and
+	// the rows that the insert of each table wrote.
+	leftOut  []declaration.TableName
+	inserted map[declaration.TableName]int
 	// fail makes a call return an error, by call.
 	fail map[string]error
 	// cancel is called after the call that it names.
@@ -167,11 +175,38 @@ func (f *fakeDB) write(kind string, req plan.DiffRequest, n int) (Count, error) 
 	if p, ok := f.picked[call]; ok {
 		c.Picked = p
 	}
+	if kind == "Insert" {
+		if f.inserted == nil {
+			f.inserted = make(map[declaration.TableName]int)
+		}
+		f.inserted[req.Table.Name] = c.Wrote
+	}
 	return c, nil
 }
 
 func (f *fakeDB) PrepareDeletes(context.Context) error {
 	return f.record("PrepareDeletes")
+}
+
+func (f *fakeDB) PrepareLeftOut(_ context.Context, names []declaration.TableName) error {
+	f.leftOut = names
+	return f.record("PrepareLeftOut " + namesOf(names))
+}
+
+// CountLeftOut returns what counted holds, or the rows that the insert of
+// each table that PrepareLeftOut named wrote.
+func (f *fakeDB) CountLeftOut(context.Context) (map[declaration.TableName]Written, error) {
+	if err := f.record("CountLeftOut"); err != nil {
+		return nil, err
+	}
+	if f.counted != nil {
+		return f.counted, nil
+	}
+	counts := make(map[declaration.TableName]Written, len(f.leftOut))
+	for _, name := range f.leftOut {
+		counts[name] = Written{Inserted: f.inserted[name]}
+	}
+	return counts, nil
 }
 
 func (f *fakeDB) Insert(_ context.Context, req plan.DiffRequest) (Count, error) {
@@ -351,11 +386,12 @@ func TestRun(t *testing.T) {
 			wantResult: Result{Inserted: 3, Updated: 1, Deleted: 3},
 		},
 		{
-			name:       "deletions left out without allowing them",
-			settings:   sync,
-			db:         &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}},
-			opts:       Options{MaxDelete: 1},
-			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
+			name:     "deletions left out without allowing them",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}},
+			opts:     Options{MaxDelete: 1},
+			want: append(diffs, "PrepareLeftOut a.child z.parent", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child",
+				"DiffAgain a.child", "DiffAgain z.parent", "CountLeftOut", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1, SkippedDeletes: 3},
 		},
 		{
@@ -484,7 +520,7 @@ func TestRun(t *testing.T) {
 				parent: {Steps: []plan.Step{unknownStep(1, "b.orders", "orders_parent", "CASCADE", plan.NoTableSelect)}},
 			}},
 			opts:       Options{MaxDelete: 0},
-			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
+			want:       append(diffs, "PrepareLeftOut z.parent", "ForeignKeys a.child z.parent", "Insert z.parent", "DiffAgain a.child", "DiffAgain z.parent", "CountLeftOut", "Commit"),
 			wantResult: Result{Inserted: 1, SkippedDeletes: 1},
 		},
 		{

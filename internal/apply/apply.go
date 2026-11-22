@@ -30,8 +30,10 @@ import (
 // result the apply compares with the first; Delete for every table with rows
 // to delete; CheckEffect; DiffAgain for every table; and Commit. An apply
 // without deletions leaves out PrepareDeletes, the second Effects, Delete,
-// and CheckEffect, and an apply that writes nothing calls none of the
-// methods after Diff and Effects (ADR-0042).
+// and CheckEffect. When its plan has rows to delete, which it leaves in
+// place, it calls PrepareLeftOut before any write, and CountLeftOut after
+// DiffAgain. An apply that writes nothing calls none of the methods after
+// Diff and Effects (ADR-0042).
 type Database interface {
 	plan.Database
 
@@ -83,6 +85,22 @@ type Database interface {
 	// mode of the table allows them (ADR-0042). It reads, and changes no row.
 	// The request is the one that Diff got for the table.
 	DiffAgain(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error)
+
+	// PrepareLeftOut checks, before the first write of an apply without
+	// Options.AllowDelete, what CountLeftOut needs from the session to count
+	// what the writes do to the named tables, whose rows to delete the apply
+	// leaves in place, and starts to count, so that an apply that could not
+	// count stops before it writes (ADR-0042).
+	PrepareLeftOut(ctx context.Context, names []declaration.TableName) error
+
+	// CountLeftOut returns, after the writes of the apply, the rows that its
+	// transaction deleted from and inserted into each table that
+	// PrepareLeftOut named, since then, as the database counts them. It
+	// leaves out a table whose counts would not tell a row that moves within
+	// the table, from one of its partitions to another, from a row deleted
+	// and another inserted: the apply checks such a table by the number of
+	// its rows that the declaration lacks alone.
+	CountLeftOut(ctx context.Context) (map[declaration.TableName]Written, error)
 
 	// Commit makes the changes lasting. Without it, closing the session
 	// leaves the database as it was. When the database rejects the commit,
@@ -169,4 +187,12 @@ type Uneven struct {
 type Count struct {
 	Picked int
 	Wrote  int
+}
+
+// Written counts the rows that the transaction of an apply deleted from a
+// table and inserted into it, by every statement, trigger, rule, and action
+// of a foreign key, as CountLeftOut returns them.
+type Written struct {
+	Deleted  int
+	Inserted int
 }

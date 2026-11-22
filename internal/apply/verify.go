@@ -138,6 +138,43 @@ func leftLines(file, settingsFile string, t *plan.Table, left plan.TableDiff, al
 	return lines, nil
 }
 
+// checkLeftOut returns an error, after the check before the commit of an
+// apply without --allow-delete, for each table of mode sync whose rows to
+// delete the apply leaves in place and from which the writes deleted rows, or
+// into which they inserted other rows than its insert wrote, by the counts of
+// the database (ADR-0042). inserted holds the rows that the insert of each
+// table wrote. The check before the commit counts the rows that such a table
+// holds and the declaration lacks, which a row deleted and another added
+// leave as many as before; the counts of the database show both. A table
+// that CountLeftOut leaves out is checked by that number alone.
+func checkLeftOut(ctx context.Context, decl *declaration.Declaration, db Database, p *plan.Plan, inserted map[declaration.TableName]int) error {
+	counts, err := db.CountLeftOut(ctx)
+	if err != nil {
+		return err
+	}
+	settingsFile := filepath.Join(decl.Dir, config.FileName)
+	var lines []string
+	for i := range p.Tables {
+		t := &p.Tables[i]
+		w, ok := counts[t.Name]
+		if !ok || w.Deleted == 0 && w.Inserted == inserted[t.Name] {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: after the writes of the apply, table %s holds as many rows that the declaration lacks as the plan shows, "+
+			"but the writes deleted %s of the table and inserted %s into it, by the counts of the database, of which the insert of the apply wrote %d: "+
+			"an apply without --allow-delete deletes no row of a table of mode %s and inserts into it only the rows of its insert, "+
+			"so a trigger or a rule of a write deleted or inserted rows of the table, and the apply stops before its commit: "+
+			"change the trigger or the rule that deletes or inserts rows of table %s while the apply writes, "+
+			"or give the table mode %s in [tables.%s] of %s, which leaves the rows that the declaration lacks to other writes",
+			decl.Tables[i].Path(decl.Dir), t.Name, rows(w.Deleted), rows(w.Inserted), inserted[t.Name], config.ModeSync,
+			t.Name, config.ModeUpsert, strconv.Quote(t.Name.String()), settingsFile))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(lines, "\n"))
+}
+
 // firstRows returns the lines of the first maxLeftRows rows of d, a
 // difference of table t, as a plan prints them: rows to insert first, then
 // rows to update, then rows to delete. The other rows are only counted.

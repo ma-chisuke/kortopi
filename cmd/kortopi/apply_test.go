@@ -166,7 +166,24 @@ func TestRunApply(t *testing.T) {
 				"\n" +
 				"Applied: 1 inserted, 0 updated, 0 deleted.\n" +
 				"Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.\n",
-			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
+			wantCalls: append(diffs, "PrepareLeftOut", "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "CountLeftOut", "Commit"),
+		},
+		{
+			// A trigger deleted the row that the declaration lacks and added
+			// another (ADR-0042): the counts of the database show both.
+			name:       "deletions left out, and a row deleted and another added",
+			files:      with(twoTables, syncPlans),
+			session:    &fakeSession{diffs: goldAndOld, counted: map[declaration.TableName]apply.Written{plans: {Deleted: 1, Inserted: 2}}},
+			wantCode:   exitError,
+			wantStdout: planOfGoldAndOld,
+			wantStderr: "kortopi: {dir}/app/plans.csv: after the writes of the apply, table app.plans holds as many rows that the declaration lacks as the plan shows, " +
+				"but the writes deleted 1 row of the table and inserted 2 rows into it, by the counts of the database, of which the insert of the apply wrote 1: " +
+				"an apply without --allow-delete deletes no row of a table of mode sync and inserts into it only the rows of its insert, " +
+				"so a trigger or a rule of a write deleted or inserted rows of the table, and the apply stops before its commit: " +
+				"change the trigger or the rule that deletes or inserts rows of table app.plans while the apply writes, " +
+				`or give the table mode upsert in [tables."app.plans"] of {dir}/kortopi.toml, which leaves the rows that the declaration lacks to other writes` + "\n" +
+				nothingChanged,
+			wantCalls: append(diffs, "PrepareLeftOut", "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "CountLeftOut"),
 		},
 		{
 			name:     "only deletions, left out",

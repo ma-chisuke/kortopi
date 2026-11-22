@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +60,33 @@ const keyCascade = `CREATE SCHEMA m; CREATE SCHEMA sales;
 // keyCascadeRows reads the tables of keyCascade.
 const keyCascadeRows = `SELECT 'currency ' || string_agg(iso, ' ' ORDER BY id) FROM m.currency
 	UNION ALL SELECT 'price ' || string_agg(currency_iso || '/' || product, ' ' ORDER BY product) FROM sales.price`
+
+// swapSchema creates table app.t, with the clause partition after its
+// columns and then the statements of partitions, with the rows 1 and 9, and
+// a trigger that replaces its row 9 with a row 10 when a row is updated.
+func swapSchema(partition, partitions string) string {
+	return strings.NewReplacer("{p}", partition, "{partitions}", partitions).Replace(`CREATE SCHEMA app;
+		CREATE TABLE app.t (id int PRIMARY KEY, v text){p};
+		{partitions}
+		CREATE FUNCTION app.swap() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN DELETE FROM app.t WHERE id = 9; INSERT INTO app.t VALUES (10, 'new'); RETURN NEW; END $$;
+		CREATE TRIGGER swap AFTER UPDATE ON app.t FOR EACH ROW EXECUTE FUNCTION app.swap();
+		INSERT INTO app.t VALUES (1, 'a'), (9, 'old');`)
+}
+
+// leftOutError is the error of an apply without --allow-delete whose
+// writes deleted rows of a table whose rows to delete it leaves in place, or
+// inserted other rows into it than its insert wrote, by the counts of the
+// transaction (ADR-0042).
+func leftOutError(file, table, deleted, inserted string, wrote int) string {
+	return file + ": after the writes of the apply, table " + table + " holds as many rows that the declaration lacks as the plan shows, " +
+		"but the writes deleted " + deleted + " of the table and inserted " + inserted + " into it, by the counts of the database, " +
+		"of which the insert of the apply wrote " + strconv.Itoa(wrote) + ": " +
+		"an apply without --allow-delete deletes no row of a table of mode sync and inserts into it only the rows of its insert, " +
+		"so a trigger or a rule of a write deleted or inserted rows of the table, and the apply stops before its commit: " +
+		"change the trigger or the rule that deletes or inserts rows of table " + table + " while the apply writes, " +
+		`or give the table mode upsert in [tables."` + table + `"] of {dir}/kortopi.toml, which leaves the rows that the declaration lacks to other writes`
+}
 
 // partitionedPrice holds the tables of issue 26 with sales.price partitioned
 // by the cascaded column: a change of JPY moves a row of sales.price_a to
@@ -125,8 +153,13 @@ func currencySchema(price, currency string) string {
 //     left-out deletion that a cascade moves out of a declared partition. A
 //     left-out deletion whose key a cascade changes is counted, and passes,
 //     also when the change moves it within a declared partitioned table. A
-//     trigger that deletes a row that the plan deletes stops the deletion on
-//     the count of its pick;
+//     trigger that deletes a row that the plan deletes, or adds a row that
+//     the declaration lacks, stops the deletion on the count of its pick;
+//   - without --allow-delete, a trigger that replaces a left-out deletion
+//     with another row stops the apply on the counts of the transaction, in
+//     a table and in a declared partition; a declared partitioned table is
+//     held to the number of its rows that the declaration lacks alone, and
+//     commits, the known limit (ADR-0042);
 //   - an interval is compared by its text;
 //   - a role with SELECT on the declared columns alone applies.
 //
@@ -502,6 +535,44 @@ func TestApplyChecksTheResult(t *testing.T) {
 					wantResult: "0 inserted, 1 updated, 0 deleted, []",
 				},
 				{
+					// The trigger deletes the row that the declaration lacks and
+					// adds another: the table holds as many such rows as the plan
+					// shows, and the counts of the transaction show both.
+					name:    "mode sync without --allow-delete, and a trigger that replaces a left-out deletion with another row",
+					schema:  swapSchema("", ""),
+					files:   map[string]string{"app/t.csv": "id,v\n1,b\n"},
+					tables:  []declaration.Table{csvTable("app", "t", "id", "v")},
+					modes:   map[declaration.TableName]config.Mode{{Schema: "app", Name: "t"}: config.ModeSync},
+					rows:    "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantErr: leftOutError("{dir}/app/t.csv", "app.t", "1 row", "1 row", 0),
+				},
+				{
+					// A partition has counts of its own, which show the row that
+					// the trigger deletes and the one that it adds.
+					name:    "mode sync without --allow-delete, and a trigger that replaces a left-out deletion of a declared partition",
+					schema:  swapSchema(" PARTITION BY RANGE (id)", "CREATE TABLE app.t_low PARTITION OF app.t FOR VALUES FROM (0) TO (100);"),
+					files:   map[string]string{"app/t_low.csv": "id,v\n1,b\n"},
+					tables:  []declaration.Table{csvTable("app", "t_low", "id", "v")},
+					modes:   map[declaration.TableName]config.Mode{{Schema: "app", Name: "t_low"}: config.ModeSync},
+					rows:    "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantErr: leftOutError("{dir}/app/t_low.csv", "app.t_low", "1 row", "1 row", 0),
+				},
+				{
+					// The known limit (ADR-0042): the counts of a partitioned
+					// table show a row that moves between its partitions as a
+					// deletion and an insertion, so the check holds it to the
+					// number of its rows that the declaration lacks alone, which
+					// a row deleted and another added leave as it was.
+					name:       "mode sync without --allow-delete, and a trigger that replaces a left-out deletion of a declared partitioned table",
+					schema:     swapSchema(" PARTITION BY RANGE (id)", "CREATE TABLE app.t_low PARTITION OF app.t FOR VALUES FROM (0) TO (100);"),
+					files:      map[string]string{"app/t.csv": "id,v\n1,b\n"},
+					tables:     []declaration.Table{csvTable("app", "t", "id", "v")},
+					modes:      map[declaration.TableName]config.Mode{{Schema: "app", Name: "t"}: config.ModeSync},
+					rows:       "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantRows:   []string{"1=b 10=new"},
+					wantResult: "0 inserted, 1 updated, 0 deleted, []",
+				},
+				{
 					name: "mode sync without --allow-delete, as declared",
 					schema: `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
 						INSERT INTO app.t VALUES (1, 'a'), (9, 'old');`,
@@ -511,6 +582,25 @@ func TestApplyChecksTheResult(t *testing.T) {
 					rows:       "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
 					wantRows:   []string{"1=b 2=c 9=old"},
 					wantResult: "1 inserted, 1 updated, 0 deleted, []",
+				},
+				{
+					// The update of a.t fires a trigger that adds a row that the
+					// declaration lacks: the pick of the deletion finds it too.
+					name: "mode sync with --allow-delete, and a row that a trigger of an update adds",
+					schema: `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
+						INSERT INTO app.t VALUES (1, 'a'), (9, 'old');
+						CREATE FUNCTION app.add() RETURNS trigger LANGUAGE plpgsql AS $$
+						BEGIN INSERT INTO app.t VALUES (10, 'added'); RETURN NEW; END $$;
+						CREATE TRIGGER add AFTER UPDATE ON app.t FOR EACH ROW EXECUTE FUNCTION app.add();`,
+					files:  map[string]string{"app/t.csv": "id,v\n1,b\n"},
+					tables: []declaration.Table{csvTable("app", "t", "id", "v")},
+					modes:  map[declaration.TableName]config.Mode{{Schema: "app", Name: "t"}: config.ModeSync},
+					delete: true,
+					rows:   "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantErr: "the deletion from table app.t found 2 rows to delete, but the plan has 1: " +
+						"another write of the apply added rows that the declaration lacks to the table after the plan, through a trigger, a rule, or the action of a foreign key, " +
+						"and an apply deletes only the rows that its plan shows, so it stops: " +
+						"declare the rows that those writes add, or change the trigger, the rule, or the foreign key that adds them",
 				},
 				{
 					name: "mode sync with --allow-delete, and a row that a trigger of the deletion adds",

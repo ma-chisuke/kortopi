@@ -79,6 +79,8 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 				// role, when it is not empty, holds the grants of a role
 				// that applies, in which {role} names it.
 				role string
+				// options are the options of the connection, as PGOPTIONS.
+				options string
 				// rows reads the tables through a plain connection.
 				rows       string
 				wantStdout string
@@ -313,6 +315,83 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 					),
 				},
 				{
+					// The trigger deletes the row that the declaration lacks and
+					// adds another, which leaves the number of such rows as the
+					// plan shows: the counts of the transaction show both.
+					name: "mode sync without --allow-delete, and a trigger that replaces a left-out deletion with another row",
+					schema: `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
+						INSERT INTO app.t VALUES (1, 'a'), (9, 'old');
+						CREATE FUNCTION app.swap() RETURNS trigger LANGUAGE plpgsql AS $$
+						BEGIN DELETE FROM app.t WHERE id = 9; INSERT INTO app.t VALUES (10, 'new'); RETURN NEW; END $$;
+						CREATE TRIGGER swap AFTER UPDATE ON app.t FOR EACH ROW EXECUTE FUNCTION app.swap();`,
+					files: map[string]string{"kortopi.toml": "[tables.\"app.t\"]\nmode = \"sync\"\n", "app/t.csv": "id,v\n1,b\n"},
+					rows:  "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantStdout: lines(
+						"app.t (sync, key: id)",
+						"  ~ id=1  v: a -> b",
+						"  - id=9",
+						"  0 to insert, 1 to update, 1 to delete",
+						"",
+						"Plan: 0 to insert, 1 to update, 1 to delete in 1 table.",
+					),
+					wantErr: lines(
+						"kortopi: {dir}/app/t.csv: after the writes of the apply, table app.t holds as many rows that the declaration lacks as the plan shows, "+
+							"but the writes deleted 1 row of the table and inserted 1 row into it, by the counts of the database, of which the insert of the apply wrote 0: "+
+							"an apply without --allow-delete deletes no row of a table of mode sync and inserts into it only the rows of its insert, "+
+							"so a trigger or a rule of a write deleted or inserted rows of the table, and the apply stops before its commit: "+
+							"change the trigger or the rule that deletes or inserts rows of table app.t while the apply writes, "+
+							`or give the table mode upsert in [tables."app.t"] of {dir}/kortopi.toml, which leaves the rows that the declaration lacks to other writes`,
+						"kortopi: nothing was changed",
+					),
+				},
+				{
+					// The apply counts what its writes do to a table whose rows
+					// to delete it leaves in place, which PostgreSQL does only
+					// with track_counts on.
+					name:    "mode sync without --allow-delete, in a session with track_counts off",
+					options: "-c track_counts=off",
+					schema: `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
+						INSERT INTO app.t VALUES (1, 'a'), (9, 'old');`,
+					files: map[string]string{"kortopi.toml": "[tables.\"app.t\"]\nmode = \"sync\"\n", "app/t.csv": "id,v\n1,b\n"},
+					rows:  "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantStdout: lines(
+						"app.t (sync, key: id)",
+						"  ~ id=1  v: a -> b",
+						"  - id=9",
+						"  0 to insert, 1 to update, 1 to delete",
+						"",
+						"Plan: 0 to insert, 1 to update, 1 to delete in 1 table.",
+					),
+					wantErr: lines(
+						`kortopi: an apply without --allow-delete that leaves rows to delete of table app.t in place needs track_counts = on, but the session has "off": `+
+							"the apply checks before its commit that its writes deleted no row of such a table and inserted into it only the rows of its insert, "+
+							"by the counts of the rows that its transaction deleted and inserted, which PostgreSQL keeps only with track_counts on: "+
+							"apply in a session that leaves track_counts on, as it is by default, "+
+							"or give such a table mode upsert, which leaves the rows that the declaration lacks to other writes",
+						"kortopi: nothing was changed",
+					),
+				},
+				{
+					// A table of mode upsert has no rows to delete: an apply
+					// needs no counts.
+					name:    "mode upsert in a session with track_counts off",
+					options: "-c track_counts=off",
+					schema: `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
+						INSERT INTO app.t VALUES (1, 'a'), (9, 'old');`,
+					files: map[string]string{"app/t.csv": "id,v\n1,b\n"},
+					rows:  "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
+					wantStdout: lines(
+						"app.t (upsert, key: id)",
+						"  ~ id=1  v: a -> b",
+						"  0 to insert, 1 to update",
+						"",
+						"Plan: 0 to insert, 1 to update, 0 to delete in 1 table.",
+						"",
+						"Applied: 0 inserted, 1 updated, 0 deleted.",
+					),
+					wantRows: []string{"1=b 9=old"},
+				},
+				{
 					name: "mode sync with --allow-delete, and a row that a trigger of the deletion adds",
 					schema: `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
 						INSERT INTO app.t VALUES (1, 'a'), (9, 'old');
@@ -410,6 +489,7 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 						user, password = role.User, role.Password
 					}
 					t.Setenv("PGPASSWORD", password)
+					t.Setenv("PGOPTIONS", tt.options)
 					read := func() []string {
 						var got []string
 						for _, r := range db.Query(t, tt.rows) {

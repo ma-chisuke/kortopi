@@ -79,8 +79,10 @@ type applyResult struct {
 // the way, deletes the other way, and checks the effect. It holds the count
 // of every write to the plan with apply.CheckCount, as the package apply
 // does. It then compares every table again, stops when a difference is left
-// but as many rows to delete as it left out, and commits. It does not compare
-// the two effects, which the package apply does.
+// but as many rows to delete as it left out, and, without allowDelete, when
+// the writes deleted rows of a table with rows to delete or inserted other
+// rows into it than its insert wrote, by CountLeftOut, and commits. It does
+// not compare the two effects, which the package apply does.
 func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDelete bool) (applyResult, error) {
 	var r applyResult
 	byName := make(map[declaration.TableName]plan.DiffRequest, len(reqs))
@@ -115,6 +117,11 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 			return r, err
 		}
 	}
+	if !allowDelete && len(deleting) > 0 {
+		if err := s.PrepareLeftOut(ctx, deleting); err != nil {
+			return r, err
+		}
+	}
 	keys, err := s.ForeignKeys(ctx, names)
 	if err != nil {
 		return r, err
@@ -132,12 +139,14 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 	if err != nil {
 		return r, err
 	}
+	inserted := make(map[declaration.TableName]int)
 	for _, name := range order {
 		n, err := write(name, apply.KindInsert, len(diffs[name].Inserts), s.Insert)
 		if err != nil {
 			return r, err
 		}
 		r.inserted += n
+		inserted[name] = n
 		if n, err = write(name, apply.KindUpdate, len(diffs[name].Updates), s.Update); err != nil {
 			return r, err
 		}
@@ -173,6 +182,17 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		}
 		if len(left.Inserts)+len(left.Updates) > 0 || len(left.Deletes) != skipped {
 			return r, fmt.Errorf("after the writes, table %s differs: %v", req.Table.Name, diffLines(left))
+		}
+	}
+	if !allowDelete && len(deleting) > 0 {
+		counts, err := s.CountLeftOut(ctx)
+		if err != nil {
+			return r, err
+		}
+		for name, w := range counts {
+			if w.Deleted != 0 || w.Inserted != inserted[name] {
+				return r, fmt.Errorf("after the writes, table %s lost %d rows and gained %d, and its insert wrote %d", name, w.Deleted, w.Inserted, inserted[name])
+			}
 		}
 	}
 	return r, s.Commit(ctx)

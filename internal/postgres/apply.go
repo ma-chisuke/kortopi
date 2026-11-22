@@ -232,7 +232,7 @@ func (s *Session) checkDeletes(ctx context.Context) error {
 	if s.effect == "" {
 		return errors.New("the effect of the deletions is not known: compute it with Effects before the first deletion")
 	}
-	counts, err := s.writtenRows(ctx)
+	counts, err := s.writtenRows(ctx, true)
 	if err != nil {
 		return err
 	}
