@@ -790,11 +790,28 @@ func (w *walk) enforced() string {
 
 // onUpdate returns a foreign key that references a column that e sets, and
 // its referencing table, or nothing. Its action ON UPDATE would follow the
-// change, which the walk does not count.
+// change, which the walk does not count. A stored generated column of the
+// referencing relation, or of a partition of it, that reads a column that e
+// sets changes with it, so a key that references the generated column
+// counts too: PostgreSQL records that the expression of the generated
+// column, in pg_attrdef, depends on each column that it reads, in pg_depend.
 func (w *walk) onUpdate(ctx context.Context, e edge) (string, declaration.TableName, error) {
 	var name string
 	var table declaration.TableName
-	err := w.tx.QueryRow(ctx, `SELECT co.conname::pg_catalog.text, n.nspname::pg_catalog.text, r.relname::pg_catalog.text
+	err := w.tx.QueryRow(ctx, `WITH tree AS (
+			SELECT $1::pg_catalog.oid AS relid
+			UNION SELECT p.relid FROM pg_catalog.pg_partition_tree($1::pg_catalog.oid::pg_catalog.regclass) AS p
+		), changed AS (
+			SELECT c.name FROM pg_catalog.unnest($2::pg_catalog.text[]) AS c(name)
+			UNION SELECT g.attname::pg_catalog.text FROM pg_catalog.pg_attribute AS g
+				JOIN pg_catalog.pg_attrdef AS ad ON ad.adrelid = g.attrelid AND ad.adnum = g.attnum
+				JOIN pg_catalog.pg_depend AS d ON d.classid = 'pg_catalog.pg_attrdef'::pg_catalog.regclass AND d.objid = ad.oid
+					AND d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.refobjid = g.attrelid
+				JOIN pg_catalog.pg_attribute AS b ON b.attrelid = d.refobjid AND b.attnum = d.refobjsubid
+				WHERE g.attrelid IN (SELECT relid FROM tree) AND g.attgenerated = 's' AND NOT g.attisdropped
+					AND b.attname::pg_catalog.text OPERATOR(pg_catalog.=) ANY ($2::pg_catalog.text[])
+		)
+		SELECT co.conname::pg_catalog.text, n.nspname::pg_catalog.text, r.relname::pg_catalog.text
 		FROM pg_catalog.pg_constraint AS co
 		JOIN pg_catalog.pg_class AS r ON r.oid = co.conrelid
 		JOIN pg_catalog.pg_namespace AS n ON n.oid = r.relnamespace
@@ -804,7 +821,7 @@ func (w *walk) onUpdate(ctx context.Context, e edge) (string, declaration.TableN
 				UNION SELECT a.relid FROM pg_catalog.pg_partition_ancestors($1::pg_catalog.oid::pg_catalog.regclass) AS a)
 			AND EXISTS (SELECT FROM pg_catalog.unnest(co.confkey) AS k(attnum)
 				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = co.confrelid AND a.attnum = k.attnum
-				WHERE a.attname::pg_catalog.text OPERATOR(pg_catalog.=) ANY ($2::pg_catalog.text[]))
+				WHERE a.attname::pg_catalog.text IN (SELECT name FROM changed))
 		ORDER BY n.nspname COLLATE pg_catalog."C", r.relname COLLATE pg_catalog."C", co.conname COLLATE pg_catalog."C"
 		LIMIT 1`, e.fromOID, e.set).Scan(&name, &table.Schema, &table.Name)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -54,7 +54,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - 参照している行は、apply が削除より先にする挿入と更新のあとの状態で数える（ADR-0026）。宣言した行が照合する保存された行は、更新するモードのテーブルなら、比べる列に宣言した値を持つ。挿入する行は、宣言が外部キーのすべての列を挙げるときに、宣言した値を持つ。そのため、計画が残る行を指すように変える参照は、波及にならない。
 - 宣言したテーブルは、参照しているテーブルの行のうち、パーティションの木での `tableoid` が自分に属する行を持つ。参照しているテーブルが、宣言したテーブル自身か、そのパーティションか、その上にあるパーティションテーブルの場合である。そのため、外部キーをパーティションテーブルに定義してそのパーティションを宣言したときも、その逆のときも、宣言した行を宣言した行として数える。これは、計画が削除するか変える行にも、削除とぶつかる宣言した行にもあてはまる。
 - どの行も1回だけ数える。カスケードが消す行は、変わる行にも、削除を妨げる行にも数えない。同じ種類の行のあいだでは、最初にたどり着いたステップのもとで数える。最も浅い段が先であり、同じ段では、参照しているテーブル・外部キーの名前・参照されるテーブルの順になる。2つのテーブルの削除がたどり着く行は、計画で先に来るテーブルのものとして数える。
-- `SET NULL` や `SET DEFAULT` が、別の外部キーの参照する列を変えると、PostgreSQL はそのキーの `ON UPDATE` の動作を働かせる。kortopi はそれをたどらない。変わる行は数え、そのステップの波及は分からないと印を付ける。
+- `SET NULL` や `SET DEFAULT` が、別の外部キーの参照する列を変えると、PostgreSQL はそのキーの `ON UPDATE` の動作を働かせる。kortopi はそれをたどらない。変わる行は数え、そのステップの波及は分からないと印を付ける。参照しているテーブルかそのパーティションの格納される生成列が、動作の設定する列を読むなら、それも一緒に変わる。そのため、その生成列を参照するキーも同じに扱う。生成列の式は `pg_attrdef` にあり、それが読む各列に、`pg_depend` で依存するからである。それでもキーを見落とせば、その動作の更新は、削除のあとの検査が範囲の外に見つける。
 
 求め方：
 
@@ -202,6 +202,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
   - `TestApplyEffectAfterConcurrentChanges`：2つ目の接続から、別のトランザクションが参照している行を挿入・削除するか別の行を指すように変え、外部キーとパーティションを足す。行を残すトリガー、PostgreSQL が拒むルール、ほかのテーブルの行を消すトリガーも使う。
   - `TestEffectsOnLargeTables`：大きなテーブルでの費用。最新のバージョンだけで測る。
   - `TestEffectsOfAModeThatDoesNotUpdate`：モード `insert` で、`SET NULL` がキーの外を変える保存された行、`SET DEFAULT` が変えるキー、挿入する行。
+  - `TestEffectsThroughAGeneratedColumn`：`SET NULL` が設定する列を読む生成列の上の、`ON UPDATE CASCADE` のキー。2つ目の守りとしての削除のあとの検査も確かめる。
   - `TestEffectsLeaveOutKeysNotEnforced`：`CASCADE` と `NO ACTION` の `NOT ENFORCED` のキー。PostgreSQL 18 で確かめる。
   - `TestApplyNeedsTrackCounts`：セッションのオプションとロールの設定で off にした `track_counts`。
   - `TestEffectsOfForeignKeysOfIntervals`：テキストは違うが互いに等しい interval の外部キー。たどる処理がテキストで比べると、このテストは失敗する。
@@ -239,4 +240,4 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - [トランザクションの分離](https://www.postgresql.org/docs/current/transaction-iso.html)：`REPEATABLE READ` と直列化の失敗について
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#削除がほかの行にすること) と [docs/reference/apply.ja.md](../reference/apply.ja.md#削除の安全策)
 
-<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:3094cdec33d624c3984878a4d8479344286affe873c2d68cd94c2d53dd03be51 -->
+<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:edbb9400a050a1f383f5f41305ab77fa9ad9197758be4919302b3a4dbe3813ee -->

@@ -284,7 +284,7 @@ func unknownEffect(table declaration.TableName, step *plan.Step) string {
 	}
 	if step.Unknown == plan.FollowsOnUpdate {
 		return fmt.Sprintf("the deletion of rows of %s sets columns of rows of %s through foreign key %q, ON DELETE %s%s, "+
-			"and foreign key %q of table %s references a column that it sets, so its action ON UPDATE follows, "+
+			"and foreign key %q of table %s references a column that it sets, or a generated column that reads one, so its action ON UPDATE follows, "+
 			"which kortopi does not count for the limit on deletions: change or remove the rows of %s that reference the rows to delete first",
 			table, step.Table, step.Constraint, step.OnDelete, from, step.OnUpdate, step.OnUpdateTable, step.Table)
 	}

@@ -393,7 +393,7 @@ Each line of the block names the referencing table, its columns, and the foreign
 
   The reasons are that the role may not use the schema of the table, may not read the table as a whole, may not read the referenced columns, that row-level security applies to the table, and that the triggers of the foreign key are disabled, so that PostgreSQL would neither run its action nor check it.
 
-- When `SET NULL` or `SET DEFAULT` changes a column that another foreign key references, the line says that what the action `ON UPDATE` of that key does is not known.
+- When `SET NULL` or `SET DEFAULT` changes a column that another foreign key references, the line says that what the action `ON UPDATE` of that key does is not known. A stored generated column that reads a column that the action sets changes with it, so a key that references the generated column counts too.
 
 After the line `Plan:`, one line for each fact sums up all tables: the rows that the deletions also delete and change, the rows that make them fail, and the foreign keys whose effect is not known, each key once:
 

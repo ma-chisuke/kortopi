@@ -417,7 +417,7 @@ func TestRun(t *testing.T) {
 				"and the triggers that run the action of the foreign key are disabled, so what the deletion does to them cannot be counted for the limit on deletions: " +
 				"enable the triggers of table b.orders and of its partitions, or remove those rows first\n" +
 				`the deletion of rows of z.parent sets columns of rows of b.tags through foreign key "tags_order", ON DELETE SET DEFAULT, from rows of b.orders that ON DELETE CASCADE deletes, ` +
-				`and foreign key "parts_x" of table b.parts references a column that it sets, so its action ON UPDATE follows, ` +
+				`and foreign key "parts_x" of table b.parts references a column that it sets, or a generated column that reads one, so its action ON UPDATE follows, ` +
 				"which kortopi does not count for the limit on deletions: change or remove the rows of b.tags that reference the rows to delete first",
 		},
 		{

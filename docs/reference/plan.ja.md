@@ -393,7 +393,7 @@ Through foreign keys, the deletions also delete 52001 rows.
 
   理由は、ロールがテーブルのスキーマを使えないこと、テーブル全体を読めないこと、参照される列を読めないことである。テーブルに行単位セキュリティがかかるときと、外部キーのトリガーが無効なときも同じである。トリガーが無効なら、PostgreSQL はその動作も検査も働かせない。
 
-- `SET NULL` か `SET DEFAULT` が、別の外部キーの参照する列を変えるときは、その外部キーの `ON UPDATE` の動作がすることは分からないと、行が示す。
+- `SET NULL` か `SET DEFAULT` が、別の外部キーの参照する列を変えるときは、その外部キーの `ON UPDATE` の動作がすることは分からないと、行が示す。動作が設定する列を読む格納される生成列は、それとともに変わる。そのため、その生成列を参照するキーも同じに扱う。
 
 `Plan:` の行のあとには、すべてのテーブルをまとめた行を、事実ごとに1行ずつ置く。削除がさらに消し、変える行、削除を失敗させる行、そして波及が分からない外部キーであり、どのキーも1回だけ数える。
 
@@ -641,4 +641,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:ca8bd4b7782e2f2512ccda65e9db4d5843f27d6ff7705668c27aff9b3d4e802c -->
+<!-- i18n-source: plan.md sha256:01b72cb4e164f0fa83fdb2674db026f92ebb38ae1e9bd0f6974d70ab783a74d0 -->

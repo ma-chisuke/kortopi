@@ -135,7 +135,7 @@ func stepSentence(s *Step, deletes, parents int) string {
 	}
 	if s.Unknown == FollowsOnUpdate {
 		sentence += ", and foreign key " + FormatName(s.OnUpdate) + " of " + FormatTable(s.OnUpdateTable) +
-			" references a column that it sets, so what its ON UPDATE action does is not known"
+			" references a column that it sets, or a generated column that reads one, so what its ON UPDATE action does is not known"
 	}
 	return sentence + "."
 }
