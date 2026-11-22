@@ -116,6 +116,11 @@ func TestSequenceSQL(t *testing.T) {
 		if !strings.Contains(sql, `FROM "a b"."it's" AS v`) || !strings.Contains(sql, `(SELECT pg_catalog.max(t."id") FROM ONLY "a b"."t" AS t)`) {
 			t.Errorf("statement does not read the sequence and the column by their quoted names:\n%s", sql)
 		}
+		// A division of numeric rounds near the limits of bigint; div and
+		// mod are exact.
+		if strings.Contains(sql, "OPERATOR(pg_catalog./)") || !strings.Contains(sql, "pg_catalog.div(d.gap, d.inc)") || !strings.Contains(sql, "pg_catalog.mod(d.gap, d.inc)") {
+			t.Errorf("statement does not count the values of a walk with div and mod:\n%s", sql)
+		}
 	}
 	if strings.Contains(read, "nextval") || strings.Contains(read, "setval") {
 		t.Errorf("the read of a plan moves the sequence:\n%s", read)

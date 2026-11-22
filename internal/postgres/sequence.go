@@ -126,7 +126,10 @@ func regclass(n plan.SequenceName) string {
 // the next one, that lies beyond the values of the column, the largest or
 // smallest value of the column, the MINVALUE and the MAXVALUE of the
 // sequence, the number of values that a walk takes, and, after a move, the
-// next value of the sequence after it; each as text, or NULL.
+// next value of the sequence after it; each as text, or NULL. The number of
+// values is the exact floor of the distance divided by the increment, which
+// div and mod compute on integers of any size, so it stays exact at the
+// limits of bigint.
 //
 // It reads the column first, and the sequence last, in one read: last_value
 // and is_called, whose next value is last_value when the sequence never
@@ -163,7 +166,12 @@ func sequenceSQL(seq plan.SequenceName, maxSQL, minSQL string, move bool) string
 	b.WriteString("      ELSE '" + howJump + "'\n")
 	b.WriteString("    END AS how\n")
 	b.WriteString("  FROM (SELECT y.*, y.next" + op("+") + "(y.steps" + op("*") + "y.inc) AS goal\n")
-	b.WriteString("    FROM (SELECT r.*, pg_catalog.floor((r.top" + op("-") + "r.next)" + op("/") + "r.inc)" + op("+") + "1 AS steps FROM r) AS y) AS x\n")
+	// steps = floor(gap / inc) + 1, with div, which truncates towards zero,
+	// and one less when the division leaves a remainder and gap and inc have
+	// other signs.
+	b.WriteString("    FROM (SELECT d.*, (pg_catalog.div(d.gap, d.inc)" + op("-") + "CASE WHEN pg_catalog.mod(d.gap, d.inc)" + op("<>") + "0\n")
+	b.WriteString("        AND (d.gap" + op("<") + "0)" + op("<>") + "(d.inc" + op("<") + "0) THEN 1 ELSE 0 END)" + op("+") + "1 AS steps\n")
+	b.WriteString("      FROM (SELECT r.*, r.top" + op("-") + "r.next AS gap FROM r) AS d) AS y) AS x\n")
 	b.WriteString(")")
 	after := "NULL::pg_catalog.numeric"
 	if move {
