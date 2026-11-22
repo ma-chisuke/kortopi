@@ -146,20 +146,23 @@ func TestInterruptedApplyCommand(t *testing.T) {
 		t.Run(srv.Name, func(t *testing.T) {
 			for _, tt := range []struct {
 				name string
-				// lock is what another session holds, and state the state of
-				// kortopi in which the interrupt comes.
-				lock, state string
-				wait        bool
+				// file is the one table that the declaration changes, lock
+				// what another session holds, and state the state of kortopi
+				// in which the interrupt comes.
+				file, lock, state string
+				wait              bool
 			}{
-				{name: "a long update", state: "wait_event = 'PgSleep'"},
-				{name: "a wait for a row lock", lock: "SELECT 1 FROM m.status WHERE code = 'paid' FOR UPDATE", state: "wait_event_type = 'Lock'"},
-				{name: "a wait for another apply", lock: fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", kortopiLock), state: "wait_event = 'advisory'", wait: true},
+				{name: "a long update", file: "m/item.csv", state: "wait_event = 'PgSleep'"},
+				{name: "a wait for a row lock", file: "m/status.csv", lock: "SELECT 1 FROM m.status WHERE code = 'paid' FOR UPDATE", state: "wait_event_type = 'Lock'"},
+				{name: "a wait for another apply", file: "m/status.csv", lock: fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", kortopiLock), state: "wait_event = 'advisory'", wait: true},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					db := srv.Database(t)
 					db.Exec(t, statusSchema+slowItemSchema)
 					e := connect(t, db)
-					dir := writeFiles(t, interruptFiles)
+					// Without the slow table, the wait for the row lock comes at
+					// once.
+					dir := writeFiles(t, map[string]string{tt.file: interruptFiles[tt.file]})
 					if tt.lock != "" {
 						lockHolder(t, db, tt.lock)
 					}
