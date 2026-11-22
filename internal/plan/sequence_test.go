@@ -216,6 +216,24 @@ func TestSequenceText(t *testing.T) {
 			seq:  Sequence{Name: name, Next: "3", Goal: "4", Unknown: true, Stays: "an interrupt stopped the move"},
 			want: "next value 3, may have moved forward: an interrupt stopped the move", called: true,
 		},
+		{
+			name: "a move that ran, and whose read after failed",
+			seq:  Sequence{Name: name, Next: "3", Goal: "4", Unknown: true, Ran: true, Stays: "the read after the move failed: lock timeout"},
+			want: "next value 3, moved forward to a value that is not known: the read after the move failed: lock timeout", called: true, moved: true,
+		},
+		{
+			name: "a move that another session set back",
+			seq: Sequence{Name: name, Next: "3", Goal: "11", After: "2", Stays: "another session set the sequence back while the apply moved it",
+				Advice: "take 9 values from it"},
+			want:      "next value 3 -> 2, not to 11: another session set the sequence back while the apply moved it: take 9 values from it",
+			wantState: "next value 3 -> 2, not to 11: another session set the sequence back while the apply moved it",
+			called:    true, moved: true,
+		},
+		{
+			name: "a move to the last value of the sequence",
+			seq:  Sequence{Name: name, Next: "3", Goal: "4", Ran: true, Stays: "the move took it to its last value, so it gives no more values"},
+			want: "next value 3, moved: the move took it to its last value, so it gives no more values", called: true, moved: true,
+		},
 	}
 	for _, tt := range tests {
 		if got := SequenceText(&tt.seq); got != tt.want {

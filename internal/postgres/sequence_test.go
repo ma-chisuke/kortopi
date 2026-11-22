@@ -210,4 +210,11 @@ func TestSequenceSQL(t *testing.T) {
 	if !strings.Contains(walk, "pg_catalog.nextval(") || strings.Contains(walk, "setval") {
 		t.Errorf("the walk alone sets the sequence, or takes no value:\n%s", walk)
 	}
+	// The walk goes on past the values that its session cached, by the
+	// cache of the sequence at most.
+	for _, sql := range []string{move, walk} {
+		if !strings.Contains(sql, "w.n OPERATOR(pg_catalog.<) (p.steps OPERATOR(pg_catalog.+) p.cache)") || !strings.Contains(sql, "s.seqcache") {
+			t.Errorf("the walk does not bound its calls by the steps and the cache of the sequence:\n%s", sql)
+		}
+	}
 }

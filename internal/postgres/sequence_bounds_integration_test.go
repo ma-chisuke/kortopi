@@ -381,7 +381,10 @@ func TestSequenceMoveEndedPartWay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a.beforeMove = func(ctx context.Context, tx pgx.Tx) error {
+			a.sequenceHook = func(ctx context.Context, step string, tx pgx.Tx) error {
+				if step != "move" {
+					return nil
+				}
 				_, err := tx.Exec(ctx, "SET LOCAL statement_timeout = 10")
 				return err
 			}
@@ -440,8 +443,10 @@ func TestSequenceMoveInterrupted(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			a.beforeMove = func(context.Context, pgx.Tx) error {
-				time.AfterFunc(10*time.Millisecond, cancel)
+			a.sequenceHook = func(_ context.Context, step string, _ pgx.Tx) error {
+				if step == "move" {
+					time.AfterFunc(10*time.Millisecond, cancel)
+				}
 				return nil
 			}
 			r, err := apply.Run(ctx, decl, nil, a, apply.Options{})

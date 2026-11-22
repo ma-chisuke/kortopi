@@ -181,10 +181,11 @@ type Session struct {
 	// wait for the commit, before its first move of a sequence
 	// (checkDeferred).
 	deferredChecked bool
-	// beforeMove, when it is set, runs in the savepoint of the move of each
-	// sequence, right before its statement, for the tests of a move that
-	// PostgreSQL ends part way or that an interrupt stops.
-	beforeMove func(ctx context.Context, tx pgx.Tx) error
+	// sequenceHook, when it is set, runs in the savepoint of each statement
+	// on a sequence, right before the statement, with the name of its step
+	// (onSequence), for the tests of a statement that PostgreSQL ends or
+	// that an interrupt stops.
+	sequenceHook func(ctx context.Context, step string, tx pgx.Tx) error
 }
 
 var _ plan.Database = (*Session)(nil)

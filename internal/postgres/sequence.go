@@ -197,7 +197,7 @@ func sequenceSQL(seq plan.SequenceName, maxSQL, minSQL string, kind sequenceStat
 	var b strings.Builder
 	b.WriteString("WITH RECURSIVE q AS MATERIALIZED (\n")
 	b.WriteString("  SELECT s.seqincrement::pg_catalog.numeric AS inc, s.seqmin::pg_catalog.numeric AS lo, s.seqmax::pg_catalog.numeric AS hi, s.seqcycle AS cycle,\n")
-	b.WriteString("    pg_catalog.format_type(s.seqtypid, NULL) AS typ,\n")
+	b.WriteString("    pg_catalog.format_type(s.seqtypid, NULL) AS typ, s.seqcache::pg_catalog.numeric AS cache,\n")
 	b.WriteString("    CASE WHEN s.seqincrement" + op(">") + "0 THEN " + maxSQL + " ELSE " + minSQL + " END::pg_catalog.numeric AS top\n")
 	b.WriteString("  FROM pg_catalog.pg_sequence AS s WHERE s.seqrelid" + op("=") + rc + "\n")
 	b.WriteString("), r AS MATERIALIZED (\n")
@@ -229,8 +229,14 @@ func sequenceSQL(seq plan.SequenceName, maxSQL, minSQL string, kind sequenceStat
 		b.WriteString(", walk (v, n) AS (\n")
 		b.WriteString("  SELECT pg_catalog.nextval(" + rc + ")::pg_catalog.numeric, 1 FROM p WHERE p.how" + op("=") + "'" + howWalk + "'\n")
 		b.WriteString("  UNION ALL\n")
+		// The walk goes on while the value that nextval returned is not yet
+		// beyond the column, not for a count of steps: nextval first hands
+		// out the values that the session cached, as a write of the apply
+		// that took a value of a sequence with CACHE above 1 leaves them,
+		// and those lie below the position that the statement read. It
+		// stops after the steps and the cache of the sequence at most.
 		b.WriteString("  SELECT pg_catalog.nextval(" + rc + ")::pg_catalog.numeric, w.n" + op("+") + "1 FROM walk AS w CROSS JOIN p\n")
-		b.WriteString("  WHERE w.n" + op("<") + "p.steps AND CASE WHEN p.inc" + op(">") + "0 THEN (w.v" + op("+") + "p.inc)" + op("<=") + "p.top\n")
+		b.WriteString("  WHERE w.n" + op("<") + "(p.steps" + op("+") + "p.cache) AND CASE WHEN p.inc" + op(">") + "0 THEN (w.v" + op("+") + "p.inc)" + op("<=") + "p.top\n")
 		b.WriteString("    ELSE (w.v" + op("+") + "p.inc)" + op(">=") + "p.top END\n")
 		b.WriteString(")")
 		last := "(SELECT w.v FROM walk AS w ORDER BY w.n DESC LIMIT 1)"
@@ -291,12 +297,19 @@ func storedTopSQL(stored, column string) (maxSQL, minSQL string) {
 // sequenceLockLimit (boundSQL). It returns the bound, in milliseconds. The
 // rollback gives lock_timeout its value again and releases the locks that f
 // took, and keeps what nextval and setval did to the sequence, which
-// PostgreSQL never rolls back.
-func (s *Session) onSequence(ctx context.Context, f func(tx pgx.Tx) error) (bound int64, err error) {
+// PostgreSQL never rolls back. step names the statement for the hook of the
+// tests (Session.sequenceHook): "read" for the read of a plan, and
+// "before", "move", and "after" for the statements of a move.
+func (s *Session) onSequence(ctx context.Context, step string, f func(tx pgx.Tx) error) (bound int64, err error) {
 	err = s.savepoint(ctx, false, func(tx pgx.Tx) error {
 		var set string
 		if err := tx.QueryRow(ctx, boundSQL, sequenceLockLimit.Milliseconds()).Scan(&bound, &set); err != nil {
 			return err
+		}
+		if s.sequenceHook != nil {
+			if err := s.sequenceHook(ctx, step, tx); err != nil {
+				return err
+			}
 		}
 		return f(tx)
 	})
@@ -308,8 +321,8 @@ func (s *Session) onSequence(ctx context.Context, f func(tx pgx.Tx) error) (boun
 // onSequence. When PostgreSQL ends the read with an error that leaves the
 // session usable, it returns why, and a nil error; any other error stops the
 // run.
-func (s *Session) readPosition(ctx context.Context, o *ownedSequence, maxSQL, minSQL string) (pos position, why string, err error) {
-	bound, err := s.onSequence(ctx, func(tx pgx.Tx) error {
+func (s *Session) readPosition(ctx context.Context, step string, o *ownedSequence, maxSQL, minSQL string) (pos position, why string, err error) {
+	bound, err := s.onSequence(ctx, step, func(tx pgx.Tx) error {
 		return pos.scan(tx.QueryRow(ctx, sequenceSQL(o.name, maxSQL, minSQL, readSequence)))
 	})
 	if err == nil {
@@ -394,7 +407,7 @@ func (s *Session) Sequences(ctx context.Context, name declaration.TableName, col
 			continue
 		}
 		maxSQL, minSQL := s.plannedTopSQL(lt, col)
-		pos, why, err := s.readPosition(ctx, o, maxSQL, minSQL)
+		pos, why, err := s.readPosition(ctx, "read", o, maxSQL, minSQL)
 		switch {
 		case err != nil:
 			return nil, fmt.Errorf("read sequence %s of column %q of table %s: %w", o.name, column, name, err)
@@ -537,9 +550,16 @@ func (s *Session) checkDeferred(ctx context.Context) error {
 // where it stood before the move (Next), where it was to go (Goal), and
 // where it stands after it (After), or why it stays (Stays). An error stops
 // the apply; the sequence is then Unknown when the move had started.
+//
+// What it says after the move comes from the read after it, and from
+// nothing else: a sequence beyond the column moved, to the value that it
+// gives next; one still behind it stays behind, with the reason and how to
+// move it the rest of the way; and one behind where the move left it was
+// set back by another session. When that read fails, the position is not
+// known, also after a move that ended.
 func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequence, maxSQL, minSQL string) (plan.Sequence, error) {
 	out := plan.Sequence{Column: seq.Column, Name: seq.Name}
-	before, why, err := s.readPosition(ctx, o, maxSQL, minSQL)
+	before, why, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
 	switch {
 	case err != nil:
 		// A read moves nothing.
@@ -557,12 +577,7 @@ func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequen
 	out.Next, out.Goal = before.next.String, before.goal.String
 
 	var pos position
-	bound, err := s.onSequence(ctx, func(tx pgx.Tx) error {
-		if s.beforeMove != nil {
-			if err := s.beforeMove(ctx, tx); err != nil {
-				return err
-			}
-		}
+	bound, err := s.onSequence(ctx, "move", func(tx pgx.Tx) error {
 		return pos.scan(tx.QueryRow(ctx, sequenceSQL(o.name, maxSQL, minSQL, moveSequence)))
 	})
 	var failed, code string
@@ -574,34 +589,59 @@ func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequen
 		}
 		failed = "the statement that moves it failed: " + failed
 	}
-
-	after, why, err := s.readPosition(ctx, o, maxSQL, minSQL)
-	switch {
-	case err != nil:
-		out.Unknown, out.Stays = true, "the apply stopped while it read the sequence again after its move"
-		return out, err
-	case why != "" && failed != "":
-		out.Unknown, out.Stays = true, failed+"; and the read after it failed: "+why
-		return out, nil
-	case why != "" && pos.behind():
-		// The move ended, and the read after it did not: the move says
-		// where it left the sequence.
-		out.After = pos.after.String
-		return out, nil
-	case failed == "" && !pos.behind():
-		// The sequence moved beyond the values between the two reads.
+	if failed == "" && !pos.behind() {
+		// The sequence moved beyond the values between the two reads, so
+		// the statement moved nothing.
 		out.Next, out.Goal = pos.next.String, ""
 		out.Stays, out.Advice = pos.stays()
 		return out, nil
 	}
+
+	after, why, err := s.readPosition(ctx, "after", o, maxSQL, minSQL)
+	switch {
+	case err != nil:
+		out.Unknown, out.Ran, out.Stays = true, failed == "", "the apply stopped while it read the sequence again after its move"
+		return out, err
+	case why != "" && failed != "":
+		out.Unknown, out.Stays = true, failed+"; and the read after it failed: "+why
+		return out, nil
+	case why != "":
+		out.Unknown, out.Ran, out.Stays = true, true, "the read after the move failed: "+why
+		return out, nil
+	}
 	out.After = after.next.String
-	if failed != "" {
-		out.Stays = failed
-		if after.behind() {
-			out.Advice = o.byHand(after, code)
+	// The move left the sequence no further than this, unless another
+	// session set it back: the move statement says where its last value
+	// was, and the read before where the sequence stood.
+	reached := pos.after.String
+	if failed != "" || !pos.after.Valid {
+		reached = before.next.String
+	}
+	switch {
+	case !after.behind():
+		out.Ran = true
+		if !after.next.Valid {
+			out.Stays = "the move took it to its last value, so it gives no more values"
 		}
+	case before.down() && greater(after.next.String, reached) || !before.down() && greater(reached, after.next.String):
+		out.Stays = "another session set the sequence back while the apply moved it"
+		out.Advice = byHand(o, after, "")
+	case failed != "":
+		out.Stays = failed
+		out.Advice = o.byHand(after, code)
+	default:
+		out.Stays = "the move left the sequence behind the values of the column"
+		out.Advice = byHand(o, after, "")
 	}
 	return out, nil
+}
+
+// greater reports whether the integer a is greater than b, both as the
+// database prints them; it is false when either is not an integer.
+func greater(a, b string) bool {
+	x, err1 := strconv.ParseInt(a, 10, 64)
+	y, err2 := strconv.ParseInt(b, 10, 64)
+	return err1 == nil && err2 == nil && x > y
 }
 
 // readAgain reads a sequence that the plan shows staying, after the writes
@@ -611,7 +651,7 @@ func (s *Session) readAgain(ctx context.Context, o *ownedSequence, seq plan.Sequ
 	if !o.usable || !o.readable {
 		return seq, nil
 	}
-	pos, why, err := s.readPosition(ctx, o, maxSQL, minSQL)
+	pos, why, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
 	if err != nil || why != "" {
 		return seq, err
 	}

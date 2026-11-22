@@ -59,6 +59,10 @@ type Sequence struct {
 	// and the read after it. The sequence may have moved forward, which only
 	// skips values.
 	Unknown bool
+	// Ran is true, in the result of an apply, when the statement of the
+	// move ran to its end: with Unknown, the read after it failed, so the
+	// sequence moved forward to a value that is not known.
+	Ran bool
 }
 
 // SequenceName is the name of a sequence: its schema and its name.
@@ -94,9 +98,10 @@ func (s *Sequence) Tries() bool {
 }
 
 // Moved reports, for the result of an apply, whether the sequence moved:
-// the read after the move found it elsewhere than the read before it.
+// the read after the move found it elsewhere than the read before it, or
+// the move ran to its end.
 func (s *Sequence) Moved() bool {
-	return s.After != "" && s.After != s.Next
+	return s.After != "" && s.After != s.Next || s.Ran
 }
 
 // SequenceText returns what a plan says about a sequence, after its name and
@@ -121,8 +126,12 @@ func SequenceState(s *Sequence) string {
 	switch {
 	case s.Unknown && s.Next == "":
 		return "may have moved forward: " + s.Stays
+	case s.Unknown && s.Ran:
+		return "next value " + s.Next + ", moved forward to a value that is not known: " + s.Stays
 	case s.Unknown:
 		return "next value " + s.Next + ", may have moved forward: " + s.Stays
+	case s.Ran && s.After == "":
+		return "next value " + s.Next + ", moved: " + s.Stays
 	case s.Moved() && s.Stays == "":
 		return "next value " + s.Next + " -> " + s.After
 	case s.Moved():
