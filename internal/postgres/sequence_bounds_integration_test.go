@@ -239,6 +239,42 @@ func TestSequenceSetvalNeedsUpdate(t *testing.T) {
 	}
 }
 
+// When the writes of an apply turn the setval of its plan, which the role
+// may not make, into a walk, which it may, the apply leaves the sequence as
+// its plan shows, and the reason and the advice fit the position that the
+// apply read: a walk, not a setval (ADR-0045).
+func TestSequenceAdviceFitsWhatTheApplyRead(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (k text PRIMARY KEY, n serial UNIQUE);
+				INSERT INTO app.t VALUES ('a', 5000000);`)
+			role := db.Role(t, "walker")
+			grantTables(t, db, role, "app", "app.t")
+			db.Exec(t, "GRANT UPDATE ON app.t TO "+quoteIdent(role.User)+"; GRANT USAGE, SELECT ON SEQUENCE app.t_n_seq TO "+quoteIdent(role.User))
+			// The plan counts the stored value of the row that the apply
+			// updates, 5000000, so it shows a setval; after the update, the
+			// largest value is 20.
+			dir := writeFiles(t, map[string]string{"app/t.csv": "k,n\na,10\nb,20\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "k", "n")}}
+			r, err := applyThrough(t, role, decl, nil, false)
+			if err != nil || !r.Committed {
+				t.Fatalf("apply = %+v, %v, want a commit", r, err)
+			}
+			planned, done := sequencesOf(r)
+			wantPlanned := "app.t.n app.t_n_seq: next value 1, not moved to 5000001: the role may not set the sequence, as a move of more than 100000 values does: " +
+				"grant the role UPDATE on sequence app.t_n_seq, or set it as a role that may, while nothing else takes values from it, with " +
+				`SELECT pg_catalog.setval('"app"."t_n_seq"'::pg_catalog.regclass, 5000000)`
+			wantDone := "app.t.n app.t_n_seq: next value 1, not moved to 21: the plan showed a move that the role may not make, " +
+				"and an apply makes only the moves that its plan shows: take 20 values from it, with " +
+				`SELECT pg_catalog.nextval('"app"."t_n_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 20)`
+			if !slices.Equal(planned, []string{wantPlanned}) || !slices.Equal(done, []string{wantDone}) {
+				t.Errorf("plan:\n%s\nafter the commit:\n%s\nwant:\n%s\n%s", strings.Join(planned, "\n"), strings.Join(done, "\n"), wantPlanned, wantDone)
+			}
+		})
+	}
+}
+
 // hold starts a transaction in a connection of its own that runs sql, and
 // returns the function that rolls it back, so that the locks of sql stay
 // until then.

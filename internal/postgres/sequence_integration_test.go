@@ -344,6 +344,19 @@ func TestSequenceMoves(t *testing.T) {
 				"because 32767 is the largest value of its type smallint: give the column and its sequence the type bigint",
 			next: "1",
 		},
+		{
+			// A serial column that became bigint keeps a sequence of type
+			// integer: the sequence alone needs the type of its column.
+			name: "a sequence of type integer of a column of type bigint",
+			schema: `CREATE TABLE app.t (id serial PRIMARY KEY, v text);
+				ALTER TABLE app.t ALTER COLUMN id TYPE bigint;`,
+			file: "id,v\n2147483647,a\n",
+			want: "next value 1, not moved: the sequence gives no value beyond 2147483647, the largest value of the column, " +
+				"because 2147483647 is the largest value of its type integer: give the sequence the type bigint of its column, with ALTER SEQUENCE app.t_id_seq AS bigint",
+			wantDone: "next value 1, not moved: the sequence gives no value beyond 2147483647, the largest value of the column, " +
+				"because 2147483647 is the largest value of its type integer: give the sequence the type bigint of its column, with ALTER SEQUENCE app.t_id_seq AS bigint",
+			next: "1",
+		},
 	}
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {

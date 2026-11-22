@@ -21,10 +21,10 @@ func TestOwnedSequenceOf(t *testing.T) {
 	if got := ownedSequenceOf(nil); got != nil {
 		t.Errorf("ownedSequenceOf(nil) = %+v, want nil", got)
 	}
-	got := ownedSequenceOf([]string{"App", "t_id_seq", "true", "false", "true", "false", `"App"`, "t_id_seq"})
+	got := ownedSequenceOf([]string{"App", "t_id_seq", "true", "false", "true", "false", `"App"`, "t_id_seq", "bigint"})
 	want := ownedSequence{
 		name: plan.SequenceName{Schema: "App", Name: "t_id_seq"}, schemaIdent: `"App"`, ident: `"App".t_id_seq`,
-		usable: true, readable: false, takes: true, updatable: false,
+		usable: true, readable: false, takes: true, updatable: false, columnType: "bigint",
 	}
 	if got == nil || *got != want {
 		t.Errorf("ownedSequenceOf() = %+v, want %+v", got, want)
@@ -50,6 +50,10 @@ func TestSequenceStays(t *testing.T) {
 		return &c
 	}
 	pair := func(why, advice string) string { return why + " | " + advice }
+	// of returns the sequence of a column of the type.
+	of := func(columnType string) *ownedSequence {
+		return with(func(c *ownedSequence) { c.columnType = columnType })
+	}
 	tests := []struct {
 		name string
 		got  string
@@ -106,42 +110,49 @@ func TestSequenceStays(t *testing.T) {
 		},
 		{
 			name: "a sequence that cycles",
-			got:  pair((&position{how: howCycles, inc: seqText("1"), next: seqText("1")}).stays()),
+			got:  pair((&position{how: howCycles, inc: seqText("1"), next: seqText("1")}).stays(of("integer"))),
 			want: pair("the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is", ""),
 		},
 		{
 			name: "a sequence that counts down to its MINVALUE",
 			got: pair((&position{how: howFull, inc: seqText("-1"), next: seqText("-1"), top: seqText("-20"), lo: seqText("-10"),
-				typ: seqText("integer")}).stays()),
+				typ: seqText("integer")}).stays(of("integer"))),
 			want: pair("the sequence gives no value below -20, the smallest value of the column, because its MINVALUE is -10", "lower its MINVALUE"),
 		},
 		{
 			name: "a sequence up to its MAXVALUE",
 			got: pair((&position{how: howFull, inc: seqText("1"), next: seqText("1"), top: seqText("100"), hi: seqText("100"),
-				typ: seqText("integer")}).stays()),
+				typ: seqText("integer")}).stays(of("integer"))),
 			want: pair("the sequence gives no value beyond 100, the largest value of the column, because its MAXVALUE is 100", "raise its MAXVALUE"),
 		},
 		{
 			name: "a sequence up to the largest value of its type",
 			got: pair((&position{how: howFull, inc: seqText("2"), next: seqText("2"), top: seqText("2147483646"), hi: seqText("2147483647"),
-				typ: seqText("integer")}).stays()),
+				typ: seqText("integer")}).stays(of("integer"))),
 			want: pair("the sequence gives no value beyond 2147483646, the largest value of the column, because 2147483647 is the largest value of its type integer",
 				"give the column and its sequence the type bigint"),
 		},
 		{
+			name: "a sequence of type integer whose column is bigint already",
+			got: pair((&position{how: howFull, inc: seqText("1"), next: seqText("1"), top: seqText("2147483647"), hi: seqText("2147483647"),
+				typ: seqText("integer")}).stays(of("bigint"))),
+			want: pair("the sequence gives no value beyond 2147483647, the largest value of the column, because 2147483647 is the largest value of its type integer",
+				`give the sequence the type bigint of its column, with ALTER SEQUENCE "My App".t_id_seq AS bigint`),
+		},
+		{
 			name: "a sequence down to the smallest value of bigint",
 			got: pair((&position{how: howFull, inc: seqText("-2"), next: seqText("-2"), top: seqText("-9223372036854775807"), lo: seqText("-9223372036854775808"),
-				typ: seqText("bigint")}).stays()),
+				typ: seqText("bigint")}).stays(of("bigint"))),
 			want: pair("the sequence gives no value below -9223372036854775807, the smallest value of the column, because -9223372036854775808 is the smallest value of its type bigint", ""),
 		},
 		{
 			name: "a sequence that gives no more values",
-			got:  pair((&position{how: howBeyond, inc: seqText("1")}).stays()),
+			got:  pair((&position{how: howBeyond, inc: seqText("1")}).stays(of("integer"))),
 			want: pair("the sequence gives no more values", ""),
 		},
 		{
 			name: "a sequence beyond the column",
-			got:  pair((&position{how: howBeyond, inc: seqText("1"), next: seqText("9")}).stays()),
+			got:  pair((&position{how: howBeyond, inc: seqText("1"), next: seqText("9")}).stays(of("integer"))),
 			want: pair("its next value lies beyond the values of the column already", ""),
 		},
 	}

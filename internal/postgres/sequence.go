@@ -25,8 +25,8 @@ import (
 // nothing else. It is an array of text: the schema and the name of the
 // sequence; whether the role may use the schema, read the sequence, take
 // values from it (USAGE or UPDATE), and set it (UPDATE); and the schema and
-// the name as identifiers of SQL, quoted where PostgreSQL needs it. It is
-// NULL for a column without such a sequence. The default is compared as
+// the name as identifiers of SQL, quoted where PostgreSQL needs it; and the
+// type of the column. It is NULL for a column without such a sequence. The default is compared as
 // text, which the search path of the session, pg_catalog alone, writes with
 // the schema of the sequence on both sides.
 const ownedSequenceSQL = `(SELECT ARRAY[sn.nspname::pg_catalog.text, sc.relname::pg_catalog.text,
@@ -34,7 +34,7 @@ const ownedSequenceSQL = `(SELECT ARRAY[sn.nspname::pg_catalog.text, sc.relname:
 				pg_catalog.has_sequence_privilege(sc.oid, 'SELECT')::pg_catalog.text,
 				pg_catalog.has_sequence_privilege(sc.oid, 'USAGE, UPDATE')::pg_catalog.text,
 				pg_catalog.has_sequence_privilege(sc.oid, 'UPDATE')::pg_catalog.text,
-				pg_catalog.quote_ident(sn.nspname), pg_catalog.quote_ident(sc.relname)]
+				pg_catalog.quote_ident(sn.nspname), pg_catalog.quote_ident(sc.relname), pg_catalog.format_type(a.atttypid, NULL)]
 				FROM pg_catalog.pg_depend AS sd
 				JOIN pg_catalog.pg_class AS sc ON sc.oid = sd.objid AND sc.relkind = 'S'
 				JOIN pg_catalog.pg_namespace AS sn ON sn.oid = sc.relnamespace
@@ -64,17 +64,20 @@ type ownedSequence struct {
 	readable  bool
 	takes     bool
 	updatable bool
+	// columnType is the type of the column, as format_type names it.
+	columnType string
 }
 
 // ownedSequenceOf returns the sequence of a row of ownedSequenceSQL, or nil.
 func ownedSequenceOf(row []string) *ownedSequence {
-	if len(row) != 8 {
+	if len(row) != 9 {
 		return nil
 	}
 	return &ownedSequence{
 		name:        plan.SequenceName{Schema: row[0], Name: row[1]},
 		schemaIdent: row[6], ident: row[6] + "." + row[7],
 		usable: row[2] == "true", readable: row[3] == "true", takes: row[4] == "true", updatable: row[5] == "true",
+		columnType: row[8],
 	}
 }
 
@@ -442,7 +445,7 @@ func (s *Session) Sequences(ctx context.Context, name declaration.TableName, col
 			seq.Stays, seq.Advice = o.mayNotMove(pos)
 		default:
 			seq.Next = pos.next.String
-			seq.Stays, seq.Advice = pos.stays()
+			seq.Stays, seq.Advice = pos.stays(o)
 		}
 		out = append(out, seq)
 	}
@@ -604,7 +607,7 @@ func (s *Session) moveOne(ctx context.Context, table declaration.TableName, o *o
 		// Another session moved the sequence beyond the values after the
 		// plan, or the writes of the apply give a goal that needs no move.
 		out.Next = before.next.String
-		out.Stays, out.Advice = before.stays()
+		out.Stays, out.Advice = before.stays(o)
 		return out, nil
 	}
 	out.Next, out.Goal = before.next.String, before.goal.String
@@ -629,7 +632,7 @@ func (s *Session) moveOne(ctx context.Context, table declaration.TableName, o *o
 		// The sequence moved beyond the values between the two reads, so
 		// the statement moved nothing.
 		out.Next, out.Goal = pos.next.String, ""
-		out.Stays, out.Advice = pos.stays()
+		out.Stays, out.Advice = pos.stays(o)
 		return out, nil
 	}
 
@@ -700,31 +703,33 @@ func (s *Session) readAgain(ctx context.Context, o *ownedSequence, seq plan.Sequ
 		out.Goal = pos.goal.String
 		if out.Stays, out.Advice = o.mayNotMove(pos); out.Stays == "" {
 			// The role may make the move that the writes call for, but the
-			// plan showed another one, which it may not make.
-			out.Stays, out.Advice = seq.Stays, byHand(o, pos, "")
+			// plan showed another one, which it may not make: the reason and
+			// the advice fit the position that the apply read.
+			out.Stays = "the plan showed a move that the role may not make, and an apply makes only the moves that its plan shows"
+			out.Advice = byHand(o, pos, "")
 		}
 	default:
-		out.Stays, out.Advice = pos.stays()
+		out.Stays, out.Advice = pos.stays(o)
 	}
 	return out, nil
 }
 
-// stays says why a sequence stays where it is, for a position that is not
-// a move, and what to do, or "" when there is nothing to do.
-func (pos *position) stays() (why, advice string) {
+// stays says why the sequence o stays where it is, for a position that is
+// not a move, and what to do, or "" when there is nothing to do.
+func (pos *position) stays(o *ownedSequence) (why, advice string) {
 	limits, typed := typeLimits[pos.typ.String]
 	switch {
 	case pos.how == howCycles:
 		return "the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is", ""
 	case pos.how == howFull && pos.down() && typed && pos.lo.String == limits[0]:
 		return fmt.Sprintf("the sequence gives no value below %s, the smallest value of the column, because %s is the smallest value of its type %s",
-			pos.top.String, pos.lo.String, pos.typ.String), largerType(pos.typ.String)
+			pos.top.String, pos.lo.String, pos.typ.String), o.largerType(pos.typ.String)
 	case pos.how == howFull && pos.down():
 		return fmt.Sprintf("the sequence gives no value below %s, the smallest value of the column, because its MINVALUE is %s",
 			pos.top.String, pos.lo.String), "lower its MINVALUE"
 	case pos.how == howFull && typed && pos.hi.String == limits[1]:
 		return fmt.Sprintf("the sequence gives no value beyond %s, the largest value of the column, because %s is the largest value of its type %s",
-			pos.top.String, pos.hi.String, pos.typ.String), largerType(pos.typ.String)
+			pos.top.String, pos.hi.String, pos.typ.String), o.largerType(pos.typ.String)
 	case pos.how == howFull:
 		return fmt.Sprintf("the sequence gives no value beyond %s, the largest value of the column, because its MAXVALUE is %s",
 			pos.top.String, pos.hi.String), "raise its MAXVALUE"
@@ -734,11 +739,19 @@ func (pos *position) stays() (why, advice string) {
 	return "its next value lies beyond the values of the column already", ""
 }
 
-// largerType returns what to do about a sequence that its type keeps from
-// a value beyond the column: nothing for bigint, the largest type, and
-// otherwise a larger type for the column and the sequence.
-func largerType(typ string) string {
-	if typ == "bigint" {
+// typeRanks orders the types of a sequence by the size of their values.
+var typeRanks = map[string]int{"smallint": 1, "integer": 2, "bigint": 3}
+
+// largerType returns what to do about the sequence o, of type typ, that its
+// type keeps from a value beyond the column: the type of the column for the
+// sequence, when the column takes larger values than the sequence, as a
+// serial column that became bigint does; nothing when both are bigint, the
+// largest type; and otherwise bigint for the column and the sequence.
+func (o *ownedSequence) largerType(typ string) string {
+	switch {
+	case typeRanks[o.columnType] > typeRanks[typ]:
+		return "give the sequence the type " + o.columnType + " of its column, with ALTER SEQUENCE " + o.ident + " AS " + o.columnType
+	case typ == "bigint":
 		return ""
 	}
 	return "give the column and its sequence the type bigint"
