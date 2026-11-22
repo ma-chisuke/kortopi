@@ -557,8 +557,9 @@ func keyCascadeError(table string) string {
 // insert, which finds its row there already, and changes nothing (ADR-0042).
 // The advice of the error works: with the tables in two schemas, an apply of
 // the referenced schema alone, and then of all, brings the tables to the
-// declaration; with both in one schema, an UPDATE of the referenced row by
-// hand does, after which an apply finds nothing to change.
+// declaration; with both in one schema, where a declaration that changes the
+// referenced key alone stops too, an UPDATE of the referenced row by hand
+// does, after which an apply finds nothing to change.
 func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 	for _, srv := range pgtest.Servers() {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -605,8 +606,28 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 					}
 
 					if price == "m" {
-						// One schema: the change of the referenced key by hand,
-						// which the cascade follows.
+						// One schema: a declaration that changes the referenced
+						// key alone stops too, since the cascade changes the key
+						// of a referencing row that it holds with the old key.
+						first := writeFiles(t, map[string]string{
+							"m/currency.csv": "id,iso,name\n1,JPN,Yen\n2,USD,Dollar\n",
+							"m/price.csv":    "currency_iso,product,amount\nJPY,p1,100\nUSD,p2,1.50\n",
+						})
+						code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--dir", first}, conn[2:]), buildDialects(t))
+						checkRun(t, code, stdout, stderr, exitError, lines(
+							"m.currency (upsert, key: id)",
+							"  ~ id=1  iso: JPY -> JPN",
+							"  0 to insert, 1 to update",
+							"",
+							"Plan: 0 to insert, 1 to update, 0 to delete in 2 tables.",
+							"1 table without changes is not shown.",
+						), filepath.Join(first, "m", "price.csv")+": after the writes of the apply, table m.price still differs from the declaration in 1 row to insert: "+
+							"+ currency_iso=JPY  product=p1  amount=100.00: ", "\nkortopi: nothing was changed\n")
+						if got := rows(); !slices.Equal(got, []string{"currency JPY USD", "price JPY/p1 USD/p2"}) {
+							t.Errorf("rows after the failed apply of the referenced key alone: %v", got)
+						}
+						// The change of the referenced key by hand, which the
+						// cascade follows.
 						db.Exec(t, "UPDATE m.currency SET iso = 'JPN' WHERE id = 1")
 					} else {
 						code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--schema", "m"}, conn), buildDialects(t))
