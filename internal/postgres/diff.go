@@ -34,6 +34,10 @@ const maxFlaggedRows = 5
 // delete, each sorted by the match key in the order of the key's types.
 // Values are text as PostgreSQL prints them.
 //
+// After the first read of the table, Diff checks that the table is the one
+// that the snapshot shows (ADR-0047): another session can have rewritten or
+// truncated it after the snapshot, which would make it look empty.
+//
 // The work of one table runs inside a savepoint, so that an error leaves the
 // session usable. The savepoint is released, and the declared rows stay
 // loaded until the session ends: Effects reads them for every table, and in
@@ -99,7 +103,12 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		diff.Undeclared, diff.Uncounted, err = s.countUndeclared(ctx, tx, table.Name, c)
 		return err
 	})
-	if err != nil {
+	// The first read of the rows of the table took a lock that keeps out a
+	// change that gives it new storage or replaces it until the transaction
+	// ends, so the check sees every such change (ADR-0047). A read that
+	// failed may have failed because of such a change too, such as a type
+	// that a rewrite changed, and the error then says both.
+	if err := s.checkAfter(ctx, err, []readTable{{oid: meta.oid, name: table.Name}}); err != nil {
 		return plan.TableDiff{}, err
 	}
 	lt := &loadedTable{

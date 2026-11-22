@@ -435,6 +435,7 @@ the wait for the lock of kortopi, which the other apply held, was cancelled, by 
 スキーマの変更を先に、スキーマを変える道具で適用し、行をそのあとに適用する。
 
 - 宣言が挙げ、データベースにないテーブルや列は、apply のエラーになる。そのため、apply がスキーマの変更より先に動くことはない。
+- apply は、スキーマの変更がコミットしてから始め、変更の実行中には始めない。apply が始まったあとに宣言したテーブルや削除が着くテーブルを書き換えるか置き換える変更があれば、apply は何も書き込む前に止まり、エラーがそう伝える。宣言したテーブルの外部キーが参照するテーブルを書き換えると、キーはその行を参照する書き込みを拒み、そのときもエラーはその書き換えを挙げる。どちらでも apply は何も変えない（[実行中のスキーマの変更](plan.ja.md#実行中のスキーマの変更)）。
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
@@ -748,4 +749,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:d1bb2a1cde86a278127ddd46dc0a17cdbc53b18baff354493ebc5fe063195a7a -->
+<!-- i18n-source: apply.md sha256:a2eefd9f64a38d397ffd20adaf74d0b15929e749de920c339fb6381104202777 -->

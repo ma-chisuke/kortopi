@@ -136,6 +136,12 @@ type Session struct {
 	effectGone  []goneFirst
 	// deleted holds the order of the tables whose rows Delete deleted.
 	deleted map[declaration.TableName]int
+	// references holds the table that each foreign key of the loaded tables
+	// references, and referenced how the snapshot stores each such table, by
+	// its OID, which readReferences reads before the first write, for the
+	// error of a write that a foreign key refuses (ADR-0047).
+	references map[constraintKey]readTable
+	referenced map[uint32]map[uint32]storedRelation
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.

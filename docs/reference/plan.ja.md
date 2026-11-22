@@ -138,6 +138,7 @@ kortopi は、通信のない接続に 10 秒後からプローブを送り、5 
 ### ロックを待つとき
 
 計画・apply・書き出しは、読み書きするテーブルのロックをほかのセッションが持っている間は待つ。`ALTER TABLE` を実行するスキーマの変更がその例であり、apply が更新か削除をする行のロックでも待つ。
+待っていたスキーマの変更は、そのあとに読むテーブルを変えていることがある。変えていれば、実行は止まる（[実行中のスキーマの変更](#実行中のスキーマの変更)）。
 ロック待ちの上限がなければ、際限なく、何も言わずに待つ。
 `--lock-timeout` は、実行にその上限を与える。値は `10s`・`500ms`・`1m30s` のような時間の長さで、`1ms` から `24h` までである。
 
@@ -157,6 +158,69 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 セッションが設定した上限のときは `as long as lock_timeout of the session allows` となる。そして `or allow the wait more time with --lock-timeout` が足される。
 セッションの `statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、ロックを待つ文も終わらせる。そのときのエラーは、`statement_timeout` かほかのセッションが文をキャンセルしたと伝え、フラグを挙げない。kortopi にはそのためのフラグがない。
 デプロイのときの実行には、毎回ロック待ちの上限を与える。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
+
+### 実行中のスキーマの変更
+
+計画・apply・書き出しは、トランザクションの最初の文でスナップショットを取り、すべてのテーブルをそのスナップショットで読む。
+宣言したテーブルのロックは、それを読むまで取らない。読むのは、カタログを読んだあとである。
+その間にほかのセッションがコミットしたスキーマの変更は、テーブルの読み取りには見え、スナップショットには見えない。
+テーブルに新しいストレージを与える変更は、それより前のスナップショットを持つトランザクションにはテーブルを空に見せる。`ALTER COLUMN ... TYPE` のようにテーブルを書き換える `ALTER TABLE` の形と、`TRUNCATE` がその例である。PostgreSQL は、これらのコマンドを MVCC に対して安全でないと説明している。
+
+そこで kortopi は、テーブルの行を初めて読んだ直後に、それがスナップショットのテーブルであることを確かめる。スナップショットのあとにほかのセッションが次のどれかをしていれば、止まる。
+
+- テーブルか、そのパーティションを書き換えたか、空にした。
+- テーブルを削除したか、名前を変えたか、同じ名前の別のテーブルに置き換えた。
+- テーブルのパーティションをアタッチしたか、デタッチしたか、作ったか、削除した。
+
+```text
+kortopi: another session rewrote or truncated table geo.postal_codes after the plan began, so what the plan read from the table may not be what it holds: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+実行は、`--exit-code` があっても終了コード 1 で終わる。スキーマの変更が実行に対して空に見せたテーブルは、ずれではないからである。計画は計画を出さず、apply は何も書き込まず、書き出しはファイルを書かない。
+スキーマの変更がコミットしてから、もう一度実行する。
+
+kortopi が確かめるのは、実行の宣言したテーブルと、外部キーを通して削除が着くテーブルであり、どれもその最初の読み取りの直後に確かめる。後者は、削除がほかの行にすることを数えるために計画が読む（[削除がほかの行にすること](#削除がほかの行にすること)）。
+削除する行を持つ宣言したテーブルは、外部キーをたどったあとにもう一度確かめる。たどる処理がそれらをもう一度読むからである。
+`on_insert` の値の確認はそれより前に来る。この確認は、宣言したテーブルを文の中で挙げるが、その行は1つも読まない。しかも、その文はロールバックするセーブポイントの中で動くので、文のロックはそこで手放される。確認があとに続くのは、行の最初の読み取りである。
+
+実行はテーブルを一度読むと、終わるまでそのロックを持つ。
+テーブルに新しいストレージや別の実体を与える変更は、このロックを待つ。テーブルを書き換える `ALTER TABLE` の形・`TRUNCATE`・`VACUUM FULL`・`CLUSTER` がそうである。`DROP TABLE`・`ALTER TABLE ... RENAME`・`CONCURRENTLY` のない `DETACH PARTITION` も同じである。そのため、確認はそうした変更をすべて見る。
+`ATTACH PARTITION` と `DETACH PARTITION ... CONCURRENTLY` は、このロックを待たない。
+アタッチより前に動いた文は、そのパーティションの行を読んでいない。最後の確認のあとのアタッチは、その確認には見えない。
+apply は、書き込みとコミット前の比較でテーブルをもう一度読み、そうしたパーティションの行を、計画が示さなかった行として見つける（[kortopi apply](apply.ja.md#コミット前の比較)）。
+
+失敗した読み取りのあとも確かめる。ほかのセッションが型を変えた列や、ほかのセッションが削除したテーブルは、読み取りを失敗させうるからである。
+テーブルが変わっていれば、エラーはまず読み取りのエラーを示し、次に、失敗の原因でありうるものとしてその変更を示す。エラーは読み取りのエラーで始まり、次のように続く。
+
+```text
+, and another session rewrote or truncated table geo.postal_codes after the plan began, so the failure may come from that change
+```
+
+apply は、書き込みを外部キーが拒んだとき、そのキーが参照するテーブルも確かめる。コミットまで遅らせたキーがコミットで拒んだときも同じである。
+apply はそのテーブルを自分では読まない。しかし、キーの検査はそれをスナップショットで読む。そのため、スナップショットのあとにほかのセッションが書き換えたテーブルは、キーの検査には空に見え、キーはテーブルが持つ行への参照を拒む。
+そのときエラーは、PostgreSQL のエラーの前にその変更を挙げ、参照される行を宣言するようにという助言は付けない。
+
+```text
+kortopi: another session rewrote or truncated table m.country after the apply began, and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" (detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)
+kortopi: nothing was changed
+```
+
+スナップショットのあと、実行がカタログを読む前にほかのセッションが削除したテーブルは、カタログを読む時点で実行を止める。外部キーを通して削除が着くテーブルも同じである。
+
+```text
+kortopi: another session dropped or replaced table geo.postal_codes while the plan read the catalogs: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+`VACUUM FULL`・`CLUSTER`・`ALTER TABLE ... SET TABLESPACE` も、テーブルに新しいストレージを与えるが、行は保つ。実行が読んだのは、テーブルが持つとおりの行である。
+kortopi はこれらをカタログの上で書き換えと区別できないので、これらのあとでも止まる。
+
+テーブルのストレージを変えない変更は、kortopi は確かめない。
+
+- スナップショットのあとに削除された列は、PostgreSQL のエラー、たとえば `column s.lat does not exist` で読み取りを失敗させる。
+- スナップショットのあとに追加された、宣言した列は、スナップショットのテーブルのとおりに、スキーマの適用後に決まるものとして示される（[スキーマの変更を待つテーブルと列](#スキーマの変更を待つテーブルと列)）。`--exit-code` では終了コード 2 になる。
+
+スキーマの変更は kortopi の実行の前にし、実行の間にはしない。
+デプロイでは、スキーマを先に、行をあとに、順に適用する（[kortopi apply](apply.ja.md#デプロイでの使い方)）。スキーマの変更に出会った定期的なずれの検出は、終了コード 1 で失敗し、次の実行では通る（[スクリプトから kortopi を実行する](automation.ja.md#定期的なずれの検出)）。
 
 ## セッションに要るもの
 
@@ -686,7 +750,7 @@ kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
 2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないこと、apply の文を書き換えるルールをどのテーブルも持たないこと（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）も検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
-3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
+3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語、計画が始まったあとにほかのセッションが変えたテーブル（[実行中のスキーマの変更](#実行中のスキーマの変更)）、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言も `on_insert` も挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 5. 削除する行があるときは、それを参照する外部キーをたどる。削除が消す宣言した行や、削除が宣言した列を NULL か既定値にする宣言した行は誤りであり、手順 4 の誤りと一緒に報告する（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
 6. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
@@ -698,7 +762,7 @@ kortopi は、次の順に検査する。
 | 終了コード | 意味 |
 |---|---|
 | 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。モード `upsert` と `insert` のテーブルが宣言を超えて持つ保存された行も除く。計画はそれを数え、そのモードはそれを削除しない。 |
-| 1 | 計画が失敗した。フラグの誤り、宣言の誤り、`--no-pending` があるときのデータベースにないテーブルや列、データベースのエラー、割り込みを含む。 |
+| 1 | 計画が失敗した。フラグの誤り、宣言の誤り、`--no-pending` があるときのデータベースにないテーブルや列、計画の間にほかのセッションが変えたテーブル、データベースのエラー、割り込みを含む。 |
 | 2 | `--exit-code` のときだけ使う。計画が空でない。 |
 
 `--exit-code` がなければ、変更を示した計画も 0 で終わる。そのため、マスタデータを変えるプルリクエストが、自分の計画で失敗することはない。
@@ -729,4 +793,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:c487e1f62740974db6ba9612adbc0871def64d21fef66fb9516dd81650ef0504 -->
+<!-- i18n-source: plan.md sha256:f3c174b5cdfea16efc5e1631a73a5372969f464125f8a88549ff7908357267fd -->
