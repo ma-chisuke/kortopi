@@ -166,7 +166,7 @@ They take no lock on a declared table until they read it, after they have read t
 A schema change that another session commits in between is seen by the read, and not by the snapshot.
 A change that gives the table new storage, as the forms of `ALTER TABLE` that rewrite a table, such as `ALTER COLUMN ... TYPE`, and `TRUNCATE` do, makes the table look empty to a transaction whose snapshot predates it: PostgreSQL calls these commands not MVCC-safe.
 
-So right after kortopi first reads a table, it checks that the table is the one of its snapshot, and stops when another session, after the snapshot:
+So right after kortopi first reads the rows of a table, it checks that the table is the one of its snapshot, and stops when another session, after the snapshot:
 
 - rewrote or truncated the table, or a partition of it;
 - dropped or renamed the table, or replaced it with another table of the same name;
@@ -178,8 +178,38 @@ kortopi: another session rewrote or truncated table geo.postal_codes after the p
 
 The run exits with status 1, also with `--exit-code`, because a table that a schema change emptied for the run is no drift: a plan prints no plan, an apply writes nothing, and an export writes no file.
 Run it again once the schema change has committed.
-kortopi checks the declared tables of the run, and the tables that the deletions reach through foreign keys, which a plan reads to count what the deletions also do ([What the deletions also do](#what-the-deletions-also-do)).
-Once a run has read a table, it holds a lock on it until it ends, so a schema change of that table waits for the run, and the check is final.
+
+kortopi checks the declared tables of the run, and the tables that the deletions reach through foreign keys, which a plan reads to count what the deletions also do ([What the deletions also do](#what-the-deletions-also-do)), each right after its first read.
+It checks the declared tables with rows to delete again after it follows the foreign keys, which reads them again.
+The check of the values of `on_insert`, which comes before, names a declared table in a statement that reads none of its rows, in a savepoint that it rolls back, which gives back the lock of the statement: the first read of the rows is the one that the check follows.
+
+Once a run has read a table, it holds a lock on it until it ends.
+The changes that give the table new storage or a new identity wait for that lock: the forms of `ALTER TABLE` that rewrite a table, `TRUNCATE`, `VACUUM FULL`, `CLUSTER`, `DROP TABLE`, `ALTER TABLE ... RENAME`, and `DETACH PARTITION` without `CONCURRENTLY`. So the check sees every such change.
+`ATTACH PARTITION` and `DETACH PARTITION ... CONCURRENTLY` do not wait for it.
+The statements that ran before an attach did not read the rows of the partition, and the last check does not see an attach that comes after it.
+An apply reads the table again in its writes and in its check before the commit, which find the rows of such a partition as rows that the plan did not show ([kortopi apply](apply.md#the-check-before-the-commit)).
+
+A read that fails is checked too, as a read of a column whose type another session changed, or of a table that it dropped, can fail.
+When the table changed, the error gives the error of the read first, and then the change, as what the failure may come from: it starts as the error of the read, and continues so:
+
+```text
+, and another session rewrote or truncated table geo.postal_codes after the plan began, so the failure may come from that change
+```
+
+An apply also checks a table that a foreign key references when the key refuses a write of the apply, also at the commit for a key deferred to it.
+The apply does not read that table itself, but the check of the key reads it in the snapshot, so a table that another session rewrote after the snapshot looks empty to it, and the key refuses a reference to a row that the table holds.
+The error then names the change before the error of PostgreSQL, without the advice to declare the referenced row:
+
+```text
+kortopi: another session rewrote or truncated table m.country after the apply began, and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" (detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)
+kortopi: nothing was changed
+```
+
+A table that another session dropped after the snapshot and before the run reads the catalogs stops the run as it reads them, as does a table that the deletions reach through foreign keys:
+
+```text
+kortopi: another session dropped or replaced table geo.postal_codes while the plan read the catalogs: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
 
 `VACUUM FULL`, `CLUSTER`, and `ALTER TABLE ... SET TABLESPACE` give a table new storage too, but keep its rows: the run read what the table holds.
 kortopi cannot tell them apart from a rewrite in the catalogs, and stops after them as well.
@@ -188,7 +218,6 @@ kortopi does not check what leaves the storage of a table as it is:
 
 - A column dropped after the snapshot makes the read fail with the error of PostgreSQL, such as `column s.lat does not exist`.
 - A declared column added after the snapshot is shown as known after the schema is applied, as the snapshot holds the table ([Tables and columns that wait for a schema change](#tables-and-columns-that-wait-for-a-schema-change)), and gives status 2 with `--exit-code`.
-- A table dropped after the snapshot and before the run reads the catalogs makes the read of the catalogs fail, with an error that starts with `read the columns of the tables:` and does not name the cause.
 
 Make schema changes before a run of kortopi, not during one.
 In a deployment, apply the schema first and the rows second, one after the other ([kortopi apply](apply.md#in-a-deployment)). A scheduled drift check that meets a schema change fails with status 1, and passes on its next run ([Run kortopi from scripts](automation.md#a-scheduled-drift-check)).

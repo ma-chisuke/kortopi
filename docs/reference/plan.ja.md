@@ -166,7 +166,7 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 その間にほかのセッションがコミットしたスキーマの変更は、テーブルの読み取りには見え、スナップショットには見えない。
 テーブルに新しいストレージを与える変更は、それより前のスナップショットを持つトランザクションにはテーブルを空に見せる。`ALTER COLUMN ... TYPE` のようにテーブルを書き換える `ALTER TABLE` の形と、`TRUNCATE` がその例である。PostgreSQL は、これらのコマンドを MVCC に対して安全でないと説明している。
 
-そこで kortopi は、テーブルを初めて読んだ直後に、それがスナップショットのテーブルであることを確かめる。スナップショットのあとにほかのセッションが次のどれかをしていれば、止まる。
+そこで kortopi は、テーブルの行を初めて読んだ直後に、それがスナップショットのテーブルであることを確かめる。スナップショットのあとにほかのセッションが次のどれかをしていれば、止まる。
 
 - テーブルか、そのパーティションを書き換えたか、空にした。
 - テーブルを削除したか、名前を変えたか、同じ名前の別のテーブルに置き換えた。
@@ -178,8 +178,38 @@ kortopi: another session rewrote or truncated table geo.postal_codes after the p
 
 実行は、`--exit-code` があっても終了コード 1 で終わる。スキーマの変更が実行に対して空に見せたテーブルは、ずれではないからである。計画は計画を出さず、apply は何も書き込まず、書き出しはファイルを書かない。
 スキーマの変更がコミットしてから、もう一度実行する。
-kortopi が確かめるのは、実行の宣言したテーブルと、外部キーを通して削除が着くテーブルである。後者は、削除がほかの行にすることを数えるために計画が読む（[削除がほかの行にすること](#削除がほかの行にすること)）。
-実行はテーブルを一度読むと、終わるまでそのロックを持つ。そのため、そのテーブルのスキーマの変更は実行を待ち、この確認の結果はそれ以後も変わらない。
+
+kortopi が確かめるのは、実行の宣言したテーブルと、外部キーを通して削除が着くテーブルであり、どれもその最初の読み取りの直後に確かめる。後者は、削除がほかの行にすることを数えるために計画が読む（[削除がほかの行にすること](#削除がほかの行にすること)）。
+削除する行を持つ宣言したテーブルは、外部キーをたどったあとにもう一度確かめる。たどる処理がそれらをもう一度読むからである。
+`on_insert` の値の確認はそれより前に来る。この確認は、宣言したテーブルを文の中で挙げるが、その行は1つも読まない。しかも、その文はロールバックするセーブポイントの中で動くので、文のロックはそこで手放される。確認があとに続くのは、行の最初の読み取りである。
+
+実行はテーブルを一度読むと、終わるまでそのロックを持つ。
+テーブルに新しいストレージや別の実体を与える変更は、このロックを待つ。テーブルを書き換える `ALTER TABLE` の形・`TRUNCATE`・`VACUUM FULL`・`CLUSTER` がそうである。`DROP TABLE`・`ALTER TABLE ... RENAME`・`CONCURRENTLY` のない `DETACH PARTITION` も同じである。そのため、確認はそうした変更をすべて見る。
+`ATTACH PARTITION` と `DETACH PARTITION ... CONCURRENTLY` は、このロックを待たない。
+アタッチより前に動いた文は、そのパーティションの行を読んでいない。最後の確認のあとのアタッチは、その確認には見えない。
+apply は、書き込みとコミット前の比較でテーブルをもう一度読み、そうしたパーティションの行を、計画が示さなかった行として見つける（[kortopi apply](apply.ja.md#コミット前の比較)）。
+
+失敗した読み取りのあとも確かめる。ほかのセッションが型を変えた列や、ほかのセッションが削除したテーブルは、読み取りを失敗させうるからである。
+テーブルが変わっていれば、エラーはまず読み取りのエラーを示し、次に、失敗の原因でありうるものとしてその変更を示す。エラーは読み取りのエラーで始まり、次のように続く。
+
+```text
+, and another session rewrote or truncated table geo.postal_codes after the plan began, so the failure may come from that change
+```
+
+apply は、書き込みを外部キーが拒んだとき、そのキーが参照するテーブルも確かめる。コミットまで遅らせたキーがコミットで拒んだときも同じである。
+apply はそのテーブルを自分では読まない。しかし、キーの検査はそれをスナップショットで読む。そのため、スナップショットのあとにほかのセッションが書き換えたテーブルは、キーの検査には空に見え、キーはテーブルが持つ行への参照を拒む。
+そのときエラーは、PostgreSQL のエラーの前にその変更を挙げ、参照される行を宣言するようにという助言は付けない。
+
+```text
+kortopi: another session rewrote or truncated table m.country after the apply began, and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" (detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)
+kortopi: nothing was changed
+```
+
+スナップショットのあと、実行がカタログを読む前にほかのセッションが削除したテーブルは、カタログを読む時点で実行を止める。外部キーを通して削除が着くテーブルも同じである。
+
+```text
+kortopi: another session dropped or replaced table geo.postal_codes while the plan read the catalogs: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
 
 `VACUUM FULL`・`CLUSTER`・`ALTER TABLE ... SET TABLESPACE` も、テーブルに新しいストレージを与えるが、行は保つ。実行が読んだのは、テーブルが持つとおりの行である。
 kortopi はこれらをカタログの上で書き換えと区別できないので、これらのあとでも止まる。
@@ -188,7 +218,6 @@ kortopi はこれらをカタログの上で書き換えと区別できないの
 
 - スナップショットのあとに削除された列は、PostgreSQL のエラー、たとえば `column s.lat does not exist` で読み取りを失敗させる。
 - スナップショットのあとに追加された、宣言した列は、スナップショットのテーブルのとおりに、スキーマの適用後に決まるものとして示される（[スキーマの変更を待つテーブルと列](#スキーマの変更を待つテーブルと列)）。`--exit-code` では終了コード 2 になる。
-- スナップショットのあと、実行がカタログを読む前に削除されたテーブルは、カタログの読み取りを失敗させる。そのエラーは `read the columns of the tables:` で始まり、原因を示さない。
 
 スキーマの変更は kortopi の実行の前にし、実行の間にはしない。
 デプロイでは、スキーマを先に、行をあとに、順に適用する（[kortopi apply](apply.ja.md#デプロイでの使い方)）。スキーマの変更に出会った定期的なずれの検出は、終了コード 1 で失敗し、次の実行では通る（[スクリプトから kortopi を実行する](automation.ja.md#定期的なずれの検出)）。
@@ -701,4 +730,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:93703f96349613c2bbc84af46a265da4c6e0b2abd4184c588d9dfca16693a2c7 -->
+<!-- i18n-source: plan.md sha256:bb60756a947447de6d00247967d86f52db83e12c4a0a76da3834e017c6b89714 -->
