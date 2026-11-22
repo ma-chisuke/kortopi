@@ -32,6 +32,12 @@ func movedTo(s plan.Sequence, after string) plan.Sequence {
 	return s
 }
 
+// advised returns s with advice.
+func advised(s plan.Sequence, advice string) plan.Sequence {
+	s.Advice = advice
+	return s
+}
+
 // The sequences move last before the commit, after every check, table by
 // table in the order of the plan, those that the plan shows moving and those
 // that it could not read; a table whose sequences stay with a goal hands
@@ -66,6 +72,8 @@ func TestRunMovesSequences(t *testing.T) {
 		wantSequences []SequenceMove
 		wantErr       error
 		wantMoved     []SequenceMove
+		// wantLeft is SequencesMovedError.Left.
+		wantLeft []SequenceMove
 	}{
 		{
 			name: "after every check",
@@ -85,22 +93,22 @@ func TestRunMovesSequences(t *testing.T) {
 			wantSequences: []SequenceMove{{Table: child, Sequence: movedTo(childSeq, "4")}},
 		},
 		{
-			name: "a sequence that stays with a goal is read again, one that stays for good is not",
+			name: "a sequence that stays with a goal, or whose position is not known, goes to the database for its advice",
 			db: &fakeDB{diffs: diffs, sequences: map[declaration.TableName][]plan.Sequence{
 				child: {staying(childSeq, "the role may not take values from the sequence")}, parent: {unread},
 			}},
-			want: append(before, "MoveSequences a.child", "Commit"),
+			want: append(before, "MoveSequences a.child", "MoveSequences z.parent", "Commit"),
 			wantSequences: []SequenceMove{
 				{Table: child, Sequence: staying(childSeq, "the role may not take values from the sequence")}, {Table: parent, Sequence: unread},
 			},
 		},
 		{
-			name: "no sequence to move",
+			name: "a sequence that stays for good does not go to the database",
 			db: &fakeDB{diffs: diffs, sequences: map[declaration.TableName][]plan.Sequence{
-				child: {cycles}, parent: {unread},
+				child: {cycles},
 			}},
-			want:          append(before, "Commit"),
-			wantSequences: []SequenceMove{{Table: child, Sequence: cycles}, {Table: parent, Sequence: unread}},
+			want:          append(before[:4:4], append(before[5:], "Commit")...),
+			wantSequences: []SequenceMove{{Table: child, Sequence: cycles}},
 		},
 		{
 			name: "one that stays when the move comes",
@@ -161,11 +169,28 @@ func TestRunMovesSequences(t *testing.T) {
 			name: "a commit that fails without moves",
 			db: &fakeDB{
 				diffs:     diffs,
-				sequences: map[declaration.TableName][]plan.Sequence{child: {unread}},
+				sequences: map[declaration.TableName][]plan.Sequence{child: {cycles}},
 				fail:      map[string]error{"Commit": errDB},
 			},
 			want:    append(before[:4:4], append(before[5:], "Commit")...),
 			wantErr: errDB,
+		},
+		{
+			// The rows may have been written, and with them the sequences
+			// that the apply left behind, which the error keeps.
+			name: "a commit whose outcome is not known",
+			db: &fakeDB{
+				diffs:     diffs,
+				sequences: map[declaration.TableName][]plan.Sequence{child: {childSeq}, parent: {parentSeq}},
+				moved: map[declaration.TableName][]plan.Sequence{
+					parent: {advised(staying(movedTo(parentSeq, "10"), "lock timeout"), "take 2 values from it")},
+				},
+				fail: map[string]error{"Commit": ErrUnknownOutcome},
+			},
+			want:      append(before, "MoveSequences a.child", "MoveSequences z.parent", "Commit"),
+			wantErr:   ErrUnknownOutcome,
+			wantMoved: []SequenceMove{{Table: child, Sequence: movedTo(childSeq, "4")}},
+			wantLeft:  []SequenceMove{{Table: parent, Sequence: advised(staying(movedTo(parentSeq, "10"), "lock timeout"), "take 2 values from it")}},
 		},
 	}
 	for _, tt := range tests {
@@ -184,8 +209,8 @@ func TestRunMovesSequences(t *testing.T) {
 					t.Errorf("Run() = %+v, %v, want %v", r, err, tt.wantErr)
 				case tt.wantMoved == nil && errors.As(err, &moved):
 					t.Errorf("Run() error = %#v, want no SequencesMovedError", err)
-				case tt.wantMoved != nil && (!errors.As(err, &moved) || !reflect.DeepEqual(moved.Moved, tt.wantMoved)):
-					t.Errorf("Run() error = %#v, want a SequencesMovedError with %+v", err, tt.wantMoved)
+				case tt.wantMoved != nil && (!errors.As(err, &moved) || !reflect.DeepEqual(moved.Moved, tt.wantMoved) || !reflect.DeepEqual(moved.Left, tt.wantLeft)):
+					t.Errorf("Run() error = %#v, want a SequencesMovedError with %+v, and left %+v", err, tt.wantMoved, tt.wantLeft)
 				}
 				return
 			}

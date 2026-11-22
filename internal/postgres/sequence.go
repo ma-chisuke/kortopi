@@ -505,6 +505,10 @@ func (s *Session) MoveSequences(ctx context.Context, name declaration.TableName,
 			done, err = s.moveOne(ctx, col.sequence, seq, maxSQL, minSQL)
 		case seq.Goal != "":
 			done, err = s.readAgain(ctx, col.sequence, seq, maxSQL, minSQL)
+		case seq.Next == "":
+			// The role may not read the sequence, so its position is not
+			// known: the statement of the move gives it for a role that may.
+			done.Advice = seq.Advice + ", or " + byStatement(col.sequence, maxSQL, minSQL, "")
 		}
 		if err != nil {
 			if done.Unknown {
@@ -559,13 +563,15 @@ func (s *Session) checkDeferred(ctx context.Context) error {
 // known, also after a move that ended.
 func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequence, maxSQL, minSQL string) (plan.Sequence, error) {
 	out := plan.Sequence{Column: seq.Column, Name: seq.Name}
+	// Advice for a position that the apply does not know.
+	unknown := byStatement(o, maxSQL, minSQL, "once it can be read, ")
 	before, why, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
 	switch {
 	case err != nil:
 		// A read moves nothing.
 		return out, err
 	case why != "":
-		out.Unread, out.Stays = true, "PostgreSQL ended the read before the move: "+why
+		out.Unread, out.Stays, out.Advice = true, "PostgreSQL ended the read before the move: "+why, unknown
 		return out, nil
 	case !before.behind():
 		// Another session moved the sequence beyond the values after the
@@ -584,7 +590,7 @@ func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequen
 	if err != nil {
 		var ok bool
 		if failed, code, ok = s.sequenceError(ctx, err, bound); !ok {
-			out.Unknown, out.Stays = true, "the apply stopped during its move, before it could read the sequence again"
+			out.Unknown, out.Stays, out.Advice = true, "the apply stopped during its move, before it could read the sequence again", unknown
 			return out, err
 		}
 		failed = "the statement that moves it failed: " + failed
@@ -600,13 +606,13 @@ func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequen
 	after, why, err := s.readPosition(ctx, "after", o, maxSQL, minSQL)
 	switch {
 	case err != nil:
-		out.Unknown, out.Ran, out.Stays = true, failed == "", "the apply stopped while it read the sequence again after its move"
+		out.Unknown, out.Ran, out.Stays, out.Advice = true, failed == "", "the apply stopped while it read the sequence again after its move", unknown
 		return out, err
 	case why != "" && failed != "":
-		out.Unknown, out.Stays = true, failed+"; and the read after it failed: "+why
+		out.Unknown, out.Stays, out.Advice = true, failed+"; and the read after it failed: "+why, unknown
 		return out, nil
 	case why != "":
-		out.Unknown, out.Ran, out.Stays = true, true, "the read after the move failed: "+why
+		out.Unknown, out.Ran, out.Stays, out.Advice = true, true, "the read after the move failed: "+why, unknown
 		return out, nil
 	}
 	out.After = after.next.String
@@ -745,6 +751,19 @@ func (o *ownedSequence) byHand(pos position, code string) string {
 		}
 	}
 	return byHand(o, pos, "")
+}
+
+// byStatement returns the advice for a sequence whose position kortopi does
+// not know: the statement of sequenceSQL that moves it, which the plan as
+// SQL writes for it, on one line, after lead. It reads the column and the
+// sequence when it runs, and moves the sequence beyond the column, never
+// back, so it is the statement to run whatever the position is.
+func byStatement(o *ownedSequence, maxSQL, minSQL, lead string) string {
+	lines := strings.Split(sequenceSQL(o.name, maxSQL, minSQL, moveSequence), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimLeft(line, " ")
+	}
+	return "move it " + lead + "as a role that may read and update it, with " + strings.Join(lines, " ")
 }
 
 // byHand says how to move the sequence by hand from pos, by who: with as

@@ -91,6 +91,14 @@ func runApply(ctx context.Context, args []string, e env) int {
 			printError(e.stderr, fmt.Errorf("whether or not the commit was made, the sequences that the apply had moved before it stay moved, "+
 				"which only skips values: %s", moved))
 		}
+		// If the commit was made, the sequences that the apply left behind
+		// need their moves too.
+		var left *apply.SequencesMovedError
+		if errors.As(err, &left) {
+			for _, note := range apply.NotesOf(left.Left) {
+				_, _ = fmt.Fprintln(e.stderr, "note: if the commit was made, "+strings.TrimPrefix(note, "note: "))
+			}
+		}
 		return exitError
 	case err != nil:
 		// An interrupt does not stop a commit that has started, so the error

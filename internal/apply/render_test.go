@@ -185,7 +185,12 @@ func TestSequenceNotes(t *testing.T) {
 		}},
 		SequenceMove{Table: tn("billing.fees"), Sequence: plan.Sequence{
 			Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "locked"}, Unread: true,
-			Stays: "PostgreSQL ended the read before the move: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)",
+			Stays:  "PostgreSQL ended the read before the move: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)",
+			Advice: "move it once it can be read, as a role that may read and update it, with WITH RECURSIVE q AS MATERIALIZED ( …",
+		}},
+		SequenceMove{Table: tn("billing.fees"), Sequence: plan.Sequence{
+			Column: "id", Name: plan.SequenceName{Schema: "billing", Name: "unknown"}, Next: "3", Goal: "4", Unknown: true,
+			Stays: "the statement that moves it failed: lock timeout; and the read after it failed: lock timeout",
 		}})
 	want := []string{
 		"note: sequence billing.fee_codes of column code of table billing.fees: next value 7 -> 50007, not to 100008: " +
@@ -195,7 +200,12 @@ func TestSequenceNotes(t *testing.T) {
 			"the role may not take values from the sequence: grant the role USAGE on sequence billing.tax_rates_id_seq, " +
 			"or take 1 value from it as a role that may, with " + nextvalOf("tax_rates_id_seq", 1),
 		"note: sequence billing.locked of column id of table billing.fees: could not be read: " +
-			"PostgreSQL ended the read before the move: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)",
+			"PostgreSQL ended the read before the move: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
+			"move it once it can be read, as a role that may read and update it, with WITH RECURSIVE q AS MATERIALIZED ( …",
+		// A sequence whose position is not known gets a note, also without
+		// advice.
+		"note: sequence billing.unknown of column id of table billing.fees: next value 3, may have moved forward: " +
+			"the statement that moves it failed: lock timeout; and the read after it failed: lock timeout",
 	}
 	if got := SequenceNotes(&r); !slices.Equal(got, want) {
 		t.Errorf("SequenceNotes() =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

@@ -83,15 +83,29 @@ func RenderSummary(w io.Writer, r *Result) error {
 // good, as one that cycles, gets none. kortopi prints the notes on standard
 // error after the summary, as an export prints its notes.
 func SequenceNotes(r *Result) []string {
+	return NotesOf(r.Sequences)
+}
+
+// NotesOf returns the notes of SequenceNotes for sequences, as for the
+// sequences that a commit whose outcome is not known may have left behind
+// (SequencesMovedError.Left).
+func NotesOf(sequences []SequenceMove) []string {
 	var notes []string
-	for _, s := range r.Sequences {
-		if s.Advice == "" && !s.Unread {
+	for _, s := range sequences {
+		if !noted(&s.Sequence) {
 			continue
 		}
 		notes = append(notes, fmt.Sprintf("note: sequence %s of column %s of table %s: %s",
 			plan.FormatSequence(s.Name), plan.FormatName(s.Column), plan.FormatTable(s.Table), plan.SequenceText(&s.Sequence)))
 	}
 	return notes
+}
+
+// noted reports whether a sequence of the result of an apply gets a note:
+// one with advice, which a sequence left behind the values of its column
+// has, and one whose position the apply does not know.
+func noted(s *plan.Sequence) bool {
+	return s.Advice != "" || s.Unread || s.Unknown
 }
 
 // unevenLines returns the line of the updates that found fewer rows to

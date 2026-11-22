@@ -355,6 +355,30 @@ func TestRunApply(t *testing.T) {
 			outcomeUnknown: true,
 		},
 		{
+			// If the commit was made, the sequences that the apply left
+			// behind need their moves: a note gives each, with its statement.
+			name:  "the outcome of the commit is not known after a sequence stayed behind",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				moved: map[declaration.TableName][]plan.Sequence{plans: {{
+					Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3", After: "2",
+					Stays: "the statement that moves it failed: lock timeout", Advice: "take 1 value from it, with SELECT 1",
+				}}},
+				fail: map[string]error{"Commit": fmt.Errorf("commit the apply: %w", apply.ErrUnknownOutcome)},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: commit the apply: " + apply.ErrUnknownOutcome.Error() + "\n" +
+				"note: if the commit was made, sequence app.plans_id_seq of column id of table app.plans: next value 2, not moved to 3: " +
+				"the statement that moves it failed: lock timeout: take 1 value from it, with SELECT 1\n",
+			wantCalls:      append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+			outcomeUnknown: true,
+		},
+		{
 			name:  "the outcome of the commit is not known",
 			files: twoTables,
 			session: &fakeSession{diffs: newPlan, fail: map[string]error{

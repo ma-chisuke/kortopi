@@ -203,16 +203,36 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		return nil, afterMoves(err, moved)
 	}
 	if err := db.Commit(context.WithoutCancel(ctx)); err != nil {
+		// When the outcome of the commit is not known, the rows may have
+		// been written, and with them the sequences that the apply left
+		// behind: the error keeps them too.
+		if errors.Is(err, ErrUnknownOutcome) {
+			return nil, &SequencesMovedError{Err: err, Moved: moved, Left: left(r.Sequences)}
+		}
 		return nil, afterMoves(err, moved)
 	}
 	r.Committed = true
 	return r, nil
 }
 
+// left returns the sequences that a note says what to do about
+// (SequenceNotes): those that the apply left behind the values of their
+// columns, or whose positions it does not know.
+func left(sequences []SequenceMove) []SequenceMove {
+	var out []SequenceMove
+	for _, s := range sequences {
+		if noted(&s.Sequence) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // moveSequences moves the sequences that the plan shows an apply to move,
 // or could not read, table by table in the order of the plan (ADR-0045). It
-// hands the database every sequence of a table that has one to move, or one
-// that stays with a goal, which the database reads again for its advice. It
+// hands the database every sequence of a table that has one to move, one
+// that stays with a goal, which the database reads again for its advice, or
+// one whose position the plan does not know, for its advice. It
 // returns every sequence of the plan with what the apply did with it, and
 // the sequences that moved, or may have moved (plan.Sequence.Unknown). A
 // sequence that the plan shows staying for good, as one that cycles, keeps
@@ -222,7 +242,7 @@ func moveSequences(ctx context.Context, db Database, p *plan.Plan) (all, moved [
 	for i := range p.Tables {
 		t := &p.Tables[i]
 		done := t.Sequences
-		if slices.ContainsFunc(t.Sequences, func(s plan.Sequence) bool { return s.Tries() || s.Goal != "" }) {
+		if slices.ContainsFunc(t.Sequences, func(s plan.Sequence) bool { return s.Tries() || s.Goal != "" || s.Next == "" }) {
 			done, err = db.MoveSequences(ctx, t.Name, t.Sequences)
 			for _, s := range done {
 				if s.Moved() || s.Unknown {

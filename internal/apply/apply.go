@@ -223,6 +223,11 @@ type SequenceMove struct {
 type SequencesMovedError struct {
 	Err   error
 	Moved []SequenceMove
+	// Left holds, for a commit whose outcome is not known, the sequences
+	// that the apply left behind the values of their columns, or whose
+	// positions it does not know (SequenceNotes): if the commit was made,
+	// they need the moves that their notes give.
+	Left []SequenceMove
 }
 
 func (e *SequencesMovedError) Error() string {

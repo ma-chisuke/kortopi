@@ -62,6 +62,56 @@ func TestSequenceWalkPastTheCacheOfItsSession(t *testing.T) {
 	}
 }
 
+// Every sequence whose position the apply does not know after its move gets
+// a note with the statement that moves it by hand, which the plan as SQL
+// writes for it (ADR-0045). Here another session holds the lock of a rename
+// on the sequence from before the move to after the read after it: the move
+// and the read after it fail, the apply commits its rows, and the
+// statement of the note moves the sequence once the lock is gone.
+func TestSequenceWhosePositionIsNotKnown(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (id serial PRIMARY KEY, v text); INSERT INTO app.t (v) VALUES ('a'), ('b');`)
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,a\n2,b\n3,c\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}
+			other, err := pgx.ConnectConfig(t.Context(), db.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = other.Close(context.Background()) }()
+			r, err := moveWithHook(t, db, decl, 300*time.Millisecond, func(ctx context.Context, step string, _ pgx.Tx) error {
+				if step == "move" {
+					_, err := other.Exec(ctx, "BEGIN; ALTER SEQUENCE app.t_id_seq RENAME TO t_id_seq_held")
+					return err
+				}
+				return nil
+			})
+			if _, rollbackErr := other.Exec(context.Background(), "ROLLBACK"); rollbackErr != nil {
+				t.Fatal(rollbackErr)
+			}
+			if err != nil || !r.Committed {
+				t.Fatalf("apply = %+v, %v, want a commit", r, err)
+			}
+			notes := apply.SequenceNotes(r)
+			wantState := "note: sequence app.t_id_seq of column id of table app.t: next value 3, may have moved forward: the statement that moves it failed: " +
+				"ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)"
+			if len(notes) != 1 || !strings.HasPrefix(notes[0], wantState) || !strings.Contains(notes[0], ": move it once it can be read, as a role that may read and update it, with WITH RECURSIVE ") {
+				t.Fatalf("notes after the apply:\n%s\nwant one that starts with:\n%s\nand gives the statement", strings.Join(notes, "\n"), wantState)
+			}
+			_, statement, _ := strings.Cut(notes[0], "with WITH RECURSIVE ")
+			statement = "WITH RECURSIVE " + statement
+			if strings.Contains(statement, "\n") {
+				t.Errorf("the statement of the note spans lines:\n%s", statement)
+			}
+			db.Exec(t, statement)
+			if got := db.Query(t, "INSERT INTO app.t (v) VALUES ('next') RETURNING id::text"); fmt.Sprint(got) != "[[4]]" {
+				t.Errorf("the next insert of the application after the statement of the note got %v, want 4", got)
+			}
+		})
+	}
+}
+
 // moveWithHook applies decl, with --lock-timeout lockTimeout when it is not
 // zero, while hook runs before each statement on a sequence, and returns
 // the result and the error of the apply.
