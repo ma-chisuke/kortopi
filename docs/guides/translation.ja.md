@@ -168,6 +168,9 @@
 | identity column | 識別列 |
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |
+| partition, attach and detach（パーティションを） | パーティション、アタッチする、デタッチする |
+| storage（テーブルの）、rewrite（新しいストレージを与えるスキーマの変更がテーブルを） | ストレージ、書き換える |
+| MVCC-safe（PostgreSQL のコマンドが） | MVCC に対して安全 |
 | inherit（テーブルを） | 継承する |
 | text form（値の） | テキスト表現 |
 | byte order mark | バイトオーダーマーク |
@@ -209,6 +212,9 @@
 | cancel request（PostgreSQL のプロトコルの） | キャンセル要求 |
 | lock timeout（`lock_timeout`、`--lock-timeout`） | ロック待ちの上限 |
 | keepalive, probe（TCP の） | キープアライブ、プローブ |
+| second connection（apply の）、connection slot | 2つ目の接続、接続枠 |
+| system cache（PostgreSQL の）、transition table（トリガーの） | システムキャッシュ、遷移テーブル |
+| proxy（kortopi とサーバーの間の） | プロキシ |
 | signal（OS の） | シグナル |
 | process ID | プロセス ID |
 | start-up parameter（接続の） | 起動パラメータ |
@@ -268,4 +274,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:2919a37495c6e2767b52a73358b84ca9c52e685e66ecab60da42450a714ea327 -->
+<!-- i18n-source: translation.md sha256:ebb5136df872ad24f2b4ce8855f4b618b74729801633335fe74e5c412141fafd -->

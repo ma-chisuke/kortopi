@@ -168,6 +168,9 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | identity column | 識別列 |
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |
+| partition, attach and detach (a partition) | パーティション、アタッチする、デタッチする |
+| storage (of a table), rewrite (a table, by a schema change that gives it new storage) | ストレージ、書き換える |
+| MVCC-safe (a command of PostgreSQL) | MVCC に対して安全 |
 | inherit (from a table) | 継承する |
 | text form (of a value) | テキスト表現 |
 | byte order mark | バイトオーダーマーク |
@@ -209,6 +212,9 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | cancel request (of the protocol of PostgreSQL) | キャンセル要求 |
 | lock timeout (`lock_timeout`, `--lock-timeout`) | ロック待ちの上限 |
 | keepalive, probe (of TCP) | キープアライブ、プローブ |
+| second connection (of an apply), connection slot | 2つ目の接続、接続枠 |
+| system cache (of PostgreSQL), transition table (of a trigger) | システムキャッシュ、遷移テーブル |
+| proxy (between kortopi and the server) | プロキシ |
 | signal (of the operating system) | シグナル |
 | process ID | プロセス ID |
 | start-up parameter (of a connection) | 起動パラメータ |
