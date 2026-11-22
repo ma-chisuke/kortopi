@@ -171,6 +171,23 @@ func TestWrite(t *testing.T) {
 			db:   &fakeDB{},
 		},
 		{
+			// The stored rows that the declaration lacks, as comments
+			// (ADR-0046).
+			name: "empty_with_undeclared_rows",
+			plan: &plan.Plan{Tables: []plan.Table{table(plans, config.ModeUpsert, plan.TableDiff{Undeclared: 1})}},
+			db:   &fakeDB{},
+		},
+		{
+			name: "undeclared_rows",
+			plan: &plan.Plan{Tables: []plan.Table{
+				table(cities, config.ModeInsert, plan.TableDiff{Inserts: inserts("10"), Undeclared: 4}),
+				table(plans, config.ModeUpsert, plan.TableDiff{Undeclared: 1}),
+				table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("3")}),
+			}},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
 			name: "order",
 			plan: &plan.Plan{Tables: []plan.Table{
 				table(plans, config.ModeUpsert, plan.TableDiff{Updates: updates("7")}),

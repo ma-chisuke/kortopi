@@ -40,6 +40,13 @@ func unchangedTable(schema, table string) Table {
 	return Table{Name: name(schema, table), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"}}
 }
 
+// withUndeclared returns t holding n stored rows that the declaration
+// lacks.
+func withUndeclared(t Table, n int) Table {
+	t.Diff.Undeclared = n
+	return t
+}
+
 // insertTable is a table of schema app in mode insert without rows to
 // insert.
 func insertTable(table string) Table {
@@ -260,6 +267,41 @@ func TestRender(t *testing.T) {
 			plan: &Plan{Tables: []Table{
 				insertTable("a"), insertTable("b"), insertTable("c"), insertTable("d"),
 				unchangedTable("app", "e"), insertTable("f"), insertTable("g"), insertTable("h"),
+			}},
+		},
+		{
+			// Issue 30: a table of mode upsert holds a stored row that the
+			// declaration lacks, so the empty plan claims no match
+			// (ADR-0046).
+			name: "no_changes_undeclared",
+			plan: &Plan{Tables: []Table{withUndeclared(unchangedTable("geo", "currency"), 1), unchangedTable("geo", "region")}},
+		},
+		{
+			name: "no_changes_insert_undeclared",
+			plan: &Plan{Tables: []Table{
+				withUndeclared(unchangedTable("app", "a"), 2), withUndeclared(insertTable("b"), 1), insertTable("c"),
+			}},
+		},
+		{
+			// A table with a block shows the stored rows that the
+			// declaration lacks after its counts, a table without one on a
+			// line of its own, and the line after Plan: sums them up.
+			name: "undeclared",
+			plan: &Plan{Tables: []Table{
+				withUndeclared(Table{
+					Name: name("app", "countries"), Mode: config.ModeInsert, Key: []string{"code"}, Compare: []string{"name"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("FR"), Values: values("France")}}},
+				}, 1),
+				withUndeclared(unchangedTable("app", "currencies"), 3),
+				withUndeclared(Table{
+					Name: name("app", "plans"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					PendingColumns: []string{"floor"},
+				}, 2),
+				withUndeclared(Table{
+					Name: name("app", "regions"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}},
+				}, 1000),
+				unchangedTable("app", "towns"),
 			}},
 		},
 		{

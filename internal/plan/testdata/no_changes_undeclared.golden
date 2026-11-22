@@ -1,0 +1,3 @@
+No changes. There is nothing to apply.
+geo.currency: 1 stored row is not declared, left as it is in mode upsert
+Not declared: 1 stored row in 1 table, left as it is in mode upsert.

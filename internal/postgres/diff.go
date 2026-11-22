@@ -93,7 +93,7 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		if err := s.checkNotNull(ctx, tx, table, c, req.Updates); err != nil {
 			return err
 		}
-		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes)
+		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes, !req.Deletes)
 		return err
 	})
 	if err != nil {
@@ -114,10 +114,13 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 
 // compareRows compares the declared rows in the temporary table of c with
 // the stored rows of table, and returns the rows to insert, and the rows to
-// update and to delete when updates and deletes say so. It is the comparison
-// of a plan, which Diff runs once the rows are loaded and checked, and
-// DiffAgain runs again after the writes of an apply (ADR-0042).
-func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison, updates, deletes bool) (plan.TableDiff, error) {
+// update and to delete when updates and deletes say so. With undeclared, it
+// counts the stored rows that no declared row matches, for a table whose
+// mode deletes no row (ADR-0046). It is the comparison of a plan, which Diff
+// runs once the rows are loaded and checked, and DiffAgain runs again after
+// the writes of an apply (ADR-0042), without the count, which no check of
+// an apply needs.
+func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison, updates, deletes, undeclared bool) (plan.TableDiff, error) {
 	var diff plan.TableDiff
 	var err error
 	if diff.Inserts, err = queryRows(ctx, tx, c.insertsSQL(), len(c.key), len(c.compare)); err != nil {
@@ -132,6 +135,13 @@ func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c 
 		if diff.Deletes, err = queryRows(ctx, tx, c.deletesSQL(), len(c.key), 0); err != nil {
 			return plan.TableDiff{}, fmt.Errorf("find the rows to delete from table %s: %w", table, err)
 		}
+	}
+	if undeclared {
+		var n int64
+		if err := tx.QueryRow(ctx, c.undeclaredSQL()).Scan(&n); err != nil {
+			return plan.TableDiff{}, fmt.Errorf("count the stored rows of table %s that the declaration lacks: %w", table, err)
+		}
+		diff.Undeclared = int(n)
 	}
 	return diff, nil
 }
@@ -150,7 +160,7 @@ func (s *Session) DiffAgain(ctx context.Context, req plan.DiffRequest) (_ plan.T
 	if err != nil {
 		return plan.TableDiff{}, err
 	}
-	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync)
+	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync, false)
 	if err != nil {
 		return plan.TableDiff{}, fmt.Errorf("the check before the commit, which compares table %s again, failed, so the apply stops, and nothing was changed: %w", req.Table.Name, err)
 	}

@@ -89,6 +89,9 @@ func (s *fakeSession) Diff(_ context.Context, req plan.DiffRequest) (plan.TableD
 	}
 	if !req.Deletes {
 		d.Deletes = nil
+	} else {
+		// A mode that deletes shows those rows as rows to delete.
+		d.Undeclared = 0
 	}
 	return d, s.diffErr
 }

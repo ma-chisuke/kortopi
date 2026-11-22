@@ -192,8 +192,10 @@ func TestPlanCommand(t *testing.T) {
 				"facility.rooms (upsert, key: id)",
 				"  column floor: known after the schema is applied",
 				"  no changes",
+				"  1 stored row is not declared, left as it is in mode upsert",
 				"",
 				"Plan: 0 to insert, 0 to update, 0 to delete in 2 tables.",
+				"Not declared: 1 stored row in 1 table, left as it is in mode upsert.",
 				"Known after the schema is applied: 1 table, 1 column.",
 			))
 
@@ -292,8 +294,10 @@ func TestPlanCommandNoPending(t *testing.T) {
 				"facility.room_types (upsert, key: code)",
 				"  column capacty: known after the schema is applied",
 				"  no changes",
+				"  1 stored row is not declared, left as it is in mode upsert",
 				"",
 				"Plan: 0 to insert, 0 to update, 0 to delete in 2 tables.",
+				"Not declared: 1 stored row in 1 table, left as it is in mode upsert.",
 				"Known after the schema is applied: 1 table, 1 column.",
 			))
 

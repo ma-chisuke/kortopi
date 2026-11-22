@@ -1,0 +1,21 @@
+app.countries (insert, key: code)
+  + code=FR  name=France
+  1 to insert
+  1 stored row is not declared, left as it is in mode insert
+
+app.currencies: 3 stored rows are not declared, left as they are in mode upsert
+
+app.plans (upsert, key: id)
+  column floor: known after the schema is applied
+  no changes
+  2 stored rows are not declared, left as they are in mode upsert
+
+app.regions (upsert, key: id)
+  ~ id=1  name: a -> b
+  0 to insert, 1 to update
+  1000 stored rows are not declared, left as they are in mode upsert
+
+Plan: 1 to insert, 1 to update, 0 to delete in 5 tables.
+Not declared: 1006 stored rows in 4 tables, left as they are in modes upsert and insert.
+Known after the schema is applied: 1 column.
+1 table without changes is not shown.
