@@ -628,10 +628,11 @@ func TestRun(t *testing.T) {
 			opts:     all,
 			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent"),
 			wantErr: "the insert into table z.parent found 1 row to insert, but the plan has 2: another write of the apply had written declared rows of the table before the insert, " +
-				"through a trigger, a rule, or the cascade of a foreign key into a column of the match key, " +
 				"and an apply writes only the rows that its plan shows, the way that it shows them, so it stops: " +
-				"apply the table whose write writes those rows first, in an apply of its own, with --schema when it is in another schema, and then table z.parent, " +
-				"or change what writes them",
+				"if the cascade of a foreign key into a column of the match key wrote them, change the referenced key first, and then apply: " +
+				"with an apply of the schema of the referenced table alone, through --schema, when the referencing table is in another schema, " +
+				"or else with an UPDATE of your own on the referenced row, which the cascade follows; " +
+				"if a trigger or a rule wrote them, change it so that it does not write rows of table z.parent, or leave the table out of the declaration",
 		},
 		{
 			name:     "an insert that finds more rows to insert than the plan shows",
