@@ -321,6 +321,7 @@ kortopi はコミットをキャンセルしないので、サーバーはコミ
 2度目の割り込みのあと、kortopi はシグナルを受け取らなくなり、3度目の割り込みを受けるとすぐに終わる。
 
 サーバーに届かなくなった接続は、コミットの応答を待つことも含め、kortopi の待ちをすべて終わらせる。kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で待つのをやめる。つまり、約 30 秒の沈黙のあとである（[接続の設定](plan.ja.md#接続の設定)）。
+プローブを送るのは、サーバーの確認応答を待つデータのない接続だけである。kortopi が文や `COMMIT` を送った直後、サーバーが確認応答する前に切れたときは、待つのは TCP の再送に委ねられ、何分もかかることがある。その待ちも、2度目の割り込みで終わらせられる。
 応答する接続で遅いコミットには上限がない。同期スタンバイを待つときがそうである。そこから抜け出す手段は2度目の割り込みである。
 
 ## 終了コード
@@ -576,4 +577,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:84aeeb50265aa486d96f077620e7622ee45d84fc573e0537a1409d07e4749cdd -->
+<!-- i18n-source: apply.md sha256:de0ed06714a10a62067c938fbb244efcec78a136c2ae0999031510a1bcf0809c -->

@@ -132,6 +132,7 @@ What kortopi sets itself is local to each of its transactions, so it holds there
 A setting of the role, `ALTER ROLE ... SET`, reaches the server connections that the pooler opens after it, for every session of the role.
 
 kortopi probes an idle connection after 10 seconds, every 5 seconds, and drops it after 4 probes without an answer, so it notices a server that no longer answers after about 30 seconds of silence, also while it waits for the answer of a commit.
+The probes go only on a connection with no data that waits for the server to acknowledge it: when the cut comes just after kortopi sent a statement or `COMMIT`, before the server acknowledged it, the wait is left to the retransmissions of TCP, which can take many minutes. The second interrupt ends that wait too.
 A service file can change this with the settings of libpq for it, which have no environment variables: `keepalives=0` turns the probes off, and `keepalives_idle`, `keepalives_interval`, and `keepalives_count` set the idle time in seconds, the interval in seconds, and the number of probes, where 0, or a negative value, keeps the value of the system, as in libpq.
 
 ### Wait for a lock

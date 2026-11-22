@@ -319,6 +319,7 @@ kortopi does not cancel a commit, so the server finishes it, or rolls it back wh
 After the second interrupt, kortopi no longer catches the signals, and a third one ends it at once.
 
 A connection that no longer reaches the server ends every wait of kortopi, the wait for the answer of the commit among them: kortopi probes an idle connection after 10 seconds, every 5 seconds, and gives up after 4 probes without an answer, so after about 30 seconds of silence ([Connection settings](plan.md#connection-settings)).
+The probes go only on a connection with no data that waits for the server to acknowledge it: when the cut comes just after kortopi sent a statement or `COMMIT`, before the server acknowledged it, the wait is left to the retransmissions of TCP, which can take many minutes. The second interrupt ends that wait too.
 A commit that is slow on a connection that answers, as when it waits for a synchronous standby, has no limit: the second interrupt is the way out.
 
 ## Exit status
