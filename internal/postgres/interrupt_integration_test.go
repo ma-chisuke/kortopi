@@ -313,6 +313,72 @@ func TestInterruptWithoutAnAnswer(t *testing.T) {
 	}
 }
 
+// Two interrupts back to back, while an update waits for a row that another
+// session holds: the second ends the wait at once, and does not keep the
+// cancel request from going out. The driver sends it in the background as it
+// gives the connection up, and Close gives it up to cancelSendWait before it
+// returns, since the process of kortopi may end right after. The statement
+// then ends on the server, although the other session still holds the row
+// (ADR-0043).
+func TestSecondInterruptStillCancels(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, statusSchema)
+			dir := writeFiles(t, statusFiles)
+			locker := holder(t, db, "SELECT 1 FROM m.status WHERE code = 'paid' FOR UPDATE")
+			ctx, cancel := context.WithCancel(t.Context())
+			giveUp := make(chan struct{})
+			s, err := ConnectConfig(ctx, db.Config, Options{Dir: dir, Apply: true, GiveUp: giveUp})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := request(t, s, csvTable("m", "status", "code", "label"), nil, config.ModeUpsert)
+			if _, err := s.Diff(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			updated := make(chan error, 1)
+			go func() {
+				_, err := s.Update(ctx, req)
+				updated <- err
+			}()
+			pid := waitForBackend(t, db, "wait_event_type = 'Lock'")
+			cancel()
+			close(giveUp)
+			select {
+			case err := <-updated:
+				if err == nil {
+					t.Fatal("the update went on after the interrupts")
+				}
+			case <-time.After(time.Minute):
+				t.Fatal("the second interrupt did not end the wait")
+			}
+			start := time.Now()
+			err = s.Close(context.Background())
+			took := time.Since(start)
+			var notEnded *dialect.NotEndedError
+			if !errors.As(err, &notEnded) {
+				t.Errorf("Close after the second interrupt = %v, want a *dialect.NotEndedError", err)
+			}
+			select {
+			case <-s.conn.PgConn().CleanupDone():
+			default:
+				if took < cancelSendWait {
+					t.Errorf("Close returned after %v, before the driver had sent its cancel request, and the process of kortopi may end then", took)
+				}
+			}
+			// The statement has ended on the server, and the session with it.
+			waitGone(t, db, pid)
+			if err := locker.Rollback(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if got := db.Query(t, statusRows); got[0][0] != "open=Open paid=Paid" {
+				t.Errorf("rows after the interrupts: %v", got)
+			}
+		})
+	}
+}
+
 // atCommitSchema is m.status with a constraint trigger that runs at the
 // commit and waits for the advisory lock 4242, which a session of the test
 // holds: the commit waits until the test lets it go. It records the

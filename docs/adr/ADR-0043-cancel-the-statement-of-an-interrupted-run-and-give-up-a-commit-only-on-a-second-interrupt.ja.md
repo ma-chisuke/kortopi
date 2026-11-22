@@ -91,6 +91,7 @@ kortopi は、割り込み（SIGINT や SIGTERM）をコンテキストのキャ
 - そのあとサーバーはコミットを済ませるか、遅らせた制約が失敗すればロールバックする。どちらだったかは `kortopi plan` が示す。
 - kortopi は、最初の2回の割り込みで終わることはない。2度目のあとはシグナルを受け取るのをやめるので、3度目はシグナルの既定の動作でプロセスをその場で終える。誰も読まない標準出力のように、ほかの理由で終わらない実行から抜け出す手段である。
 - コミットの前の2度目の割り込みも、ロールバックを上限まで待つのをその場で終える。そのときのメッセージは、前半が `kortopi stopped waiting for the server to end the session of the apply` になる。
+- 2度目の割り込みが意味するのは「待つのをやめる」であり、「キャンセルしない」ではない。そのため、1度目の直後に来ても、キャンセル要求が送られるのを妨げない。pgx は接続を見捨てるときに裏でキャンセル要求を送る。kortopi は終了する前に、それを最長1秒待つ。プロセスが終わると、その送信も断ち切られるからである。届くところにあるサーバーなら、数ミリ秒で受け取る。コミットが始まってからは、上で述べたとおり、kortopi からキャンセル要求を送らない。
 
 キープアライブ：
 
@@ -101,6 +102,11 @@ kortopi は、割り込み（SIGINT や SIGTERM）をコンテキストのキャ
 - libpq は、`keepalives`・`keepalives_idle`・`keepalives_interval`・`keepalives_count` の設定を接続文字列かサービスファイルから読み、それらの環境変数は持たない。pgx もサービスファイルからそれらを読むが、意味を知らないので、セッションの設定としてサーバーに渡してしまい、サーバーはそれを拒む。kortopi はそれらを取り出し、libpq と同じように適用する。`keepalives` は 0 ならキープアライブを止め、それ以外なら有効にする。ほかの設定の 0 はシステムの値を保ち、libpq が 0 とみなす負の値も同じである。整数でない値は誤りである。システムの値は実際に保たれる。kortopi は pgx の既定の接続処理と同じように接続するが、Go のキープアライブは止めておくからである。止めなければ、Go がまずすべてのソケットに 15 秒・15 秒・9 回を設定してしまう。`tcp_user_timeout` は、ドライバーの扱いのまま、接続のサーバー側についてのサーバーの設定である。
 - キープアライブがプローブするのは、確認応答を待つデータのない接続だけである。kortopi が `COMMIT` を送った瞬間、サーバーが確認応答する前に切れたときは、待つのはシステムの再送に委ねられ、Linux では何分も続くことがある。`TCP_USER_TIMEOUT` ならそれも抑えられるが、Go の `net` パッケージはそれを設定せず、Linux にしかない。
 - テストではネットワークを切れないので、手で1度だけ測った。Linux 向けのバイナリをコンテナで動かし、別のコンテナの PostgreSQL 18 と専用の Docker ネットワークでつないだ。apply のコミットは、存在しない同期スタンバイを待つようにした。クライアントを `docker network disconnect` してから、サーバーには待つのをやめさせたので、サーバーはコミットした。kortopi は、切断から 30.0 秒後に、原因 `unexpected EOF` とともに結果の分からないメッセージを出力し、終了コード 1 で終わった。ランタイムのキープアライブの設定なら、同じ実行は約 150 秒待ったはずである。こちらは測っていない。
+
+kortopi が受け入れる、分かっている制限：
+
+- キャンセル要求は、その文が終わったあとに届いて、次の文に当たることがある。`BEGIN` や、閉じるときの `ROLLBACK` である。pgx はこれを避けるために、キャンセル要求のたびに 100 ミリ秒待つ。kortopi も、割り込みのあとはロールバックのほかに文を送らない。それでもこれが起きると、kortopi はセッションの終わりを確かめられず、終わっているのに、まだ動いているかもしれないと伝える。メッセージは「かもしれない」と言う。
+- `COMMIT` を接続へ書く直前の一瞬に2回の割り込みが来ると、コミットはサーバーに届かない。それでも kortopi は結果が分からないと伝える。送られたコミットと見分けられないので、確かめるよう利用者に促す側を選ぶ。
 
 トランザクションモードのコネクションプーラーを通すとき：
 
@@ -128,7 +134,7 @@ kortopi は、割り込み（SIGINT や SIGTERM）をコンテキストのキャ
 - `cmd/kortopi` の単体テストは、偽物のセッションでシグナルとメッセージを確かめる。`TestWatchInterrupts`・`TestInterruptedSessionNotEnded`・`TestCommitInterrupted`、そして `TestRunApplyInterruptedUnknownOutcome` である。
 - `internal/postgres` の単体テストは、キープアライブ、その libpq の設定、それを持つサービスファイルを確かめる（`TestKeepAliveConfig`・`TestKeepAliveFromTheServiceFile`）。`TestDialKeepAlive` はソケットのオプションを読み、コミットの間に拒まれる接続も確かめる。まだ動いているかもしれないセッションのメッセージは `TestNotEnded` が、待つのをやめたコミットの原因は `TestCommitGivenUp` が確かめる。
 - `make check-all` で PostgreSQL 15 から 18 に対して動く結合テストは、2つ目の接続で `pg_stat_activity` と `pg_locks` を読む：
-  - `internal/postgres` の `TestInterruptEndsTheStatementOnTheServer`：長い更新の間、行ロックを待つ間、別の apply を待つ間に割り込む。セッションは終わりを確かめ、そのプロセスはロックを持たずに消え、行は何も変わらない。`TestInterruptWithoutAnAnswer`：キャンセルのエラーを捕まえてまた眠るトリガーを使う。セッションは上限のあと、または2度目の割り込みで待つのをやめ、そのエラーはまだ動いているプロセスを挙げる。`TestInterruptDuringTheCommit`：遅らせたトリガーでアドバイザリロックを待つコミットは、1度目の割り込みでは止まらない。2度目は結果の分からないまま待つのを終え、プロセスはサーバーで待ち続け、ロックが空くとコミットは終わる。`TestKeepAliveOfTheSession`：セッションのソケットは、kortopi のキープアライブか libpq の設定によるものを持ち、その設定はサーバーに届かない。
+  - `internal/postgres` の `TestInterruptEndsTheStatementOnTheServer`：長い更新の間、行ロックを待つ間、別の apply を待つ間に割り込む。セッションは終わりを確かめ、そのプロセスはロックを持たずに消え、行は何も変わらない。`TestInterruptWithoutAnAnswer`：キャンセルのエラーを捕まえてまた眠るトリガーを使う。セッションは上限のあと、または2度目の割り込みで待つのをやめ、そのエラーはまだ動いているプロセスを挙げる。`TestInterruptDuringTheCommit`：遅らせたトリガーでアドバイザリロックを待つコミットは、1度目の割り込みでは止まらない。2度目は結果の分からないまま待つのを終え、プロセスはサーバーで待ち続け、ロックが空くとコミットは終わる。`TestKeepAliveOfTheSession`：セッションのソケットは、kortopi のキープアライブか libpq の設定によるものを持ち、その設定はサーバーに届かない。`TestSecondInterruptStillCancels`：行ロックを待つ間に2回の割り込みが続けて来る。キャンセル要求は Close が戻る前に送られ、行はまだ持たれたままでも、文はサーバーで終わる。
   - `cmd/kortopi` の `TestInterruptedApplyCommand` と `TestInterruptedCommitCommand` は、同じ3つの場合とコミットの2つのメッセージでコマンドを動かす。
 - ネットワークを切るテストはなく、コネクションプーラーを通すテストもない。
 
@@ -183,4 +189,4 @@ kortopi は、割り込み（SIGINT や SIGTERM）をコンテキストのキャ
 - `keepalives` などについては [libpq の接続のパラメータ](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS)
 - 利用者向けの説明：[docs/reference/apply.ja.md](../reference/apply.ja.md#apply-に割り込む)
 
-<!-- i18n-source: ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md sha256:fc38bb7179c7caaa4978e00245b16804a1e362a71d88348cae5a761aca7061e0 -->
+<!-- i18n-source: ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md sha256:dc40befd74733dfb875bd9faa1135789a9884e5ee1405417249c03f8f489873b -->

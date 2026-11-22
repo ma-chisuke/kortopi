@@ -669,9 +669,11 @@ func (s *Session) needs() string {
 //
 // After an interrupt, the server has been asked to cancel the statement that
 // ran, and Close waits for the rollback until guard.wait after the interrupt
-// at most, or until the second interrupt. When the server answered and the
-// rollback came back, the work of the session has ended and its locks are
-// gone, and the server ends the session as the connection closes. Otherwise
+// at most, or until the second interrupt, after which it gives the driver
+// up to cancelSendWait to send its cancel request. When the server answered
+// and the rollback came back, the work of the session has ended and its
+// locks are gone, and the server ends the session as the connection closes.
+// Otherwise
 // the statement may still run on the server, and Close returns a
 // *dialect.NotEndedError that says how to find and end it; a session whose
 // commit was sent never does, because its outcome is the error of Commit.
@@ -706,6 +708,18 @@ func (s *Session) Close(ctx context.Context) error {
 	}
 	if err := s.conn.Close(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("close the connection: %w", err))
+	}
+	if interrupted && !s.commitSent && s.gaveUp() {
+		// The second interrupt does not keep the cancel request from going
+		// out: the driver sends one in the background as it gives the
+		// connection up, and the process of kortopi may end right after
+		// Close, so Close lets it go out first. A commit is never cancelled.
+		timer := time.NewTimer(cancelSendWait)
+		select {
+		case <-s.conn.PgConn().CleanupDone():
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
 	if s.stopWatch != nil {
 		s.stopWatch()

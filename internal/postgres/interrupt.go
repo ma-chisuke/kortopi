@@ -28,6 +28,13 @@ import (
 // reach.
 const cancelWait = 5 * time.Second
 
+// cancelSendWait is how long a session that the second interrupt gave up
+// waits, as it closes before the commit, for the driver to send the cancel
+// request that it sends in the background as it gives the connection up:
+// the process of kortopi may end right after, and the request with it. A
+// server within reach takes it in milliseconds.
+const cancelSendWait = time.Second
+
 // closeTimeout bounds the rollback and the close of a session that Connect
 // ends itself, after an error.
 const closeTimeout = 10 * time.Second

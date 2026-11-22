@@ -302,6 +302,7 @@ kortopi: nothing was changed
 
 それでも何も変わっていない。トランザクションはコミットしておらず、セッションが終わるときにサーバーがロールバックする。
 2度目の割り込みは待つのをその場で終え、そのとき行は `kortopi stopped waiting for the server to end the session of the apply` で始まる。
+この割り込みがあっても、キャンセル要求は送られる。kortopi は終了する前に、ドライバーがそれを送るのを最長1秒待つ。
 apply が別の apply を待っている間も同じである。
 
 コミットが始まったら、割り込みではそれを止めない。結果を知るためであり、kortopi はその場でそう伝える。
@@ -577,4 +578,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:de0ed06714a10a62067c938fbb244efcec78a136c2ae0999031510a1bcf0809c -->
+<!-- i18n-source: apply.md sha256:69104af8bb6a30b67f229d577a5b569d9ed1465a11d81f505b73a40608e45920 -->

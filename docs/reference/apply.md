@@ -300,6 +300,7 @@ kortopi: nothing was changed
 
 Nothing was changed all the same: the transaction never committed, and the server rolls it back when the session ends.
 A second interrupt ends the wait at once, and the line then starts with `kortopi stopped waiting for the server to end the session of the apply`.
+It does not keep the cancel request from going out: kortopi waits up to 1 second for the driver to send it before it exits.
 The same holds while an apply waits for another apply.
 
 Once the commit has started, an interrupt does not stop it, so that its outcome is known, and kortopi says so at once:
