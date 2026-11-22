@@ -56,6 +56,11 @@ type Options struct {
 	// cancelWait, when it is not zero, replaces the constant of the same
 	// name, so that a test can wait less.
 	cancelWait time.Duration
+	// newest opens the second session of an apply, which reads the newest
+	// catalogs for the check after the deletions (ADR-0048): a READ ONLY
+	// transaction at READ COMMITTED, which creates nothing and takes no lock
+	// of kortopi.
+	newest bool
 }
 
 // settings are the settings that change how PostgreSQL reads and prints a
@@ -108,9 +113,15 @@ type Session struct {
 	// Commit.
 	apply  bool
 	loaded map[declaration.TableName]*loadedTable
-	// export is true for a session of an export, which only reads.
+	// export is true for a session of an export, which only reads, and
+	// newest for the second session of an apply (Options.newest).
 	export    bool
+	newest    bool
 	committed bool
+	// config is the configuration of the connection as Connect got it, and
+	// giveUp Options.GiveUp: an apply opens its second session with them.
+	config *pgx.ConnConfig
+	giveUp <-chan struct{}
 	// deletesChecked is true after the privileges of the deletions were
 	// checked, and writtenBefore holds the counters of the rows that the
 	// transaction had deleted and updated then, by the partitioned table at
@@ -134,6 +145,10 @@ type Session struct {
 	// and effectGone the pairs of updates that go when rows go first.
 	effectMoves map[uint32]bool
 	effectGone  []goneFirst
+	// effectRelations holds the tables whose schema decides what the
+	// deletions do, as Effects found them last, which CheckEffect compares
+	// with the newest catalogs (ADR-0048).
+	effectRelations []uint32
 	// deleted holds the order of the tables whose rows Delete deleted.
 	deleted map[declaration.TableName]int
 	// tables holds what Describe learned, for Diff.
@@ -429,6 +444,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	if opts.LockTimeout < 0 {
 		return nil, errors.New("the lock timeout is negative")
 	}
+	config := cfg.Copy()
 	cfg = cfg.Copy()
 	// Describe each query in an unnamed statement, so the session prepares
 	// no statement that outlives a query.
@@ -451,8 +467,9 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	}
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
-		apply: opts.Apply, export: opts.Export, loaded: make(map[declaration.TableName]*loadedTable),
+		apply: opts.Apply, export: opts.Export, newest: opts.newest, loaded: make(map[declaration.TableName]*loadedTable),
 		lockTimeout: opts.LockTimeout, guard: g, application: cfg.RuntimeParams["application_name"],
+		config: config, giveUp: opts.GiveUp,
 	}
 	s.watchInterrupt(ctx, opts.GiveUp)
 	if s.apply {
@@ -501,7 +518,7 @@ const lockKey = 0x6b6f72746f7069
 func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	waited := false
 	for {
-		tx, err := s.beginTx(ctx, s.beginSQL(s.export), s.commitSQL)
+		tx, err := s.beginTx(ctx, s.beginSQL(s.export || s.newest), s.commitSQL)
 		if err != nil {
 			return fmt.Errorf("begin the transaction of the %s: %w", s.work(), err)
 		}
@@ -577,13 +594,17 @@ func (s *Session) beginTx(ctx context.Context, begin, commit string) (pgx.Tx, er
 }
 
 // beginSQL returns the statements that begin a transaction of the session:
-// at the isolation level REPEATABLE READ, and READ ONLY when readOnly is
-// true, with the lock_timeout of --lock-timeout, local to the transaction
-// (ADR-0044). Both go in one message, as pgx sends a begin. SET takes no
-// snapshot, so the snapshot of REPEATABLE READ is still taken by the first
-// query of the transaction.
+// at the isolation level REPEATABLE READ, or READ COMMITTED for the second
+// session of an apply, which reads the newest catalogs (ADR-0048), and READ
+// ONLY when readOnly is true, with the lock_timeout of --lock-timeout, local
+// to the transaction (ADR-0044). Both go in one message, as pgx sends a
+// begin. SET takes no snapshot, so the snapshot of REPEATABLE READ is still
+// taken by the first query of the transaction.
 func (s *Session) beginSQL(readOnly bool) string {
 	sql := "BEGIN ISOLATION LEVEL REPEATABLE READ"
+	if s.newest {
+		sql = "BEGIN ISOLATION LEVEL READ COMMITTED"
+	}
 	if readOnly {
 		sql += " READ ONLY"
 	}
@@ -652,7 +673,7 @@ func (s *Session) DatabaseName() string {
 // messages.
 func (s *Session) work() string {
 	switch {
-	case s.apply:
+	case s.apply, s.newest:
 		return "apply"
 	case s.export:
 		return "export"

@@ -81,7 +81,7 @@ func (s *Session) explain(ctx context.Context, err *error, waits bool) {
 	}
 	// The last line of a failed apply says that nothing was changed.
 	unchanged := ": nothing was changed"
-	if s.apply {
+	if s.apply || s.newest {
 		unchanged = ""
 	}
 	switch pgErr.Code {
