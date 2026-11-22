@@ -634,6 +634,11 @@ func TestApplyWhenRowLevelSecurityComesToApply(t *testing.T) {
 					if _, err := s.Diff(ctx, req); err != nil {
 						t.Fatal(err)
 					}
+					// The plan follows the foreign keys of the deletion of
+					// row gone, as an apply does before it deletes (ADR-0039).
+					if _, err := s.Effects(ctx, []declaration.TableName{req.Table.Name}); err != nil {
+						t.Fatal(err)
+					}
 					db.Exec(t, `ALTER ROLE `+role+` NOBYPASSRLS`)
 					write, pick := s.Update, "pick the rows to update in table app.items: "
 					if kind == "delete" {
