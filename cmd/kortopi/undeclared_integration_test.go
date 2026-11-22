@@ -30,21 +30,21 @@ func TestUndeclaredRowsCommand(t *testing.T) {
 			code, stdout, stderr := e.command(t, "plan", "--dir", dir, "--exit-code")
 			checkRun(t, code, stdout, stderr, exitOK, lines(
 				"No changes. There is nothing to apply.",
-				"geo.currency: 1 stored row is not declared, left as it is in mode upsert",
-				"Not declared: 1 stored row in 1 table, left as it is in mode upsert."))
+				"geo.currency: 1 stored row is not declared, which mode upsert does not delete",
+				"Not declared: 1 stored row in 1 table, which mode upsert does not delete."))
 
 			code, stdout, stderr = e.command(t, "plan", "--dir", insertDir, "--exit-code")
 			checkRun(t, code, stdout, stderr, exitOK, lines(
 				"No changes. There is nothing to apply.",
 				"A table of mode insert is compared by its key only, not by its values: geo.currency.",
-				"geo.currency: 1 stored row is not declared, left as it is in mode insert",
-				"Not declared: 1 stored row in 1 table, left as it is in mode insert."))
+				"geo.currency: 1 stored row is not declared, which mode insert does not delete",
+				"Not declared: 1 stored row in 1 table, which mode insert does not delete."))
 
 			code, stdout, stderr = e.command(t, "plan", "--dir", dir, "--format", "sql", "--exit-code")
 			checkRun(t, code, stdout, stderr, exitOK, lines(
 				"-- No changes: there is nothing to do.",
-				"-- geo.currency: 1 stored row is not declared, left as it is in mode upsert",
-				"-- Not declared: 1 stored row in 1 table, left as it is in mode upsert."))
+				"-- geo.currency: 1 stored row is not declared, which mode upsert does not delete",
+				"-- Not declared: 1 stored row in 1 table, which mode upsert does not delete."))
 
 			// A plan with a change shows the row in the block of the table.
 			changed := writeFiles(t, map[string]string{"geo/currency.csv": "code,name\nJPY,Yen\nUSD,Dollar\nEUR,Euro\n"})
@@ -52,10 +52,10 @@ func TestUndeclaredRowsCommand(t *testing.T) {
 				"geo.currency (upsert, key: code)",
 				"  + code=EUR  name=Euro",
 				"  1 to insert, 0 to update",
-				"  1 stored row is not declared, left as it is in mode upsert",
+				"  1 stored row is not declared, which mode upsert does not delete",
 				"",
 				"Plan: 1 to insert, 0 to update, 0 to delete in 1 table.",
-				"Not declared: 1 stored row in 1 table, left as it is in mode upsert.")
+				"Not declared: 1 stored row in 1 table, which mode upsert does not delete.")
 			code, stdout, stderr = e.command(t, "plan", "--dir", changed, "--exit-code")
 			checkRun(t, code, stdout, stderr, exitChanges, want)
 

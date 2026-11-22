@@ -158,8 +158,8 @@ func TestRunApply(t *testing.T) {
 			session:  &fakeSession{diffs: map[declaration.TableName]plan.TableDiff{countries: {Undeclared: 3}}},
 			wantCode: exitOK,
 			wantStdout: "No changes. There is nothing to apply.\n" +
-				"geo.countries: 3 stored rows are not declared, left as they are in mode upsert\n" +
-				"Not declared: 3 stored rows in 1 table, left as they are in mode upsert.\n",
+				"geo.countries: 3 stored rows are not declared, which mode upsert does not delete\n" +
+				"Not declared: 3 stored rows in 1 table, which mode upsert does not delete.\n",
 			wantCalls: diffs,
 		},
 		{

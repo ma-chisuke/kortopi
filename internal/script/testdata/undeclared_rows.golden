@@ -1,9 +1,9 @@
 -- Written by kortopi from the data directory data, against the database shop.
 -- It is the difference at the moment of the plan: 1 to insert, 0 to update, 1 to delete in 3 tables.
--- Not declared: 5 stored rows in 2 tables, left as they are in modes upsert and insert.
+-- Not declared: 5 stored rows in 2 tables, which modes upsert and insert do not delete.
 -- Run the statements in one transaction.
--- geo.cities: 4 stored rows are not declared, left as they are in mode insert
--- app.plans: 1 stored row is not declared, left as it is in mode upsert
+-- geo.cities: 4 stored rows are not declared, which mode insert does not delete
+-- app.plans: 1 stored row is not declared, which mode upsert does not delete
 
 -- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
 SET LOCAL settings;

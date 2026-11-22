@@ -384,10 +384,10 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 						"app.t (upsert, key: id)",
 						"  ~ id=1  v: a -> b",
 						"  0 to insert, 1 to update",
-						"  1 stored row is not declared, left as it is in mode upsert",
+						"  1 stored row is not declared, which mode upsert does not delete",
 						"",
 						"Plan: 0 to insert, 1 to update, 0 to delete in 1 table.",
-						"Not declared: 1 stored row in 1 table, left as it is in mode upsert.",
+						"Not declared: 1 stored row in 1 table, which mode upsert does not delete.",
 						"",
 						"Applied: 0 inserted, 1 updated, 0 deleted.",
 					),
@@ -395,8 +395,8 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 					// The row 9, which the declaration lacks, stays and counts.
 					planAfter: lines(
 						"No changes. There is nothing to apply.",
-						"app.t: 1 stored row is not declared, left as it is in mode upsert",
-						"Not declared: 1 stored row in 1 table, left as it is in mode upsert.",
+						"app.t: 1 stored row is not declared, which mode upsert does not delete",
+						"Not declared: 1 stored row in 1 table, which mode upsert does not delete.",
 					),
 				},
 				{
@@ -607,10 +607,10 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 						"  + currency_iso=JPN  product=p1  amount=100.00",
 						"  1 to insert, 0 to update",
 						// The row JPY/p1, whose key the cascade would change.
-						"  1 stored row is not declared, left as it is in mode upsert",
+						"  1 stored row is not declared, which mode upsert does not delete",
 						"",
 						"Plan: 1 to insert, 1 to update, 0 to delete in 2 tables.",
-						"Not declared: 1 stored row in 1 table, left as it is in mode upsert.",
+						"Not declared: 1 stored row in 1 table, which mode upsert does not delete.",
 					), keyCascadeError(price+".price"))
 					if got := rows(); !slices.Equal(got, []string{"currency JPY USD", "price JPY/p1 USD/p2"}) {
 						t.Errorf("rows after the failed apply: %v", got)

@@ -305,6 +305,25 @@ func TestRender(t *testing.T) {
 			}},
 		},
 		{
+			// The deletion of a row of a table of mode sync cascades into a
+			// row of a table of mode upsert that the declaration lacks: the
+			// line of that table says only that its mode deletes none of its
+			// rows, and the effect says what the deletion does to it
+			// (ADR-0039, ADR-0046).
+			name: "undeclared_cascade",
+			plan: &Plan{Tables: []Table{
+				{
+					Name: name("app", "child"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"parent_id", "note"},
+					Diff: TableDiff{Undeclared: 1},
+				},
+				{
+					Name: name("app", "parent"), Mode: config.ModeSync, Key: []string{"id"}, Compare: []string{"name"},
+					Diff:   TableDiff{Deletes: []Row{{Key: values("2")}}},
+					Effect: Effect{Steps: []Step{step(1, name("app", "child"), "child_parent_id_fkey", name("app", "parent"), "CASCADE", 1, "parent_id")}},
+				},
+			}},
+		},
+		{
 			// The values of on_insert print with the rows to insert, as the
 			// settings write them, and not for a table without such rows.
 			name: "on_insert",

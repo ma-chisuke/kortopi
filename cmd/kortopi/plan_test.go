@@ -202,8 +202,8 @@ func TestRunPlan(t *testing.T) {
 			session:  &fakeSession{diffs: map[declaration.TableName]plan.TableDiff{countries: {Undeclared: 1}}},
 			wantCode: exitOK,
 			wantStdout: "No changes. There is nothing to apply.\n" +
-				"geo.countries: 1 stored row is not declared, left as it is in mode upsert\n" +
-				"Not declared: 1 stored row in 1 table, left as it is in mode upsert.\n",
+				"geo.countries: 1 stored row is not declared, which mode upsert does not delete\n" +
+				"Not declared: 1 stored row in 1 table, which mode upsert does not delete.\n",
 			wantConnect: true,
 		},
 		{
@@ -215,10 +215,10 @@ func TestRunPlan(t *testing.T) {
 			wantStdout: "app.plans (upsert, key: id)\n" +
 				"  + id=2  name=Gold\n" +
 				"  1 to insert, 0 to update\n" +
-				"  2 stored rows are not declared, left as they are in mode upsert\n" +
+				"  2 stored rows are not declared, which mode upsert does not delete\n" +
 				"\n" +
 				"Plan: 1 to insert, 0 to update, 0 to delete in 2 tables.\n" +
-				"Not declared: 2 stored rows in 1 table, left as they are in mode upsert.\n" +
+				"Not declared: 2 stored rows in 1 table, which mode upsert does not delete.\n" +
 				"1 table without changes is not shown.\n",
 			wantConnect: true,
 		},
