@@ -17,9 +17,24 @@ import (
 
 // diffLines writes a difference as lines that a test can compare: "+" and
 // the key and values of a row to insert, "~" and the key and the changes of
-// a row to update, and "-" and the key of a row to delete. A value is quoted
-// as Go quotes a string, and NULL is NULL.
+// a row to update, "-" and the key of a row to delete, and last "?" and the
+// number of the stored rows that the declaration lacks, for a table whose
+// mode deletes no row, or why they are not counted (ADR-0046). A value is
+// quoted as Go quotes a string, and NULL is NULL.
 func diffLines(d plan.TableDiff) []string {
+	lines := changeLines(d)
+	switch {
+	case d.Uncounted != "":
+		lines = append(lines, "? not counted: "+d.Uncounted)
+	case d.Undeclared > 0:
+		lines = append(lines, "? "+strconv.Itoa(d.Undeclared)+" not declared")
+	}
+	return lines
+}
+
+// changeLines writes the rows to insert, to update, and to delete of a
+// difference as diffLines writes them.
+func changeLines(d plan.TableDiff) []string {
 	var lines []string
 	for _, r := range d.Inserts {
 		lines = append(lines, strings.TrimSpace("+ "+valuesText(r.Key)+" | "+valuesText(r.Values)))
@@ -152,14 +167,15 @@ func TestDiffModes(t *testing.T) {
 					s := db.session(t, decl.dir)
 					req := plan.DiffRequest{Table: decl.table, Key: []string{"code"}, Compare: []string{"name", "capacity"}}
 
-					// insert
-					checkDiff(t, s, req, `+ "suite" | "Suite" "4"`)
+					// insert: the stored row "old" is counted, not deleted.
+					checkDiff(t, s, req, `+ "suite" | "Suite" "4"`, `? 1 not declared`)
 
 					// upsert
 					req.Updates = true
 					checkDiff(t, s, req,
 						`+ "suite" | "Suite" "4"`,
-						`~ "twin" | capacity: "2" -> "3"`)
+						`~ "twin" | capacity: "2" -> "3"`,
+						`? 1 not declared`)
 
 					// sync
 					req.Deletes = true
@@ -256,7 +272,7 @@ func TestDiffDuplicateKeys(t *testing.T) {
 
 			// The session stays usable after an error.
 			checkDiff(t, s, plan.DiffRequest{Table: roomTypes(t)["sql"].table, Key: []string{"code"}, Compare: []string{"name", "capacity"}},
-				`+ "suite" | "Suite" "4"`)
+				`+ "suite" | "Suite" "4"`, `? 1 not declared`)
 		})
 	}
 }

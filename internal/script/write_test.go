@@ -171,6 +171,41 @@ func TestWrite(t *testing.T) {
 			db:   &fakeDB{},
 		},
 		{
+			// The stored rows that the declaration lacks, as comments
+			// (ADR-0046).
+			name: "empty_with_undeclared_rows",
+			plan: &plan.Plan{Tables: []plan.Table{table(plans, config.ModeUpsert, plan.TableDiff{Undeclared: 1})}},
+			db:   &fakeDB{},
+		},
+		{
+			// The lines of the stored rows that the declaration lacks come
+			// after the lines of the schema change, five tables at most and a
+			// line that counts the others (ADR-0046).
+			name: "undeclared_rows_after_pending",
+			plan: &plan.Plan{Tables: []plan.Table{
+				table(tn("app", "a"), config.ModeUpsert, plan.TableDiff{Undeclared: 1}),
+				table(tn("app", "b"), config.ModeUpsert, plan.TableDiff{Undeclared: 2}),
+				{Name: tn("app", "c"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 2},
+				table(tn("app", "d"), config.ModeUpsert, plan.TableDiff{Undeclared: 3}),
+				table(tn("app", "e"), config.ModeUpsert, plan.TableDiff{Undeclared: 4}),
+				table(tn("app", "f"), config.ModeInsert, plan.TableDiff{Inserts: inserts("1"), Undeclared: 5}),
+				table(tn("app", "g"), config.ModeUpsert, plan.TableDiff{Undeclared: 6}),
+				table(tn("app", "h"), config.ModeUpsert, plan.TableDiff{Uncounted: "PostgreSQL ended the count: ERROR: something"}),
+			}},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			name: "undeclared_rows",
+			plan: &plan.Plan{Tables: []plan.Table{
+				table(cities, config.ModeInsert, plan.TableDiff{Inserts: inserts("10"), Undeclared: 4}),
+				table(plans, config.ModeUpsert, plan.TableDiff{Undeclared: 1}),
+				table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("3")}),
+			}},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
 			name: "order",
 			plan: &plan.Plan{Tables: []plan.Table{
 				table(plans, config.ModeUpsert, plan.TableDiff{Updates: updates("7")}),

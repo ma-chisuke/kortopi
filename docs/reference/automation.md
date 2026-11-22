@@ -65,22 +65,28 @@ A plan against a real environment, to show a reviewer what the merge will change
 
 ## A scheduled drift check
 
-A job compares the database with the declaration of the main branch, and tells the three outcomes apart by the exit status:
+A job compares the database with the declaration of the main branch, prints the plan to its log, and tells the three outcomes apart by the exit status:
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
+cat plan.txt
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+if grep -q '^Not declared:' plan.txt; then
+  echo "tables of mode upsert or insert hold stored rows that the declaration lacks"
+fi
 ```
 
-- Status 2 counts every row to insert, to update, or to delete, and every table or column that waits for a schema change.
+- Status 2 counts every row to insert, to update, or to delete, and every table or column that waits for a schema change: the plan is not empty.
 - A table of mode `insert` is compared by its keys only, so a changed value of one of its rows is no drift.
+- The stored rows that a table of mode `upsert` or `insert` holds and the declaration lacks are no drift either: their mode deletes none of them, so they are no change of the plan. The plan counts them, in the line of each table and in a line that starts with `Not declared:`, which the job looks for, as above ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). To fail the check on them, give the table mode `sync`, whose rows to delete give status 2.
 - The role needs [what the session of a plan needs](plan.md#what-the-session-needs), on the primary.
-- `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
+- `|| status=$?` keeps a shell with `set -e` from stopping on status 2, and a `grep` that finds no line does not stop it either, because it is the condition of the `if`.
+- A plan that fails prints its error on standard error, which the job prints to its log as it comes.
 
 ## The plan as SQL for reviewed scripts
 
@@ -94,4 +100,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - The script is the difference from one database at one moment: run it against the database that the plan read, soon after the plan ([kortopi plan](plan.md#print-the-plan-as-sql)).
 - Its deletions are comments, which run only when someone removes the comment marks.
 - `--exit-code` works with `--format sql` as with the text: status 2 when the plan is not empty.
-- The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, such values, or nothing.
+- The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, and such values. It also counts again the stored rows that the declaration lacks, which give no status of their own.

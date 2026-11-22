@@ -150,6 +150,19 @@ func TestRunApply(t *testing.T) {
 			wantCalls:  diffs,
 		},
 		{
+			// The apply prints the lines of the stored rows that the
+			// declaration lacks with its plan, and does nothing with them
+			// (ADR-0046).
+			name:     "nothing to change but stored rows that the declaration lacks",
+			files:    twoTables,
+			session:  &fakeSession{diffs: map[declaration.TableName]plan.TableDiff{countries: {Undeclared: 3}}},
+			wantCode: exitOK,
+			wantStdout: "No changes. There is nothing to apply.\n" +
+				"geo.countries: 3 stored rows are not declared, which mode upsert does not delete\n" +
+				"Not declared: 3 stored rows in 1 table, which mode upsert does not delete.\n",
+			wantCalls: diffs,
+		},
+		{
 			name:       "changes",
 			files:      twoTables,
 			session:    &fakeSession{diffs: newPlan},
@@ -197,7 +210,7 @@ func TestRunApply(t *testing.T) {
 				"Plan: 0 to insert, 0 to update, 1 to delete in 2 tables.\n" +
 				"1 table without changes is not shown.\n" +
 				"\n" +
-				"Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.\n",
+				"Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.\n",
 			wantCalls: diffs,
 		},
 		{

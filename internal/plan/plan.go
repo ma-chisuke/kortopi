@@ -181,6 +181,8 @@ type DiffRequest struct {
 	Pending []string
 	// Updates and Deletes say whether the mode of the table allows these
 	// kinds of change. The database does not compute a kind that is false.
+	// When Deletes is false, the database counts instead the stored rows
+	// that no declared row matches, into TableDiff.Undeclared (ADR-0046).
 	Updates bool
 	Deletes bool
 	// OnInsert holds the values of on_insert whose columns the table has,
@@ -226,6 +228,19 @@ type TableDiff struct {
 	Inserts []Row
 	Updates []Update
 	Deletes []Row
+	// Undeclared counts, for a table whose mode deletes no row, the stored
+	// rows that no declared row matches by the match key: the rows that a
+	// table of mode sync would show as rows to delete (ADR-0046). The mode
+	// deletes none of them, so they are no change of the plan, and a plan
+	// shows only their number. It is 0 for a table of mode sync, whose rows
+	// to delete are those rows.
+	Undeclared int
+	// Uncounted says why the database could not count those rows, as a
+	// phrase of the database package, such as "PostgreSQL ended the count:
+	// ...", or is empty when it counted them. The plan goes on without the
+	// count, so that the count never turns a plan that would succeed into a
+	// failure (ADR-0046).
+	Uncounted string
 }
 
 // Table is the plan of one table.

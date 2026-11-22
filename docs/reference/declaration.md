@@ -228,6 +228,8 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
 
   In mode `insert`, a plan compares the declared rows with the stored rows by their keys only: a changed value of a row that exists is not shown, and an empty plan names the tables of mode `insert` instead of saying that the database matches the declaration ([kortopi plan](plan.md#read-the-output)).
 
+  Modes `insert` and `upsert` delete none of the stored rows that the declaration lacks, and a plan counts them on a line of the table ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). Mode `sync` shows each of them as a row to delete.
+
   A mode that writes more kinds of statements can bring out the mistake of a rule on the table: a rule `ON UPDATE` stops the plan of a table in mode `upsert` or `sync`, and a rule `ON DELETE` one in mode `sync` ([A table with a rule](#a-table-with-a-rule)).
 
 - `key` names the columns that match a declared row with a stored row. Without it, the match key is the primary key. The columns of `key`

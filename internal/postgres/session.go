@@ -175,6 +175,10 @@ type Session struct {
 	pid         int32
 	// commitSent is true once the commit has gone to the server.
 	commitSent bool
+	// beforeCount, when it is not nil, runs in the savepoint of the count of
+	// the stored rows that the declaration lacks, before the count, so that
+	// a test can make PostgreSQL end the count (countUndeclared).
+	beforeCount func(ctx context.Context, tx pgx.Tx) error
 }
 
 var _ plan.Database = (*Session)(nil)

@@ -336,13 +336,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   ```
 
 - 削除を見送ったときは、`Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` が続く。見送った削除が外部キーを通じて行を消すか変えるはずなら、その行はフラグの前でそれを伝える。`Through foreign keys, their deletion would also delete 2 rows and change 1 row.` のようになる。
-- 違いが削除だけなら、apply は何も書き込まずコミットもしない。そのときは `Not deleted` の行だけを出し、そのことを伝える。
+- 違いが削除だけなら、apply は何も書き込まずコミットもしない。そのときは `Not deleted` の行だけを出し、そのことを伝える。計画は、それでも宣言にない保存された行を数えうるが、それは書き込む変更ではない。
 
   ```text
-  Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
+  Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- 違いがなければ、apply は空の計画の行だけを出す。その行は、`No changes. The database matches the declaration.` である。モード `insert` のテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行になる（[kortopi plan](plan.ja.md#出力の読み方)）。
+- 違いがなければ、apply は空の計画の行だけを出す。その行は、`No changes. The database matches the declaration.` である。次のどれかのテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行になる（[kortopi plan](plan.ja.md#出力の読み方)）。モード `insert` のテーブル、宣言にない保存された行を持つテーブル、その行を数えられなかったテーブルである。
+- apply の計画は、計画と同じく、モード `upsert` と `insert` のテーブルが持ち宣言にない保存された行を数える。その行が伝えるのは、テーブルのモードがその行をどれも削除しないことだけである。apply の書き込みは、それでもそうした行を削除したり変えたりしうる（[kortopi plan](plan.ja.md#宣言にない保存された行)）。apply が行を削除するテーブルからの外部キーのカスケードはその例で、計画はそれをそのテーブルの下に示す（[削除がほかの行にすること](plan.ja.md#削除がほかの行にすること)）。apply が参照されるキーを更新する外部キーの `ON UPDATE` の動作や、トリガーもその例である。PostgreSQL が数えるのをエラーで終えたテーブルは数を持たず、apply は先へ進む。
 - 失敗したときは、エラーを標準エラー出力に出し、最後の行は `kortopi: nothing was changed` になる。
 - コミットの答えが届かないときは、変更がなされたかどうかを apply は知ることができず、何も変えなかったとは言わない。
 
@@ -747,4 +748,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:d9f6c63b5ad1d1bf271c573513ed059439a216db7e511086179ce42fe4207006 -->
+<!-- i18n-source: apply.md sha256:d1bb2a1cde86a278127ddd46dc0a17cdbc53b18baff354493ebc5fe063195a7a -->

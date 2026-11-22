@@ -160,7 +160,7 @@ func TestPlanWithoutSelect(t *testing.T) {
 			// SELECT on the declared columns is enough.
 			db.Exec(t, `GRANT SELECT (capacity) ON facility.room_types TO `+role)
 			s = db.sessionWith(t, cfg, writeFiles(t, planFiles))
-			checkDiff(t, s, req, `+ "suite" |`)
+			checkDiff(t, s, req, `+ "suite" |`, `? 1 not declared`)
 		})
 	}
 }
