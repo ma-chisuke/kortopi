@@ -169,6 +169,7 @@ kortopi は、テーブルを読み込む前に、次の順でカタログを調
 4. そのテーブルで、行単位セキュリティがロールにかからない。テーブルで有効になっていないか、ロールが `BYPASSRLS` を持つか、ロールが行単位セキュリティを強制していないテーブルを所有していればよい。
 
 ロールが接続できること（データベースに対する `CONNECT`）は、PostgreSQL 自身が調べる。PostgreSQL は、既定で `CONNECT` と `TEMPORARY` を `PUBLIC` に与えている。
+値を書く識別列や `serial` の列のシーケンスを apply がどこまで進めるかを示すため、計画はシーケンスの `SELECT` とそのスキーマの `USAGE` でシーケンスを読む。それがなければ、シーケンスの行がそう伝え、計画は続く（[シーケンス](#シーケンス)）。
 スキーマの変更を待つテーブルには、これらはどれも要らない。ただし、そうしたテーブルの CSV ファイルは一時テーブルで数えるので、1つ目が要る。
 
 計画を立てるだけのロールなら、次のように権限を与える。
@@ -213,6 +214,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - どの行を読み込むよりも前に、存在するテーブルの `on_insert` の値ごとに、セーブポイントの中でその列だけの一時テーブルを作って値を挿入する。そのあと、セーブポイントをロールバックする（[挿入のときだけ設定する値](#挿入のときだけ設定する値)）。
 - 宣言したテーブルごとに、セーブポイントの中で一時テーブルを作って宣言の行を読み込み、本物のテーブルと比べる。削除の波及は、すべてのテーブルの宣言の行を読むので、一時テーブルは計画が終わるまで残る。
 - 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
+- 挿入する行か更新する行が値を書く、シーケンスを持つ列については、列の最大の値と、シーケンスの位置を読む。`nextval` も `setval` も呼ばない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
 
 計画を止めるには Ctrl-C を押すか、SIGTERM を送る。
@@ -275,6 +277,7 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 | `~ code=pro  name: Pro -> "Pro Plan"` | 更新する行。キーと、変わる列のそれぞれを `column: stored -> declared` の形で示す。変わらない列は示さない。 |
 | `- code=legacy` | 削除する行。キーを示す。行を削除するのは、モード `sync` のテーブルだけである。 |
 | `1 to insert, 1 to update, 1 to delete` | テーブルの件数。そのモードが求める変更の種類だけを示す。 |
+| `sequence catalog.plans_id_seq of column id: next value 3 -> 4` | 行が値を書く列のシーケンスと、apply がそれをどこまで進めるか（[シーケンス](#シーケンス)）。 |
 | `Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.` | 計画全体の件数と、計画に含まれる宣言したテーブルの数。 |
 
 テーブルは、スキーマ、テーブル名の順に並べる。
@@ -371,6 +374,32 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - kortopi はこれらの列を比べない。そのため変更として示すことはなく、すでにある行は持っている値を保つ。
 - テーブルにない `on_insert` の列は、宣言した列と同じくスキーマの変更を待つ。その行は、名前の出どころを `column floor of on_insert in kortopi.toml: known after the schema is applied` のように示す。
 - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、存在するテーブルのそれぞれの値を列の型で読む。スキーマの変更を待つテーブルの値は、テーブルができてから検査する。値ごとに、ロールバックする専用のセーブポイントの中で、その列だけを持つ一時テーブルを作り、値を挿入する。一時テーブルの列は、テーブルの列から型を受け継ぐ。そのため、ほかの列が値や既定値を得ることはない。また、ロールには、型を読むためにこれらの列に対する `SELECT` が要る。宣言した列と同じである（[セッションに要るもの](#セッションに要るもの)）。
+
+### シーケンス
+
+テーブルの挿入する行か更新する行が識別列や `serial` の列に値を書くとき、apply はコミットの直前に、その列のシーケンスを書いた値の先へ進める。アプリケーションの次の挿入がそのどれかを取らないようにするためである（[kortopi apply](apply.ja.md#シーケンス)）。
+計画は、テーブルの件数のあとで、その進め方を示す。
+
+```text
+billing.fees (upsert, key: id)
+  + id=3  name=express  amount=900
+  1 to insert, 0 to update
+  sequence billing.fees_id_seq of column id: next value 3 -> 4
+```
+
+- `next value 3 -> 4` は、シーケンスが次に返す値と、進めたあとに次に返す値である。後者は、増分ずつ進めたシーケンスの値のうち、列の最大の値の先にある最初の値である。減るシーケンスなら最小の値の下である。
+- 計画は、保存された行と、apply が書くはずの宣言した値を数える。apply が更新や削除をする保存された行は、保存された値で数える。apply は書き込みのあとで進め方をもう一度求めるので、計画が示すより手前までしか進めないことがある。
+- すでに列の先の値を返すシーケンスには、行を出さない。
+- apply がそのままにするシーケンスには、その理由とすることを伝える行を出す。
+
+  ```text
+  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not update the sequence: grant the role UPDATE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+  sequence billing.tax_rates_id_seq of column id: not moved: the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence billing.tax_rates_id_seq
+  sequence billing.codes of column code: next value 1, not moved: the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is
+  sequence billing.ranks of column rank: next value 1, not moved: the sequence gives no value beyond 100, the largest value of the column, because its MAXVALUE is 100: raise its MAXVALUE
+  ```
+
+- 計画は、各シーケンスをその `SELECT` とスキーマの `USAGE` で読み、どれも進めない。ロールの読めないシーケンスがあっても計画は止まらず、終了コードも変わらない。
 
 ### 削除がほかの行にすること
 
@@ -507,7 +536,8 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。スクリプトが `on_insert` の値を持つときは、コメントが「but those of on_insert」と添えて、それらの値を設定が固定しないことを示す。セッションは、それらの値を自分の設定で読む。
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
-- 削除は最後に、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
+- 削除はそのあとに、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
+- 最後に、apply が進めるシーケンスと、計画が読めなかったシーケンスのそれぞれについて、文を1つ置く。その前には、文がすることを伝えるコメント行と、計画のシーケンスの行が並ぶ（[シーケンス](#シーケンス)）。文は apply が実行するものと同じである。スクリプトが動くとき、スクリプトの挿入と更新のあとで列の最大の値とシーケンスを読み、`nextval` で、100,000 個を超えて進めるときは `setval` で、シーケンスを列の先へ進める。すでに列の先にあるシーケンスは、そのままにする。計画より遅れてスクリプトが動き、その間にアプリケーションが値を取った場合がそうである。文にはシーケンスの `SELECT` と `UPDATE` が要る。それがなければ文は失敗し、スクリプトのトランザクションも失敗する。循環するシーケンスと上限が先に来るシーケンスには、コメントの行だけを置き、文は置かない。
 - 名前はすべて二重引用符で囲む。PostgreSQL のある版でそのまま書ける名前が、別の版ではキーワードでありうるからである。ふつうのテーブルには適用と同じく `ONLY` を付け、パーティションテーブルには付けない。
 - スキーマの変更を待つテーブルには文を書かない。スキーマの変更を待つ列は、そのテーブルの文から除く。
 - `on_insert` の値を持つテーブルの `INSERT` は、宣言した列のあとにその列を挙げ、すべての行にその値を与える。文の前には、2行のコメントを置く。
@@ -666,4 +696,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:49f78b744e2b6ee73bfde43f81f151056723ea86fb22ea14fcd7c9c5bcb8ce52 -->
+<!-- i18n-source: plan.md sha256:a2d47c05c412057f6d9a1b4b91b19774420c21d6fca018582778a1e7dd8eabcb -->
