@@ -72,7 +72,7 @@ func TestSchemaChanges(t *testing.T) {
 	tail := " after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
 		"run the apply again, and make schema changes before an apply, not while it runs"
 	more := func(n string) string {
-		return ", and made " + n + " to the foreign keys, the triggers, the rules, or the partitions of the tables that the deletions reach"
+		return ", and made " + n + " to the schema of the tables that the deletions reach"
 	}
 	for _, tt := range []struct {
 		name          string
@@ -83,11 +83,11 @@ func TestSchemaChanges(t *testing.T) {
 		{
 			name: "a foreign key added", snapshot: reading(one, key("orders_plan_fkey", "c", false)),
 			now:  reading(one, key("orders_plan_fkey", "c", false), key("orders_next_fkey", "n", false)),
-			want: `another session changed the schema while the apply ran: it added foreign key "orders_next_fkey" of table app.orders, which references table app.plans,` + tail,
+			want: `another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_fkey" of table app.orders, which references table app.plans,` + tail,
 		},
 		{
 			name: "a foreign key dropped", snapshot: reading(one, key("orders_plan_fkey", "c", false)), now: reading(one),
-			want: `another session changed the schema while the apply ran: it dropped foreign key "orders_plan_fkey" of table app.orders, which references table app.plans,` + tail,
+			want: `another session changed the schema while the apply ran: it dropped or renamed foreign key "orders_plan_fkey" of table app.orders, which references table app.plans,` + tail,
 		},
 		{
 			name: "the triggers of a foreign key disabled", snapshot: reading(one, key("orders_plan_fkey", "c O", false)), now: reading(one, key("orders_plan_fkey", "c D", false)),
@@ -96,7 +96,7 @@ func TestSchemaChanges(t *testing.T) {
 		},
 		{
 			name: "a trigger created", snapshot: reading(one), now: reading(one, trigger("t")),
-			want: `another session changed the schema while the apply ran: it created trigger "audit" of table app.orders` + tail,
+			want: `another session changed the schema while the apply ran: it created or renamed trigger "audit" of table app.orders` + tail,
 		},
 		{
 			name: "a trigger disabled", snapshot: reading(one, trigger("t O")), now: reading(one, trigger("t D")),
@@ -104,7 +104,7 @@ func TestSchemaChanges(t *testing.T) {
 		},
 		{
 			name: "a rule dropped", snapshot: reading(one, rule("r")), now: reading(one),
-			want: `another session changed the schema while the apply ran: it dropped rule "seen" of table app.orders` + tail,
+			want: `another session changed the schema while the apply ran: it dropped or renamed rule "seen" of table app.orders` + tail,
 		},
 		{
 			name: "a partition attached, with the key that PostgreSQL gives it and the key that it had", snapshot: reading(one, key("orders_plan_fkey", "c", false)),
@@ -119,6 +119,25 @@ func TestSchemaChanges(t *testing.T) {
 			want: "another session changed the schema while the apply ran: it detached or dropped partition app.orders_2 of table app.orders after the apply began" +
 				more("2 more changes") + ", so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
 				"run the apply again, and make schema changes before an apply, not while it runs",
+		},
+		{
+			name: "a trigger renamed", snapshot: reading(one, trigger("t")),
+			now: reading(one, schemaObject{kind: schemaTrigger, relid: 10, name: "audit_rows", def: "t", table: orders}),
+			want: `another session changed the schema while the apply ran: it dropped or renamed trigger "audit" of table app.orders after the apply began` +
+				more("1 more change") + ", so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
+				"run the apply again, and make schema changes before an apply, not while it runs",
+		},
+		{
+			name: "a deferrable unique key added, named by the constraint", snapshot: reading(one),
+			now:  reading(one, schemaObject{kind: schemaConstraint, relid: 10, name: "orders_code_key", def: "u", table: orders}),
+			want: `another session changed the schema while the apply ran: it added or renamed constraint "orders_code_key" of table app.orders` + tail,
+		},
+		{
+			name:     "a deferrable unique key changed",
+			snapshot: reading(one, schemaObject{kind: schemaConstraint, relid: 10, name: "orders_code_key", def: "u t", table: orders}),
+			now:      reading(one, schemaObject{kind: schemaConstraint, relid: 10, name: "orders_code_key", def: "u f", table: orders}),
+			want: `another session changed the schema while the apply ran: it changed constraint "orders_code_key" of table app.orders, ` +
+				"or enabled or disabled its triggers" + tail,
 		},
 		{
 			name: "a partitioned partition attached, with its own partition", snapshot: reading(one), now: reading(nested, upper, lower),
@@ -139,7 +158,7 @@ func TestSchemaChanges(t *testing.T) {
 		{
 			name: "a key on a partitioned table, with the keys that PostgreSQL made on its partitions", snapshot: reading(two, partition("(f)")),
 			now: reading(two, partition("(f)"), key("orders_plan_fkey", "c", true), key("orders_plan_fkey", "c", false)),
-			want: `another session changed the schema while the apply ran: it added foreign key "orders_plan_fkey" of table app.orders, which references table app.plans,` +
+			want: `another session changed the schema while the apply ran: it added or renamed foreign key "orders_plan_fkey" of table app.orders, which references table app.plans,` +
 				" after the apply began" + more("1 more change") + ", so the deletions may have done other than the plan shows: the apply stops before its commit, " +
 				"and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs",
 		},

@@ -81,17 +81,17 @@ func TestApplyAfterSchemaChanges(t *testing.T) {
 				{
 					name:       "a foreign key SET NULL to the table with rows to delete",
 					beforePlan: "ALTER TABLE t.orders ADD CONSTRAINT orders_next_fkey FOREIGN KEY (next_plan_id) REFERENCES m.plan ON DELETE SET NULL",
-					wantErr:    changed + `it added foreign key "orders_next_fkey" of table t.orders, which references table m.plan,` + after,
+					wantErr:    changed + `it added or renamed foreign key "orders_next_fkey" of table t.orders, which references table m.plan,` + after,
 				},
 				{
 					name:            "a trigger of a table that the deletions reach",
 					beforeDeletions: "CREATE TRIGGER audit AFTER DELETE ON t.orders FOR EACH ROW EXECUTE FUNCTION t.noop()",
-					wantErr:         changed + `it created trigger "audit" of table t.orders` + after,
+					wantErr:         changed + `it created or renamed trigger "audit" of table t.orders` + after,
 				},
 				{
 					name:            "a trigger of the table with rows to delete",
 					beforeDeletions: "CREATE TRIGGER audit AFTER DELETE ON m.plan FOR EACH ROW EXECUTE FUNCTION t.noop()",
-					wantErr:         changed + `it created trigger "audit" of table m.plan` + after,
+					wantErr:         changed + `it created or renamed trigger "audit" of table m.plan` + after,
 				},
 				{
 					name:            "the triggers of a foreign key disabled",
@@ -102,12 +102,22 @@ func TestApplyAfterSchemaChanges(t *testing.T) {
 				{
 					name:       "a rule of a table that the deletions reach",
 					beforePlan: "CREATE RULE seen AS ON DELETE TO t.orders DO ALSO NOTIFY orders_seen",
-					wantErr:    changed + `it created rule "seen" of table t.orders` + after,
+					wantErr:    changed + `it created or renamed rule "seen" of table t.orders` + after,
 				},
 				{
 					name:            "a foreign key that a table that the deletions reach holds",
 					beforeDeletions: "ALTER TABLE t.orders ADD FOREIGN KEY (note_id) REFERENCES t.notes",
-					wantErr:         changed + `it added foreign key "orders_note_id_fkey" of table t.orders, which references table t.notes,` + after,
+					wantErr:         changed + `it added or renamed foreign key "orders_note_id_fkey" of table t.orders, which references table t.notes,` + after,
+				},
+				{
+					name: "a trigger renamed", setUp: keep, beforePlan: "ALTER TRIGGER keep ON t.orders RENAME TO keep_rows",
+					wantErr: changed + `it dropped or renamed trigger "keep" of table t.orders after the apply began, ` +
+						"and made 1 more change to the schema of the tables that the deletions reach" + strings.TrimPrefix(after, " after the apply began"),
+				},
+				{
+					name:       "a deferrable unique key of a table that the deletions reach",
+					beforePlan: "ALTER TABLE t.orders ADD CONSTRAINT orders_note_key UNIQUE (note_id) DEFERRABLE",
+					wantErr:    changed + `it added or renamed constraint "orders_note_key" of table t.orders` + after,
 				},
 				{
 					name:            "a trigger of a table that the deletions do not reach",

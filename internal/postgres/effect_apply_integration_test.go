@@ -76,14 +76,14 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 				{
 					name:       "a foreign key that another transaction added",
 					concurrent: "ALTER TABLE t.audit ADD FOREIGN KEY (plan_id) REFERENCES m.plan ON DELETE CASCADE",
-					wantErr: schemaChanged + `it added foreign key "audit_plan_id_fkey" of table t.audit, which references table m.plan, after the apply began, ` +
+					wantErr: schemaChanged + `it added or renamed foreign key "audit_plan_id_fkey" of table t.audit, which references table m.plan, after the apply began, ` +
 						"so the deletions may have done other than the plan shows",
 				},
 				{
 					name:       "a partition that another transaction attached",
 					concurrent: "ALTER TABLE t.events ATTACH PARTITION t.events_2 FOR VALUES FROM (10) TO (20)",
 					wantErr: schemaChanged + "it attached or created partition t.events_2 of table t.events after the apply began, " +
-						"and made 1 more change to the foreign keys, the triggers, the rules, or the partitions of the tables that the deletions reach, " +
+						"and made 1 more change to the schema of the tables that the deletions reach, " +
 						"so the deletions may have done other than the plan shows",
 				},
 				{
@@ -192,7 +192,7 @@ func TestApplyEffectAfterConcurrentChangesOfUpdates(t *testing.T) {
 				{
 					name:       "a foreign key ON DELETE SET NULL that another transaction added",
 					concurrent: "ALTER TABLE t.orders ADD CONSTRAINT orders_alt_fkey FOREIGN KEY (alt_plan_id) REFERENCES m.plan ON DELETE SET NULL",
-					wantErr: schemaChanged + `it added foreign key "orders_alt_fkey" of table t.orders, which references table m.plan, after the apply began, ` +
+					wantErr: schemaChanged + `it added or renamed foreign key "orders_alt_fkey" of table t.orders, which references table m.plan, after the apply began, ` +
 						"so the deletions may have done other than the plan shows",
 				},
 				{
@@ -327,7 +327,7 @@ func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
 					files:      map[string]string{"m/plan.csv": "id,code\n1,basic\n"},
 					tables:     []declaration.Table{csvTable("m", "plan", "id", "code")},
 					concurrent: "ALTER TABLE m.plan ADD CONSTRAINT plan_fallback_fkey FOREIGN KEY (fallback_id) REFERENCES m.plan ON DELETE SET NULL",
-					wantErr:    schemaChanged + `it added foreign key "plan_fallback_fkey" of table m.plan, which references table m.plan, after the apply began, so`,
+					wantErr:    schemaChanged + `it added or renamed foreign key "plan_fallback_fkey" of table m.plan, which references table m.plan, after the apply began, so`,
 					dump:       []string{"m.plan"},
 				},
 				{
@@ -340,7 +340,7 @@ func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
 					files:      map[string]string{"m/item.csv": "id,kind_id\n2,1\n", "m/kind.csv": "id,code\n1,keep\n"},
 					tables:     []declaration.Table{csvTable("m", "item", "id", "kind_id"), csvTable("m", "kind", "id", "code")},
 					concurrent: "ALTER TABLE m.item ADD CONSTRAINT item_other_fkey FOREIGN KEY (other_kind) REFERENCES m.kind ON DELETE SET NULL",
-					wantErr:    schemaChanged + `it added foreign key "item_other_fkey" of table m.item, which references table m.kind, after the apply began, so`,
+					wantErr:    schemaChanged + `it added or renamed foreign key "item_other_fkey" of table m.item, which references table m.kind, after the apply began, so`,
 					dump:       []string{"m.item", "m.kind"},
 				},
 			} {

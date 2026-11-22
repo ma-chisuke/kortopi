@@ -111,7 +111,7 @@ func TestSchemaChangedDuringTheDeletionsCommand(t *testing.T) {
 					}
 					code := r.wait(t)
 					want := "kortopi: another session changed the schema while the apply ran: " +
-						`it added foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, ` +
+						`it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, ` +
 						"so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
 						"run the apply again, and make schema changes before an apply, not while it runs\n" +
 						"kortopi: nothing was changed\n"

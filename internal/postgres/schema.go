@@ -39,14 +39,17 @@ import (
 // foreign keys, the triggers, or the rules of a table.
 
 // The kinds of the rows of the query of the comparison: the server, the
-// objects in the order of the error, and the tables of the comparison.
+// objects in the order of the error, and the tables of the comparison. A
+// constraint is a unique key, a primary key, or an exclusion constraint that
+// is deferrable, whose check is a trigger.
 const (
 	schemaServer     = 0
 	schemaForeignKey = 1
 	schemaPartition  = 2
 	schemaTrigger    = 3
 	schemaRule       = 4
-	schemaTable      = 5
+	schemaConstraint = 5
+	schemaTable      = 6
 )
 
 // The bounds of the second session of an apply, whatever the settings say:
@@ -104,8 +107,11 @@ const detachPending = "(t)"
 // or that they hold, with their actions, their columns, their operators,
 // whether they are deferred and, from PostgreSQL 18, enforced, and whether
 // their triggers are enabled; the partitions of each partitioned table, and
-// whether their detach has begun; the triggers, but those of foreign keys;
-// and the rules. A first row names the server and the database, and a row
+// whether their detach has begun; the triggers, but those of foreign keys
+// and of the other constraints; the rules; and the unique keys, the primary
+// keys, and the exclusion constraints that are deferrable, by the name of the
+// constraint and with the triggers that check them, which PostgreSQL names
+// by their OID. A first row names the server and the database, and a row
 // for each table names the tables. Both connections run the same query: the
 // one of the apply sees its snapshot, the second one the newest catalogs.
 // Every column of the definitions is a column of a catalog, and no function
@@ -141,7 +147,14 @@ func schemaSQL(major int) string {
 					tg.tgnargs, tg.tgattr, tg.tgargs, tg.tgqual::pg_catalog.text, tg.tgoldtable, tg.tgnewtable)::pg_catalog.text
 			FROM pg_catalog.pg_trigger AS tg
 			WHERE tg.tgrelid IN (SELECT relid FROM t)
-				AND NOT EXISTS (SELECT FROM pg_catalog.pg_constraint AS fk WHERE fk.oid = tg.tgconstraint AND fk.contype = 'f')
+				AND NOT EXISTS (SELECT FROM pg_catalog.pg_constraint AS ck WHERE ck.oid = tg.tgconstraint AND ck.contype IN ('f', 'u', 'p', 'x'))
+			UNION ALL
+			SELECT ` + strconv.Itoa(schemaConstraint) + `, co.conrelid, 0::pg_catalog.oid, co.conname::pg_catalog.text, co.conparentid <> 0,
+				ROW(co.contype, co.conkey, co.conexclop, co.condeferrable, co.condeferred,
+					ARRAY(SELECT ROW(tg.tgtype, tg.tgenabled, tg.tgdeferrable, tg.tginitdeferred)::pg_catalog.text FROM pg_catalog.pg_trigger AS tg
+						WHERE tg.tgconstraint = co.oid ORDER BY 1))::pg_catalog.text
+			FROM pg_catalog.pg_constraint AS co
+			WHERE co.contype IN ('u', 'p', 'x') AND co.condeferrable AND co.conrelid IN (SELECT relid FROM t)
 			UNION ALL
 			SELECT ` + strconv.Itoa(schemaRule) + `, r.ev_class, 0::pg_catalog.oid, r.rulename::pg_catalog.text, false,
 				ROW(r.ev_type, r.ev_enabled, r.is_instead, r.ev_qual::pg_catalog.text, r.ev_action::pg_catalog.text)::pg_catalog.text
@@ -505,10 +518,12 @@ func schemaChanges(snapshot, now schemaReading) []schemaChange {
 	return changes
 }
 
-// text says what another session did to the object.
+// text says what another session did to the object. The comparison goes by
+// name, so a foreign key, a trigger, a rule, or a constraint that another
+// session renamed is one that it dropped and one that it added, and the text
+// says that either can be a rename.
 func (c schemaChange) text() string {
 	o := c.object
-	verb := "changed"
 	switch {
 	case c.added && o.kind == schemaPartition:
 		return fmt.Sprintf("it attached or created partition %s of table %s", o.otherTable, o.table)
@@ -518,29 +533,37 @@ func (c schemaChange) text() string {
 		return fmt.Sprintf("it began to detach partition %s of table %s", o.otherTable, o.table)
 	case o.kind == schemaPartition:
 		return fmt.Sprintf("it changed partition %s of table %s", o.otherTable, o.table)
-	case c.added && o.kind == schemaForeignKey:
-		verb = "added"
-	case c.added:
-		verb = "created"
-	case c.removed:
-		verb = "dropped"
 	}
+	verb := "changed"
+	switch {
+	case c.added && (o.kind == schemaForeignKey || o.kind == schemaConstraint):
+		verb = "added or renamed"
+	case c.added:
+		verb = "created or renamed"
+	case c.removed:
+		verb = "dropped or renamed"
+	}
+	changed := !c.added && !c.removed
+	var what string
 	switch o.kind {
 	case schemaForeignKey:
-		what := fmt.Sprintf("it %s foreign key %q of table %s, which references table %s", verb, o.name, o.table, o.otherTable)
-		if !c.added && !c.removed {
+		what = fmt.Sprintf("it %s foreign key %q of table %s, which references table %s", verb, o.name, o.table, o.otherTable)
+		if changed {
+			what += ", or enabled or disabled its triggers"
+		}
+		return what
+	case schemaConstraint:
+		what = fmt.Sprintf("it %s constraint %q of table %s", verb, o.name, o.table)
+		if changed {
 			what += ", or enabled or disabled its triggers"
 		}
 		return what
 	case schemaTrigger:
-		what := fmt.Sprintf("it %s trigger %q of table %s", verb, o.name, o.table)
-		if !c.added && !c.removed {
-			what += ", or enabled or disabled it"
-		}
-		return what
+		what = fmt.Sprintf("it %s trigger %q of table %s", verb, o.name, o.table)
+	default:
+		what = fmt.Sprintf("it %s rule %q of table %s", verb, o.name, o.table)
 	}
-	what := fmt.Sprintf("it %s rule %q of table %s", verb, o.name, o.table)
-	if !c.added && !c.removed {
+	if changed {
 		what += ", or enabled or disabled it"
 	}
 	return what
@@ -560,7 +583,7 @@ func (e *schemaError) Error() string {
 	}
 	more := ""
 	if n := len(e.changes) - 1; n > 0 {
-		more = fmt.Sprintf(", and made %d more %s to the foreign keys, the triggers, the rules, or the partitions of the tables that the deletions reach",
+		more = fmt.Sprintf(", and made %d more %s to the schema of the tables that the deletions reach",
 			n, plural(int64(n), "change", "changes"))
 	}
 	return fmt.Sprintf("another session changed the schema while the apply ran: %s after the apply began%s, "+
