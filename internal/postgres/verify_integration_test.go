@@ -708,9 +708,59 @@ func (s *cancelingSession) DiffAgain(ctx context.Context, req plan.DiffRequest) 
 	return s.Session.DiffAgain(ctx, req)
 }
 
+// timeoutSession is a session of an apply whose comparison before the commit
+// runs with a statement_timeout of 1 millisecond.
+type timeoutSession struct {
+	*Session
+}
+
+func (s *timeoutSession) DiffAgain(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
+	if _, err := s.tx.Exec(ctx, "SET LOCAL statement_timeout = 1"); err != nil {
+		return plan.TableDiff{}, err
+	}
+	return s.Session.DiffAgain(ctx, req)
+}
+
+// A statement_timeout that ends a query of the comparison before the commit
+// gets an error that says that it came from that comparison, that the apply
+// stops and changes nothing, and that the comparison needs more time, without
+// a wait for a lock, which it does not need: it reads the tables that the plan
+// read. The table of mode sync has many rows that the declaration lacks, which
+// the comparison reads, so that it outlasts the timeout.
+func TestComparisonAgainTimedOut(t *testing.T) {
+	servers := eachServer(t)
+	for _, srv := range servers[len(servers)-1:] {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (id int PRIMARY KEY, v text);
+				INSERT INTO app.t SELECT g, 'a' FROM generate_series(1, 100000) AS g; ANALYZE app.t;`)
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,b\n"})
+			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings := config.New(map[declaration.TableName]config.Table{{Schema: "app", Name: "t"}: {Mode: config.ModeSync}})
+			r, err := apply.Run(t.Context(), &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}, settings,
+				&timeoutSession{Session: s}, apply.Options{})
+			if closeErr := s.Close(context.Background()); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			prefix := "the check before the commit, which compares table app.t again, failed, so the apply stops, and nothing was changed: find the rows to "
+			suffix := "canceling statement due to statement timeout (SQLSTATE 57014): the statement was cancelled, by statement_timeout or by another session: " +
+				"run the apply again, and allow the statement more time if statement_timeout ended it"
+			if r != nil || err == nil || !strings.HasPrefix(err.Error(), prefix) || !strings.HasSuffix(err.Error(), suffix) {
+				t.Errorf("apply = %v, %v, want the timeout of the comparison, as %q ... %q", r, err, prefix, suffix)
+			}
+			if got := db.Query(t, "SELECT v FROM app.t WHERE id = 1"); fmt.Sprint(got) != "[[a]]" {
+				t.Errorf("row 1 after the timeout: %v, want [[a]]", got)
+			}
+		})
+	}
+}
+
 // An error of a query of the comparison before the commit, here of an
-// interrupt, says that it came from that comparison and that nothing was
-// written, and the apply rolls back.
+// interrupt, says that it came from that comparison, that the apply stops,
+// and that nothing was changed, and the apply rolls back.
 func TestComparisonAgainInterrupted(t *testing.T) {
 	servers := eachServer(t)
 	for _, srv := range servers[len(servers)-1:] {
@@ -728,7 +778,7 @@ func TestComparisonAgainInterrupted(t *testing.T) {
 			if closeErr := s.Close(context.Background()); closeErr != nil {
 				t.Fatal(closeErr)
 			}
-			want := "the check before the commit, which compares table app.t again, failed, so nothing was written: find the rows to insert into table app.t: "
+			want := "the check before the commit, which compares table app.t again, failed, so the apply stops, and nothing was changed: find the rows to insert into table app.t: "
 			if r != nil || !errors.Is(err, context.Canceled) || !strings.HasPrefix(err.Error(), want) {
 				t.Errorf("apply = %v, %v, want the interrupt of the comparison, as %q", r, err, want)
 			}

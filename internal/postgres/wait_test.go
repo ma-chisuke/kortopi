@@ -78,6 +78,35 @@ func TestExplainWait(t *testing.T) {
 		t.Errorf("explainWait of no error = %v", none)
 	}
 
+	// The comparison before the commit reads tables that the apply holds
+	// locks on already: a cancel ends it while it works.
+	for _, tt := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want string
+	}{
+		{
+			name: "statement timeout in the comparison before the commit", ctx: t.Context(), err: wrap(cancel),
+			want: "create the temporary table of table s.t: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
+				"the statement was cancelled, by statement_timeout or by another session: " +
+				"run the apply again, and allow the statement more time if statement_timeout ended it",
+		},
+		{
+			name: "lock timeout in the comparison before the commit", ctx: t.Context(), err: wrap(lock),
+			want: "create the temporary table of table s.t: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
+				"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as lock_timeout of the session allows: " +
+				"run the apply again once that session has released the lock, or allow the wait more time with --lock-timeout",
+		},
+		{name: "after an interrupt", ctx: done, err: wrap(cancel), want: wrap(cancel).Error()},
+	} {
+		err := tt.err
+		(&Session{apply: true}).explainRead(tt.ctx, &err)
+		if err.Error() != tt.want || !errors.Is(err, tt.err) {
+			t.Errorf("%s: explainRead =\n%s\nwant\n%s", tt.name, err, tt.want)
+		}
+	}
+
 	stopped := "run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, " +
 		"as an apply that was stopped may leave it, and end it with pg_terminate_backend"
 	// The error names the limit that ended the wait: a lock timeout, of the

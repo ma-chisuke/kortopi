@@ -145,14 +145,14 @@ func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c 
 // write sets again after it (ADR-0037). It reads the declared columns, as
 // Diff does, and changes no row.
 func (s *Session) DiffAgain(ctx context.Context, req plan.DiffRequest) (_ plan.TableDiff, err error) {
-	defer s.explainWait(ctx, &err)
+	defer s.explainRead(ctx, &err)
 	lt, err := s.loadedFor(req)
 	if err != nil {
 		return plan.TableDiff{}, err
 	}
 	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync)
 	if err != nil {
-		return plan.TableDiff{}, fmt.Errorf("the check before the commit, which compares table %s again, failed, so nothing was written: %w", req.Table.Name, err)
+		return plan.TableDiff{}, fmt.Errorf("the check before the commit, which compares table %s again, failed, so the apply stops, and nothing was changed: %w", req.Table.Name, err)
 	}
 	return diff, nil
 }

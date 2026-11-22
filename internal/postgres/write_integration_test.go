@@ -659,7 +659,7 @@ func TestApplyWhenRowLevelSecurityComesToApply(t *testing.T) {
 							t.Errorf("%s after the role lost BYPASSRLS = %+v, %v, want the error of the pick, or a count that stops the apply", kind, c, err)
 						}
 						_, againErr := s.DiffAgain(ctx, req)
-						if againErr == nil || !strings.HasPrefix(againErr.Error(), "the check before the commit, which compares table app.items again, failed, so nothing was written: ") ||
+						if againErr == nil || !strings.HasPrefix(againErr.Error(), "the check before the commit, which compares table app.items again, failed, so the apply stops, and nothing was changed: ") ||
 							!strings.Contains(againErr.Error(), "query would be affected by row-level security policy") {
 							t.Errorf("DiffAgain after the role lost BYPASSRLS: %v, want the error of the policy", againErr)
 						}
