@@ -416,3 +416,52 @@ func TestJoinNotEnded(t *testing.T) {
 		t.Errorf("none = %v", err)
 	}
 }
+
+// A constraint that fails when the check after the deletions runs the
+// constraints deferred to the commit gets advice that is true at that
+// point, where every write of the apply has run, its deletions among them,
+// for each kind of constraint that can fail there (ADR-0048).
+func TestDeferredError(t *testing.T) {
+	after := "deferred to the commit failed when the apply checked it after every write, its deletions among them: "
+	for _, tt := range []struct {
+		code, want string
+	}{
+		{
+			code: "23503",
+			want: "a foreign key " + after + "a row refers to a row that does not exist, or a row that the apply deleted is still referenced: " +
+				"declare the referenced row, or keep in the declaration a row that other rows reference",
+		},
+		{
+			code: "23505",
+			want: "a unique key or a primary key " + after + "two rows hold the same value of the key: change the declared value, or the row of the database that holds it",
+		},
+		{
+			code: "23P01",
+			want: "an exclusion constraint " + after + "two rows conflict on it: change the declared values, or the row of the database that conflicts with them",
+		},
+		{
+			code: "P0001",
+			want: "a constraint trigger deferred to the commit failed when the apply ran it after every write, its deletions among them: " +
+				"check the constraint triggers of the tables that the apply writes, and what their functions read and write",
+		},
+		{code: "40P01", want: ErrConflict.Error()},
+	} {
+		t.Run(tt.code, func(t *testing.T) {
+			pgErr := &pgconn.PgError{Code: tt.code, Message: "m"}
+			err := deferredError(deferredWhat, pgErr)
+			if want := deferredWhat + ": m: " + tt.want; err.Error() != want {
+				t.Errorf("error:\n%s\nwant:\n%s", err, want)
+			}
+			var got *pgconn.PgError
+			if !errors.As(err, &got) || got != pgErr {
+				t.Error("the error of PostgreSQL is lost")
+			}
+		})
+	}
+	// A statement of the batch other than SET CONSTRAINTS gets no advice of
+	// a constraint.
+	other := "set the settings of the session to " + deferredWhat
+	if err := deferredError(other, &pgconn.PgError{Code: "23505", Message: "m"}); err.Error() != other+": m" {
+		t.Errorf("error of another statement = %s", err)
+	}
+}

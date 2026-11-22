@@ -126,8 +126,46 @@ func (s *Session) runDeferred(ctx context.Context) error {
 	if !errors.As(err, &pgErr) {
 		return fmt.Errorf("%s: %w", failed, err)
 	}
-	return &writeError{statement: failed, err: pgErr, advice: adviceFor(pgErr, deferredWhat, declaration.TableName{})}
+	return deferredError(failed, pgErr)
 }
+
+// deferredError is the error of the statement failed of the batch of
+// runDeferred. A constraint that fails at SET CONSTRAINTS gets advice that
+// holds there, where every write of the apply has run, its deletions among
+// them, and the advice of a write, which can assume that a later write of
+// the apply changes the rows, would not: a foreign key, a unique key or a
+// primary key, an exclusion constraint, and a constraint trigger, which
+// raises any error. The other statements of the batch set the settings.
+func deferredError(failed string, pgErr *pgconn.PgError) error {
+	if failed != deferredWhat {
+		return &writeError{statement: failed, err: pgErr}
+	}
+	after := "deferred to the commit failed when the apply checked it after every write, its deletions among them: "
+	var advice string
+	switch pgErr.Code {
+	case "40001", "40P01":
+		advice = ErrConflict.Error()
+	case foreignKeyViolation:
+		advice = "a foreign key " + after + "a row refers to a row that does not exist, or a row that the apply deleted is still referenced: " +
+			"declare the referenced row, or keep in the declaration a row that other rows reference"
+	case uniqueViolation:
+		advice = "a unique key or a primary key " + after + "two rows hold the same value of the key: change the declared value, or the row of the database that holds it"
+	case exclusionViolation:
+		advice = "an exclusion constraint " + after + "two rows conflict on it: change the declared values, or the row of the database that conflicts with them"
+	default:
+		advice = "a constraint trigger deferred to the commit failed when the apply ran it after every write, its deletions among them: " +
+			"check the constraint triggers of the tables that the apply writes, and what their functions read and write"
+	}
+	return &writeError{statement: failed, err: pgErr, advice: advice}
+}
+
+// The SQLSTATE of PostgreSQL for a foreign key, a unique key, and an
+// exclusion constraint that a statement breaks.
+const (
+	foreignKeyViolation = "23503"
+	uniqueViolation     = "23505"
+	exclusionViolation  = "23P01"
+)
 
 // PrepareDeletes returns an error, before the first write of an apply that
 // deletes, when the session cannot count the rows that its transaction

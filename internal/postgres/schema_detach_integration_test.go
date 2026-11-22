@@ -182,7 +182,9 @@ func TestDeferredKeyBeforeADetach(t *testing.T) {
 			}
 			want := `run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" ` +
 				`(detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): ` +
-				"a foreign key deferred to the commit failed when the apply checked it before its commit: a row refers to a row that does not exist, or a deleted row is still referenced"
+				"a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: " +
+				"a row refers to a row that does not exist, or a row that the apply deleted is still referenced: " +
+				"declare the referenced row, or keep in the declaration a row that other rows reference"
 			if err.Error() != want {
 				t.Errorf("check: %v\nwant %s", err, want)
 			}
@@ -190,6 +192,44 @@ func TestDeferredKeyBeforeADetach(t *testing.T) {
 				t.Fatal(err)
 			}
 			if got := db.Query(t, detachRows); !slices.EqualFunc(got, before, slices.Equal) {
+				t.Errorf("rows after the failed apply: %v, want %v", got, before)
+			}
+		})
+	}
+}
+
+// A unique key deferred to the commit that two declared rows break fails
+// when the check after the deletions runs the constraints deferred to the
+// commit, with advice that holds once every write of the apply has run, its
+// deletions among them, and nothing changes (ADR-0048).
+func TestDeferredUniqueKeyAfterTheDeletions(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA m;
+				CREATE TABLE m.plan (id int PRIMARY KEY, code text NOT NULL CONSTRAINT plan_code_key UNIQUE DEFERRABLE INITIALLY DEFERRED);
+				INSERT INTO m.plan VALUES (1, 'basic'), (2, 'legacy');
+			`)
+			dir := writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n3,extra\n4,extra\n", "kortopi.toml": "[tables.\"m.plan\"]\nmode = \"sync\"\n"})
+			decl, err := declaration.Load(dir, Parser{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, err := config.Load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := db.Query(t, "SELECT string_agg(id || ':' || code, ' ' ORDER BY id) FROM m.plan")
+			_, err = applyThrough(t, db.Config, decl, settings, true)
+			want := `run the constraints deferred to the commit: duplicate key value violates unique constraint "plan_code_key" ` +
+				`(detail: Key (code)=(extra) already exists.) (constraint: plan_code_key): a unique key or a primary key deferred to the commit failed ` +
+				"when the apply checked it after every write, its deletions among them: two rows hold the same value of the key: " +
+				"change the declared value, or the row of the database that holds it"
+			if err == nil || err.Error() != want {
+				t.Errorf("apply = %v\nwant %s", err, want)
+			}
+			if got := db.Query(t, "SELECT string_agg(id || ':' || code, ' ' ORDER BY id) FROM m.plan"); !slices.EqualFunc(got, before, slices.Equal) {
 				t.Errorf("rows after the failed apply: %v, want %v", got, before)
 			}
 		})
