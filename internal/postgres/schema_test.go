@@ -62,6 +62,13 @@ func TestSchemaChanges(t *testing.T) {
 	}
 	one := []uint32{10, 20}
 	two := []uint32{10, 12, 20}
+	// A partitioned table attached as a partition of app.orders, with a
+	// partition of its own, and the tables of the comparison with them.
+	aOrders := declaration.TableName{Schema: "app", Name: "a_orders"}
+	aOrders1 := declaration.TableName{Schema: "app", Name: "a_orders_1"}
+	upper := schemaObject{kind: schemaPartition, relid: 10, other: 30, def: "(f)", table: orders, otherTable: aOrders}
+	lower := schemaObject{kind: schemaPartition, relid: 30, other: 31, def: "(f)", table: aOrders, otherTable: aOrders1}
+	nested := []uint32{10, 20, 30, 31}
 	tail := " after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
 		"run the apply again, and make schema changes before an apply, not while it runs"
 	more := func(n string) string {
@@ -111,6 +118,18 @@ func TestSchemaChanges(t *testing.T) {
 			now: reading(one, key("orders_plan_fkey", "c", false)),
 			want: "another session changed the schema while the apply ran: it detached or dropped partition app.orders_2 of table app.orders after the apply began" +
 				more("2 more changes") + ", so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
+				"run the apply again, and make schema changes before an apply, not while it runs",
+		},
+		{
+			name: "a partitioned partition attached, with its own partition", snapshot: reading(one), now: reading(nested, upper, lower),
+			want: "another session changed the schema while the apply ran: it attached or created partition app.a_orders of table app.orders after the apply began" +
+				more("1 more change") + ", so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
+				"run the apply again, and make schema changes before an apply, not while it runs",
+		},
+		{
+			name: "a partitioned partition detached, with its own partition", snapshot: reading(nested, upper, lower), now: reading(one),
+			want: "another session changed the schema while the apply ran: it detached or dropped partition app.a_orders of table app.orders after the apply began" +
+				more("1 more change") + ", so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
 				"run the apply again, and make schema changes before an apply, not while it runs",
 		},
 		{

@@ -452,9 +452,10 @@ type schemaChange struct {
 // first, then the objects that PostgreSQL made from them on partitions, such
 // as the foreign keys that it gives a partition that it attaches, and last
 // the objects of a partition that came or went with the tables of the
-// comparison, which an attach or a detach brings or takes away with the
-// partition; then by kind, by table, and by name. The error names the first
-// alone, so a partition that came or went is named, and not its objects.
+// comparison, its own partitions among them, which an attach or a detach
+// brings or takes away with the partition; then by kind, by table, and by
+// name. The error names the first alone, so a partition that came or went is
+// named, and not its objects.
 func schemaChanges(snapshot, now schemaReading) []schemaChange {
 	var changes []schemaChange
 	for k, o := range now.objects {
@@ -473,10 +474,12 @@ func schemaChanges(snapshot, now schemaReading) []schemaChange {
 	}
 	moved := func(relid uint32) bool { return snapshot.tables[relid] != now.tables[relid] }
 	// rank sorts an object of a partition that came or went last, and an
-	// object that PostgreSQL made from another before it.
+	// object that PostgreSQL made from another before it. The partitions of
+	// a partitioned partition that came or went are objects of it too: the
+	// statement named the partition above them.
 	rank := func(o schemaObject) int {
 		switch {
-		case o.kind != schemaPartition && (moved(o.relid) || o.kind == schemaForeignKey && moved(o.other)):
+		case moved(o.relid) || o.kind == schemaForeignKey && moved(o.other):
 			return 2
 		case o.derived:
 			return 1
