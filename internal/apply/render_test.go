@@ -65,10 +65,10 @@ var (
 		Sequences: []SequenceMove{
 			{Table: tn("billing.fees"), Sequence: plan.Sequence{Column: "id", Name: feesTable.Sequences[0].Name, Next: "3", Goal: "5", After: "23"}},
 			{Table: tn("billing.fees"), Sequence: plan.Sequence{
-				Column: "code", Name: feesTable.Sequences[1].Name, Next: "7", Goal: "100008", After: "50007",
+				Column: "code", Name: feesTable.Sequences[1].Name, Next: "7", Goal: "90008", After: "50007",
 				Stays: "the statement that moves it failed: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
 					"statement_timeout of the session, or another session, cancelled the statement",
-				Advice: "take 50001 values from it, with " + nextvalOf("fee_codes", 50001),
+				Advice: "take 40001 values from it, with " + nextvalOf("fee_codes", 40001),
 			}},
 			{Table: tn("billing.tax_rates"), Sequence: taxRatesTable.Sequences[0]},
 		},
@@ -193,9 +193,9 @@ func TestSequenceNotes(t *testing.T) {
 			Stays: "the statement that moves it failed: lock timeout; and the read after it failed: lock timeout",
 		}})
 	want := []string{
-		"note: sequence billing.fee_codes of column code of table billing.fees: next value 7 -> 50007, not to 100008: " +
+		"note: sequence billing.fee_codes of column code of table billing.fees: next value 7 -> 50007, not to 90008: " +
 			"the statement that moves it failed: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
-			"statement_timeout of the session, or another session, cancelled the statement: take 50001 values from it, with " + nextvalOf("fee_codes", 50001),
+			"statement_timeout of the session, or another session, cancelled the statement: take 40001 values from it, with " + nextvalOf("fee_codes", 40001),
 		"note: sequence billing.tax_rates_id_seq of column id of table billing.tax_rates: next value 3, not moved to 4: " +
 			"the role may not take values from the sequence: grant the role USAGE on sequence billing.tax_rates_id_seq, " +
 			"or take 1 value from it as a role that may, with " + nextvalOf("tax_rates_id_seq", 1),

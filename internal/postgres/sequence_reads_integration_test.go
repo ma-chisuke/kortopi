@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -156,6 +157,44 @@ func TestSequenceReplacedDuringTheRun(t *testing.T) {
 			}
 			if got := db.Query(t, "SELECT pg_catalog.pg_get_serial_sequence('app.t', 'id') || ' ' || count(*) FROM app.t"); fmt.Sprint(got) != "[[app.t_id_seq_old 3]]" {
 				t.Errorf("sequence of the column and rows after the apply: %v, want the renamed sequence and the rows written", got)
+			}
+		})
+	}
+}
+
+// An interrupt during the read after a move stops the apply, which rolls
+// its rows back. The move ran, so the sequence moved forward, to a value
+// that the apply could not read, and the error names it (ADR-0045).
+func TestSequenceReadAfterTheMoveInterrupted(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (id serial PRIMARY KEY, v text); INSERT INTO app.t (v) VALUES ('a'), ('b');`)
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,a\n2,b\n10,c\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}
+			a, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			a.sequenceHook = func(_ context.Context, step string, _ pgx.Tx) error {
+				if step == "after" {
+					cancel()
+				}
+				return nil
+			}
+			r, err := apply.Run(ctx, decl, nil, a, apply.Options{})
+			_ = a.Close(context.Background())
+			var moved *apply.SequencesMovedError
+			if r != nil || !errors.As(err, &moved) || len(moved.Moved) != 1 || !moved.Moved[0].Unknown || !moved.Moved[0].Ran {
+				t.Fatalf("apply = %+v, %#v, want the interrupt, with the sequence that moved to a value not known", r, err)
+			}
+			if got := db.Query(t, "SELECT count(*)::text FROM app.t"); fmt.Sprint(got) != "[[2]]" {
+				t.Errorf("rows after the interrupt: %v, want the rows of the application alone", got)
+			}
+			if got := nextValue(t, db, "app.t_id_seq"); got != 11 {
+				t.Errorf("next value after the interrupt = %d, want 11, where the move took it", got)
 			}
 		})
 	}
