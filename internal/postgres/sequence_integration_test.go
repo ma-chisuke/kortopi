@@ -499,11 +499,11 @@ func TestSequencesStayAfterAnInterruptBeforeTheMove(t *testing.T) {
 	}
 }
 
-// A commit that fails after the moves leaves the sequences moved, and the
-// error says so: a rollback does not move a sequence back (ADR-0045).
-func TestSequencesStayMovedAfterAFailedCommit(t *testing.T) {
-	servers := eachServer(t)
-	for _, srv := range servers[len(servers)-1:] {
+// A constraint deferred to the commit runs before the first move, so that
+// one that fails stops the apply before any sequence moves, with the advice
+// that the commit gives for it (ADR-0045).
+func TestDeferredConstraintsRunBeforeTheMoves(t *testing.T) {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)
 			db.Exec(t, `CREATE SCHEMA app;
@@ -513,7 +513,50 @@ func TestSequencesStayMovedAfterAFailedCommit(t *testing.T) {
 			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "p")}}
 			r, err := applyThrough(t, db.Config, decl, nil, false)
 			var moved *apply.SequencesMovedError
-			if r != nil || !errors.As(err, &moved) || len(moved.Moved) != 1 || moved.Moved[0].Goal != "6" {
+			want := `check the deferred constraints before the moves of the sequences: insert or update on table "t" violates foreign key constraint "t_p_fkey"`
+			if r != nil || err == nil || errors.As(err, &moved) || !strings.Contains(err.Error(), want) ||
+				!strings.HasSuffix(err.Error(), "a deferred foreign key failed before the moves of the sequences, as it would at the commit: "+
+					"a row refers to a row that does not exist, or a deleted row is still referenced") {
+				t.Fatalf("apply = %v, %v, want the error of the deferred foreign key, and no sequence moved", r, err)
+			}
+			got := db.Query(t, `SELECT count(*)::text FROM app.t UNION ALL SELECT last_value || ' ' || is_called FROM app.t_id_seq`)
+			if fmt.Sprint(got) != "[[0] [1 false]]" {
+				t.Errorf("rows and sequence after the failed apply: %v, want no row and the sequence where it was", got)
+			}
+		})
+	}
+}
+
+// failingCommitSession is a session of an apply whose transaction fails
+// right before its commit, after the moves, as a commit that PostgreSQL
+// rejects.
+type failingCommitSession struct {
+	*Session
+}
+
+func (s *failingCommitSession) Commit(ctx context.Context) error {
+	_, _ = s.tx.Exec(ctx, "SELECT 1 / 0")
+	return s.Session.Commit(ctx)
+}
+
+// A commit that fails after the moves leaves the sequences moved, and the
+// error says so: a rollback does not move a sequence back (ADR-0045).
+func TestSequencesStayMovedAfterAFailedCommit(t *testing.T) {
+	servers := eachServer(t)
+	for _, srv := range servers[len(servers)-1:] {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (id serial PRIMARY KEY, v text);`)
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n5,a\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}
+			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := apply.Run(t.Context(), decl, nil, &failingCommitSession{Session: s}, apply.Options{})
+			_ = s.Close(context.Background())
+			var moved *apply.SequencesMovedError
+			if r != nil || !errors.As(err, &moved) || len(moved.Moved) != 1 || moved.Moved[0].After != "6" {
 				t.Fatalf("apply = %v, %#v, want the error of the commit with the sequence moved to 6", r, err)
 			}
 			got := db.Query(t, `SELECT count(*)::text FROM app.t UNION ALL SELECT nextval('app.t_id_seq')::text`)

@@ -143,6 +143,7 @@ func TestWriteError(t *testing.T) {
 		{"update of a referenced row", &pgconn.PgError{Code: "23503", TableName: "other"}, "update", "the row is still referenced"},
 		{"row to delete", &pgconn.PgError{Code: "23503", TableName: "other"}, "delete from", "the row is still referenced"},
 		{"deferred at the commit", &pgconn.PgError{Code: "23503"}, "commit", "a deferred foreign key failed at the commit"},
+		{"deferred before the moves", &pgconn.PgError{Code: "23503"}, checkDeferredVerb, "a deferred foreign key failed before the moves of the sequences, as it would at the commit"},
 		{"unique", &pgconn.PgError{Code: "23505"}, "insert into", "the row may be one that this apply deletes later, " +
 			"or one that it leaves in place without --allow-delete, and an apply inserts before it deletes: delete that row in an earlier apply"},
 		{"check", &pgconn.PgError{Code: "23514"}, "update", "breaks a CHECK constraint"},

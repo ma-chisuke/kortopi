@@ -177,6 +177,10 @@ type Session struct {
 	pid         int32
 	// commitSent is true once the commit has gone to the server.
 	commitSent bool
+	// deferredChecked is true once the apply has run the constraints that
+	// wait for the commit, before its first move of a sequence
+	// (checkDeferred).
+	deferredChecked bool
 	// beforeMove, when it is set, runs in the savepoint of the move of each
 	// sequence, right before its statement, for the tests of a move that
 	// PostgreSQL ends part way or that an interrupt stops.

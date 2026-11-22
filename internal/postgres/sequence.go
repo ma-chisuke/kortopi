@@ -476,6 +476,9 @@ func (s *Session) MoveSequences(ctx context.Context, name declaration.TableName,
 	if !ok {
 		return nil, fmt.Errorf("table %s: Diff has not loaded its declared rows", name)
 	}
+	if err := s.checkDeferred(ctx); err != nil {
+		return nil, err
+	}
 	out := make([]plan.Sequence, 0, len(sequences))
 	for _, seq := range sequences {
 		col, ok := lt.meta.column(seq.Column)
@@ -499,6 +502,35 @@ func (s *Session) MoveSequences(ctx context.Context, name declaration.TableName,
 		out = append(out, done)
 	}
 	return out, nil
+}
+
+// checkDeferred runs, once, the constraints that wait for the commit before
+// the first move of a sequence (ADR-0045): the foreign keys that the apply
+// deferred, and the constraints that are INITIALLY DEFERRED. A move is not
+// rolled back, so a constraint that would fail the commit fails the apply
+// here, before any sequence moved, with the advice that the commit gives
+// for it. SET CONSTRAINTS ALL IMMEDIATE runs them in the settings of the
+// session, as the commit would, and the settings are pinned again after it.
+// It comes after every check of the apply, which so sees what it saw
+// before.
+func (s *Session) checkDeferred(ctx context.Context) error {
+	if s.deferredChecked {
+		return nil
+	}
+	b := &pgconn.Batch{}
+	queueSettings(b, s.sessionSettings)
+	b.ExecParams("SET CONSTRAINTS ALL IMMEDIATE", nil, nil, nil, nil)
+	queueSettings(b, pinnedForWrites())
+	if _, err := s.tx.Conn().PgConn().ExecBatch(ctx, b).ReadAll(); err != nil {
+		var pgErr *pgconn.PgError
+		if ctx.Err() == nil && errors.As(err, &pgErr) && pgErr.SeverityUnlocalized != "FATAL" && pgErr.SeverityUnlocalized != "PANIC" {
+			return &writeError{statement: "check the deferred constraints before the moves of the sequences", err: pgErr,
+				advice: adviceFor(pgErr, checkDeferredVerb, declaration.TableName{}), conflict: conflict(pgErr)}
+		}
+		return fmt.Errorf("check the deferred constraints before the moves of the sequences: %w", err)
+	}
+	s.deferredChecked = true
+	return nil
 }
 
 // moveOne moves one sequence, as MoveSequences says, and returns it with

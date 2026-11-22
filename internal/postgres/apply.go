@@ -429,6 +429,14 @@ func conflict(err *pgconn.PgError) bool {
 	return err.Code == "40001" || err.Code == "40P01"
 }
 
+// deferredForeignKey says what a foreign key that fails when its deferred
+// check runs found.
+const deferredForeignKey = "a row refers to a row that does not exist, or a deleted row is still referenced"
+
+// checkDeferredVerb is the verb of adviceFor for the check of the deferred
+// constraints before the first move of a sequence (checkDeferred).
+const checkDeferredVerb = "check the deferred constraints"
+
 // adviceFor says what to do about the error of PostgreSQL in the statement
 // verb on table, for the common cases.
 func adviceFor(err *pgconn.PgError, verb string, table declaration.TableName) string {
@@ -438,8 +446,11 @@ func adviceFor(err *pgconn.PgError, verb string, table declaration.TableName) st
 	case "23503":
 		// The table of the error is the referencing table: for a row to
 		// delete, or for an update of a referenced value, it is another table.
-		if verb == "commit" {
-			return "a deferred foreign key failed at the commit: a row refers to a row that does not exist, or a deleted row is still referenced"
+		switch verb {
+		case "commit":
+			return "a deferred foreign key failed at the commit: " + deferredForeignKey
+		case checkDeferredVerb:
+			return "a deferred foreign key failed before the moves of the sequences, as it would at the commit: " + deferredForeignKey
 		}
 		if verb == "delete from" || (verb == "update" && err.TableName != table.Name) {
 			return "the row is still referenced by other rows: change or remove those rows first, or keep the row in the declaration"

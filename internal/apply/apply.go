@@ -77,8 +77,9 @@ type Database interface {
 	// partition that another transaction added during the apply, a trigger,
 	// or a rule of a table that the deletions reach could make them do. An
 	// error stops the apply, which then rolls back. Nothing that changes rows
-	// runs between it and Commit: DiffAgain and CountLeftOut read, and
-	// MoveSequences moves sequences alone.
+	// runs between it and Commit but what the commit would run: DiffAgain
+	// and CountLeftOut read, and MoveSequences runs the deferred
+	// constraints, which the commit would run, and moves sequences.
 	CheckEffect(ctx context.Context) error
 
 	// DiffAgain compares the declared rows that Diff loaded for the table of
@@ -113,7 +114,10 @@ type Database interface {
 	// and never back (ADR-0045). The apply calls it last before Commit,
 	// after the comparison before the commit, because a move is not rolled
 	// back with the transaction, for each table that has a sequence to move
-	// or one that stays with a goal. It returns every sequence it got, in
+	// or one that stays with a goal. Before its first move, it runs the
+	// constraints that wait for the commit, as the commit would, so that
+	// one that fails stops the apply before any sequence moves, with the
+	// error that the commit would give. It returns every sequence it got, in
 	// their order, each with where it stood before the move (Next), where
 	// it was to go (Goal), and where it stands after it, as the database
 	// read it again (After); or with why it stays, or moved only part way
