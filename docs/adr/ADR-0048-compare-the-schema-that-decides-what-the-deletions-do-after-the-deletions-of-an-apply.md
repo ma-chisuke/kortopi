@@ -49,9 +49,10 @@ What is compared:
 - The objects of these tables are:
   - every foreign key that references one of them or that one of them holds: its actions `ON DELETE` and `ON UPDATE`, its kind of match, its columns on both sides, its operators, whether it is deferrable and deferred, from PostgreSQL 18 whether it is enforced, and whether each of its triggers is enabled;
   - the partitions of each partitioned table, and whether `DETACH PARTITION ... CONCURRENTLY` began to detach each (`pg_inherits.inhdetachpending`);
-  - their triggers, but the triggers of foreign keys, which the foreign key covers: the function, the events and the timing, whether it is enabled, the columns, the arguments, the condition, the transition tables, and the deferral;
-  - their rules: the event, whether it is enabled, `INSTEAD`, the condition, and the actions.
-- An object is identified by its table, its name, and, for a foreign key, the referenced table, since a key to a partitioned table has a row for each partition. One query reads them from the columns of `pg_constraint`, `pg_inherits`, `pg_trigger`, and `pg_rewrite`, and no function that reads the system cache. The apply runs it in its transaction, which sees the snapshot, and the second connection runs the same text, which sees the newest catalogs.
+  - their triggers, but the triggers of foreign keys and of the constraints below, which the constraint covers: the function, the events and the timing, whether it is enabled, the columns, the arguments, the condition, the transition tables, and the deferral;
+  - their rules: the event, whether it is enabled, `INSTEAD`, the condition, and the actions;
+  - their unique keys, primary keys, and exclusion constraints that are deferrable, which PostgreSQL checks with triggers that it names by their OID: the kind, the columns, the operators, whether it is deferred, and its triggers, by the name of the constraint.
+- An object is identified by its table, its name, and, for a foreign key, the referenced table, since a key to a partitioned table has a row for each partition. So an object that another session renamed is one that it dropped and one that it added, as the error says. One query reads them from the columns of `pg_constraint`, `pg_inherits`, `pg_trigger`, and `pg_rewrite`, and no function that reads the system cache. The apply runs it in its transaction, which sees the snapshot, and the second connection runs the same text, which sees the newest catalogs.
 - An object that is new, gone, or whose definition differs stops the apply.
 
 When:
@@ -77,45 +78,59 @@ How the newest catalogs are read:
 
 - No means within the connection of the apply is exact. A query of the catalogs sees the snapshot, and so does `pg_get_constraintdef`: in a transaction at `REPEATABLE READ` on PostgreSQL 15 and 18, after another session made a foreign key deferrable and committed, both `condeferrable` and `pg_get_constraintdef` gave the definition of the snapshot. The functions that read the newest catalogs, such as `to_regclass`, `pg_relation_filenode`, and `pg_partition_tree`, take the OID or the name of a relation, and none lists the foreign keys, the triggers, or the rules of a table, so none finds an object that the snapshot does not show.
 - The apply opens a second connection for the comparison, with the configuration of its own: the same settings of libpq, the keepalive of kortopi or of those settings, and the `application_name`. Its transaction is `READ COMMITTED` and `READ ONLY`, and pins the settings of a plan, `search_path = pg_catalog` among them. It takes no lock of kortopi, creates nothing, and runs the one query of the comparison, then rolls back and closes.
-- The second connection reaches the address that the connection of the apply reached, which its socket shows, since the driver does not say which host of a list it chose. Over TCP, the host of the settings with the port of that address, with TLS when the connection of the apply has it, and the server name of that TLS, becomes its only host, with the TLS configuration of that host, every dial of it goes to that address, and every name that it resolves resolves to that address. Over a Unix socket, the host whose socket the apply reached becomes its only host.
+- The second connection reaches the address that the connection of the apply reached, which its socket shows, since the driver does not say which host of a list it chose. Over TCP, every dial of it goes to that address, and every name that it resolves resolves to that address. Its only host, whose TLS configuration it takes, is a host of TCP of the settings with the port of that address, with TLS when the connection of the apply has it:
+  - a host given as an address, when that address is the one that the apply reached: TLS sends no server name for an address, and the certificate is verified against that address, as for the apply;
+  - otherwise a host name: the one whose name the handshake of TLS sent, when it sent one, or else the first, so that the certificate is verified against the name, as for the apply.
+
+  A socket of Unix in the list is not such a host. Over a Unix socket, the host whose socket the apply reached becomes its only host.
 - Every wait of the second connection has a bound, whatever the settings of the session say: its connection 10 seconds at most, or `connect_timeout` when that is shorter, and its query 5 seconds at most for a lock, with `SET LOCAL lock_timeout`, or `--lock-timeout` when that is shorter. The apply holds its locks and its deleted rows while the second connection waits, and a session that waits behind the apply for a lock on a system catalog, as `VACUUM FULL` of a catalog does, holds back the read of the second connection: without a bound, the three would wait for each other without end, and PostgreSQL would see no deadlock, since the cycle runs through kortopi. A read of the catalogs that waits for no lock takes milliseconds, far below 5 seconds, and a connection with TLS over a slow network takes far less than 10 seconds.
 - The query names the server and the database, by `pg_postmaster_start_time()` and `current_database()`, which must be those of the apply; otherwise the connection reached another server, as a proxy or a connection pooler at the same address can send a new connection, and the comparison cannot be made.
 - The apply stops before its commit, and nothing is changed, when the second connection cannot connect, when a bound ends one of its waits, when its query fails otherwise, and when it reaches another server or database. Each error says that the check after the deletions failed, and why:
   - a bound that ended the connection says `could not open its second connection within 10s, the most that the check waits`, or `within 3s, as connect_timeout allows`, and that the server, or a connection pooler whose pool is full, did not accept a new connection in time;
   - a bound that ended the query says `its read waited 5s, the most that the check waits, for a lock on a system catalog`, or `as --lock-timeout allows`, and that another session holds such a lock, or waits for one behind the apply itself, as `VACUUM FULL` of a catalog waits for the lock of the apply on it;
   - another server or database says to connect kortopi to the server itself, with one host rather than a list of hosts, and not through a proxy or a connection pooler that may send a new connection to another server, or to apply without deleting rows.
-- An interrupt during the read of the second connection sends its cancel request, as for any statement (ADR-0043), and the check returns at once. The session of the apply, whose connection was idle and which holds the locks and the deleted rows, then rolls back and closes, with a wait of its own of 5 seconds at most. The second session closes after it, once its read has ended, which the cancel request bounds at 5 seconds after the interrupt, with a wait of its own of 5 seconds at most for its rollback. When the server did not confirm the end of a session, the message of ADR-0043 names it, the session of the apply first, and the second session in a line of its own after it, as `the read-only session of the check after the deletions`, whose query may still run, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone. An interrupt during its connection ends the connection, and the session of the apply closes as above.
+
+  These are errors of the second connection: the advice that kortopi adds to a wait of the session of the apply, which `--lock-timeout` sets, is not added to them.
+- An interrupt during the read of the second connection sends its cancel request, as for any statement (ADR-0043), and the check returns at once. The session of the apply, whose connection was idle and which holds the locks and the deleted rows, then rolls back and closes, with a wait of its own of 5 seconds at most. The second session closes after it, once its read has ended, which the cancel request bounds at 5 seconds after the interrupt, with a wait of its own of 5 seconds at most for its rollback. When the server did not confirm the end of a session, the message of ADR-0043 names it, the session of the apply first, and the second session in a line of its own after it, as `the read-only session of the check after the deletions`, whose query may still run, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone. An interrupt as the second session closes after a read that ended is named in the same way. An interrupt during its connection, or during the `BEGIN` of its transaction, ends that connection first, with a wait of its own for a session that the server started, and the session of the apply closes after it; the lines still name the session of the apply first.
 
 What the apply does:
 
 - It stops before its commit with an error that names the first change, what another session did to which object of which table, and counts the others:
 
   ```text
-  kortopi: another session changed the schema while the apply ran: it added foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+  kortopi: another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
   kortopi: nothing was changed
   ```
 
   The change says one of these:
 
-  - `it added`, `it dropped`, or `it changed foreign key "<name>" of table <table>, which references table <table>`, with `or enabled or disabled its triggers` when it changed;
-  - `it created`, `it dropped`, or `it changed trigger` or `rule "<name>" of table <table>`, with `or enabled or disabled it` when it changed;
+  - `it added or renamed`, `it dropped or renamed`, or `it changed foreign key "<name>" of table <table>, which references table <table>`, with `or enabled or disabled its triggers` when it changed;
+  - `it created or renamed`, `it dropped or renamed`, or `it changed trigger` or `rule "<name>" of table <table>`, with `or enabled or disabled it` when it changed;
+  - `it added or renamed`, `it dropped or renamed`, or `it changed constraint "<name>" of table <table>`, with `or enabled or disabled its triggers` when it changed;
   - `it attached or created partition <partition> of table <table>`;
   - `it detached or dropped partition <partition> of table <table>`;
   - `it began to detach partition <partition> of table <table>`, for the mark of `DETACH PARTITION ... CONCURRENTLY`;
   - `it changed partition <partition> of table <table>`, for any other change of the row of a partition, which no statement of PostgreSQL 15 to 18 makes after a mark.
 
-  The first change is one that a statement of the other session made itself. The attach or the detach of a partition comes before the objects that the partition brings or takes away, its own and the rows of the foreign keys that reference it, which are counted and never named, since that statement did not add or drop them as such. An object that a statement names comes before the objects that PostgreSQL made from it on partitions, such as the foreign key that it gives each partition of a table. When there are more changes, this follows the first:
+  The first change is one that a statement of the other session made itself. The attach or the detach of a partition comes before the objects that the partition brings or takes away, its own, its own partitions, and the rows of the foreign keys that reference it, which are counted and never named, since that statement did not add or drop them as such. An object that a statement names comes before the objects that PostgreSQL made from it on partitions, such as the foreign key that it gives each partition of a table. When there are more changes, this follows the first:
 
   ```text
-  and made <n> more changes to the foreign keys, the triggers, the rules, or the partitions of the tables that the deletions reach
+  and made <n> more changes to the schema of the tables that the deletions reach
   ```
 
-- A deferred constraint that fails when the check runs it stops the apply with the error of a write:
+- A deferred constraint that fails when the check runs it stops the apply with the error of a write, and advice that holds once every write of the apply has run, its deletions among them:
 
   ```text
-  kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it before its commit: a row refers to a row that does not exist, or a deleted row is still referenced
+  kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: a row refers to a row that does not exist, or a row that the apply deleted is still referenced: declare the referenced row, or keep in the declaration a row that other rows reference
   kortopi: nothing was changed
   ```
+
+  The advice is that of the kind of constraint that failed:
+
+  - a foreign key, as above;
+  - a unique key or a primary key: `two rows hold the same value of the key: change the declared value, or the row of the database that holds it`;
+  - an exclusion constraint: `two rows conflict on it: change the declared values, or the row of the database that conflicts with them`;
+  - a constraint trigger, which can raise any error: `check the constraint triggers of the tables that the apply writes, and what their functions read and write`.
 
 - An apply that runs again takes a new snapshot, plans with the new schema, and counts what it does.
 
@@ -135,8 +150,10 @@ The checks of the counts:
 
   ```text
   kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-  kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table t.archive
+  kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
   ```
+
+  The trigger or the rule that changed a table can belong to another table, such as a constraint trigger of a table that the apply wrote, so the advice says where to look for it.
 
   Disabled triggers of a foreign key that were so in the snapshot stop an apply with `--allow-delete` before any write already (ADR-0039).
 
@@ -177,26 +194,32 @@ This refines ADR-0043:
 ### Confirmation
 
 - Unit tests in `internal/postgres` confirm:
-  - the comparison and its error, with the order of the changes: a partition that came or went before its objects, which are counted, and an object before those that PostgreSQL made from it (`TestSchemaChanges`);
+  - the comparison and its error, with the order of the changes: a partition that came or went before its objects, its own partitions among them, which are counted, and an object before those that PostgreSQL made from it; a rename, and a deferrable unique key by its name (`TestSchemaChanges`);
   - the error of another server or database (`TestCompareSchemaOnAnotherServer`);
   - the host, the port, the TLS configuration, and the address of the second connection with a list of hosts, over TCP, with TLS, and over a Unix socket (`TestNewestConfig`, `TestRemoteAddressOfAUnixSocket`), and the dial of the pinned address (`TestDialPinned`);
   - the bounds (`TestNewestBounds`), and the messages of the two sessions after an interrupt (`TestJoinNotEnded`);
-  - the statement that begins the transaction of the second connection (`TestBeginSQL`).
+  - the statement that begins the transaction of the second connection (`TestBeginSQL`);
+  - the advice for each kind of constraint that fails when the check runs the deferred constraints (`TestDeferredError`).
 - Integration tests against PostgreSQL 15 to 18 in `make check-all`, in `internal/postgres`:
-  - `TestApplyAfterSchemaChanges`: a foreign key `SET NULL` to the table with rows to delete, a trigger of a table that the deletions reach and of the table with rows to delete, a trigger or a rule disabled, enabled on a replica, enabled always, or enabled after it was disabled, the triggers of a foreign key disabled, a rule of a table that the deletions reach, and a foreign key that such a table holds, each changed before the plan or between the walk and the deletions, stop the apply with an error that names the object, and nothing changes; a trigger of a table that the deletions do not reach does not, and neither does a trigger or a rule that stays as it was. After each check, the second session has left `pg_stat_activity`.
+  - `TestApplyAfterSchemaChanges`: a foreign key `SET NULL` to the table with rows to delete, a trigger of a table that the deletions reach and of the table with rows to delete, a trigger or a rule disabled, enabled on a replica, enabled always, or enabled after it was disabled, the triggers of a foreign key disabled, a rule of a table that the deletions reach, a foreign key that such a table holds, a trigger renamed, and a deferrable unique key added, each changed before the plan or between the walk and the deletions, stop the apply with an error that names the object, and nothing changes; a trigger of a table that the deletions do not reach does not, and neither does a trigger or a rule that stays as it was. After each check, the second session has left `pg_stat_activity`.
   - `TestApplyAfterADetachConcurrently`: a partition that `DETACH PARTITION ... CONCURRENTLY` began to detach between the walk and the deletions stops the apply, whose deletion of a referenced row succeeded, with an error that names the detach, and nothing changes.
   - `TestDeferredKeyBeforeADetach`: a foreign key deferred to the commit, whose check the deletion leaves to the commit, fails at the check after the deletions, with the error of a write, so a detach that begins after the check cannot leave its partition out of the check at the commit; nothing changes.
   - `TestDeferredTriggersOfAnApplyThatDeletes`: the deferred constraint triggers run at the check after the deletions, with the settings of the session, and not again at the commit.
-  - `TestCheckThatWaitsForACatalog`: a `VACUUM FULL` of a catalog that waits behind the apply holds back the read of the second connection, which the bound of 5 seconds, or a shorter `--lock-timeout`, ends; the apply stops with the error of the bound, nothing changes, and the second session has left.
-  - `TestInterruptDuringTheCheck`: an interrupt during a read of the second connection that the cancel request does not end returns from the check at once, ends the session of the apply while the second session still reads, and names the second session alone, with its process ID.
-  - `TestCheckThroughSeveralHosts`: with a list of hosts whose first refuses connections, the second connection reaches the host that the apply reached.
+  - `TestDeferredUniqueKeyAfterTheDeletions`: a deferred unique key that two declared rows break fails at the check after the deletions, with the advice of a unique key, and nothing changes.
+  - `TestDeferredTriggerThatChangesAnotherTable`: a deferred constraint trigger of the table with rows to delete that changes another table stops the apply at the counts, with advice that names where to look.
+  - `TestCheckThatWaitsForACatalog`: a `VACUUM FULL` of a catalog that waits behind the apply holds back the read of the second connection, which the bound of 5 seconds, or a shorter `--lock-timeout`, ends; the apply stops with the error of the bound alone, nothing changes, and the second session has left.
+  - `TestInterruptDuringTheCheck`: an interrupt during a read of the second connection that the cancel request does not end returns from the check at once, and ends the session of the apply while the second session still reads, with a wait of a minute, which the second interrupt ends; the close names the second session alone, with its process ID.
+  - `TestInterruptAsTheCheckClosesItsSession`: an interrupt, and a second interrupt, as the second session closes after its read: the close names the session of the apply, and the second session in its own line after it.
+  - `TestInterruptAsTheCheckConnects`: an interrupt while the second connection connects to a server that never answers ends the connection and the apply, and nothing changes.
+  - `TestCheckThatReachesAnotherDatabase`: a second session that a seam sends to another database of the same server stops the apply with the error of another server or database.
+  - `TestCheckThroughSeveralHosts`: with two hosts on one port, whose first refuses the connection of the apply and then sends every connection to another database, the second connection reaches the host that the apply reached; without the pinning, the test fails.
   - `TestApplyEffectAfterConcurrentChanges`: the foreign key and the partition that another transaction adds now stop the apply at the comparison; a trigger that deletes rows of another table stops it at the counts, with the new list of causes.
   - `TestApplyEffectAfterConcurrentChangesOfUpdates`: the foreign key `SET NULL` and the partition that another transaction adds stop the apply at the comparison too.
   - `TestApplyEffectWithoutRoomForAnotherKey`: a foreign key that another transaction adds stops the apply at the comparison also without room between the bounds.
   - `TestSecondSessionOfTheCheck`: the second connection is `READ COMMITTED` and `READ ONLY`, with the lock timeout, the search path, and the `application_name` of the apply, and an interrupt ends its statement on the server.
   - `TestCheckWithoutASecondConnection`: a role that may hold one connection stops the apply before its commit, and nothing changes.
 - In `cmd/kortopi`, `TestSchemaChangedDuringTheDeletionsCommand` runs the reproduction of issue 59 against each version, with and without room between the bounds: the apply stops with the error that names the new key, nothing changes, and the next apply plans with the key and commits.
-- No test makes the second connection reach another server, as no test runs through a connection pooler or a proxy, and no test bounds the connection, as no test server holds a connection back.
+- No test makes the second connection reach another server, as the tests run one server for each version, and no test reaches the bound of the connection, as no test server holds a connection back for 10 seconds.
 
 ## Pros and Cons of the Options
 

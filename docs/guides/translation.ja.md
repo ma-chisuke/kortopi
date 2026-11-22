@@ -93,6 +93,7 @@
 | catalog（データベースの） | カタログ |
 | decision record（ADR） | 記録、ADR |
 | check | チェック |
+| check after the deletions（apply の） | 削除のあとの検査 |
 | translation（文書の） | 対訳 |
 | source（対訳の） | 原文 |
 | source（生成ファイルの元になるファイル）、authority（2つの文章が食い違うときに決め手になる文章） | 正 |
@@ -272,4 +273,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:ff2bd80db94e563e24f39d128cdfd9241f5797a2da2b8421ddaf61990b01266f -->
+<!-- i18n-source: translation.md sha256:3cdae9a1ffb32abc3f653f868cf30df0cf1005790ee5f75031835f9777470d7c -->

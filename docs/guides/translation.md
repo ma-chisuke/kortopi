@@ -93,6 +93,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | catalog (of the database) | カタログ |
 | decision record (ADR) | 記録、ADR |
 | check | チェック |
+| check after the deletions (of an apply) | 削除のあとの検査 |
 | translation (of a document) | 対訳 |
 | source (of a translation) | 原文 |
 | source (the file that generated files come from), authority (the text that decides when two texts disagree) | 正 |

@@ -8,7 +8,7 @@ date: 2026-11-22
 ## 背景と課題
 
 行を削除する apply は、削除が外部キーを通してすることの全体を、スナップショットのカタログから計画する。そして削除のあと、コミットの前に、削除が数えたとおりのことをしたかを確かめる（ADR-0039）。
-この確認は、削除の波及が数えた行を読む。さらに、トランザクションが各テーブルで削除し更新した行の数を読み、それが下限と上限の間にあることを確かめる。
+この検査は、削除の波及が数えた行を読む。さらに、トランザクションが各テーブルで削除し更新した行の数を読み、それが下限と上限の間にあることを確かめる。
 スナップショットのカタログを問い合わせても、スナップショットのあとにほかのセッションが足した外部キー・トリガー・パーティションは見えない。一方、PostgreSQL は最新のトリガーで削除を動かす。
 ADR-0039 は、そうした変更のする更新が範囲に収まる場合を、見えないものの1つに挙げている。
 
@@ -51,9 +51,10 @@ apply は、削除のすることを決めるスキーマが実行中に変わ�
 - これらのテーブルのオブジェクトは次のとおりである。
   - これらのどれかを参照するか、これらのどれかが持つすべての外部キー。比べるのは、`ON DELETE` と `ON UPDATE` の動作、照合の種類、両側の列、演算子、遅らせられるか、遅らせているかである。PostgreSQL 18 からは強制するかも比べる。各トリガーが有効かも比べる。
   - 各パーティションテーブルのパーティション。`DETACH PARTITION ... CONCURRENTLY` が各パーティションのデタッチを始めたか（`pg_inherits.inhdetachpending`）も比べる。
-  - それらのトリガー。ただし外部キーのトリガーは外部キーが受け持つので除く。比べるのは、関数、イベントと時点、有効か、列、引数、条件、遷移テーブル、遅らせ方である。
+  - それらのトリガー。ただし外部キーと下の制約のトリガーは、その制約が受け持つので除く。比べるのは、関数、イベントと時点、有効か、列、引数、条件、遷移テーブル、遅らせ方である。
   - それらのルール。比べるのは、イベント、有効か、`INSTEAD`、条件、動作である。
-- オブジェクトは、テーブルと名前で識別し、外部キーでは参照先のテーブルでも識別する。パーティションテーブルへのキーは、パーティションごとに行を持つからである。1つの問い合わせが、`pg_constraint`・`pg_inherits`・`pg_trigger`・`pg_rewrite` の列からそれらを読み、システムキャッシュを読む関数は使わない。apply はそれを自分のトランザクションで実行し、そこではスナップショットが見える。2つ目の接続は同じ文を実行し、最新のカタログを見る。
+  - それらの一意キー・主キー・排他制約のうち、遅らせられるもの。PostgreSQL はそれらを、OID で名付けたトリガーで検査する。比べるのは種類・列・演算子・遅らせているか・そのトリガーであり、制約の名前で比べる。
+- オブジェクトは、テーブルと名前で識別し、外部キーでは参照先のテーブルでも識別する。パーティションテーブルへのキーは、パーティションごとに行を持つからである。そのため、ほかのセッションが名前を変えたオブジェクトは、エラーが伝えるとおり、1つを削除して1つを足したものになる。1つの問い合わせが、`pg_constraint`・`pg_inherits`・`pg_trigger`・`pg_rewrite` の列からそれらを読み、システムキャッシュを読む関数は使わない。apply はそれを自分のトランザクションで実行し、そこではスナップショットが見える。2つ目の接続は同じ文を実行し、最新のカタログを見る。
 - 新しいオブジェクト、なくなったオブジェクト、定義の違うオブジェクトは、apply を止める。
 
 比べる時点：
@@ -71,74 +72,88 @@ apply は、削除のすることを決めるスキーマが実行中に変わ�
     そのコミットから先は、外部キーの検査がそのパーティションを外す。スナップショットがそれより古いトランザクションでも同じである。そのため、パーティションの行が失敗させるはずの、参照される行の削除が成功する。apply は、消えた行への参照をコミットしてしまう。
     2つ目のトランザクションは、その印より古いすべてのトランザクションを待ち、apply もその1つである。
 - そのため、変更が削除に働けるのは、apply の検査かトリガーが動く前にそれがコミットしたときに限り、そのとき比較はそれを見る。
-  比較からコミットまで、apply は外部キーの検査をせず、何も書かない。行と件数の確認とコミット前の比較は読むだけであり、最初の決まりのとおり、コミットは遅らせたトリガーを動かさない。
+  比較からコミットまで、apply は外部キーの検査をせず、何も書かない。行と件数の検査とコミット前の比較は読むだけであり、最初の決まりのとおり、コミットは遅らせたトリガーを動かさない。
   コミットそのものは、kortopi の一時テーブルを削除し、トリガーが積んだ通知を送る。どちらも行を変えない。
   比較のあとにコミットした変更には、apply のロックを待ったかどうかによらず、働く先が apply に残っていない。
   - `DETACH PARTITION ... CONCURRENTLY` の1つ目のトランザクション。外部キーの検査はどれも比較の前に動いた。
   - 削除が読んだだけのテーブルのトリガーや外部キー。`NO ACTION` のキーの参照元のテーブルがその例である。削除はその行を1つも変えていないので、そこでは何も削除に対して動かない。そうしたテーブルから行を失ったテーブルへの外部キーは、参照先のテーブルもロックするので、やはり待つ。
-  - 行を失い、外部キーを持たないテーブルにアタッチされたパーティション。そこには、削除の取り去った行が1つもない。行の確認やコミット前の比較でそうしたテーブルを読むと、そのパーティションの行も読むことがある。それは apply を止める方向にしか働かない。
-  - トリガーが呼ぶ関数。`CREATE OR REPLACE FUNCTION` は、テーブルをロックせずにそれを変える。比較のあとに動くトリガーはない。apply の前からあったトリガーは、ADR-0039 のとおり確認から見えない。
+  - 行を失い、外部キーを持たないテーブルにアタッチされたパーティション。そこには、削除の取り去った行が1つもない。行の検査やコミット前の比較でそうしたテーブルを読むと、そのパーティションの行も読むことがある。それは apply を止める方向にしか働かない。
+  - トリガーが呼ぶ関数。`CREATE OR REPLACE FUNCTION` は、テーブルをロックせずにそれを変える。比較のあとに動くトリガーはない。apply の前からあったトリガーは、ADR-0039 のとおり検査から見えない。
 
   最初の3つの変更が比較より前にコミットすれば、削除に働かなかったとしても、やはり apply を止める。
 - 削除が動く間にロックを持っていた変更は、コミットするまで削除を待たせた。そのあと削除はその変更とともに動いたので、比較の時点の最新のカタログはその変更を含む。
 - 遅らせた制約を件数より前に動かすので、削除をする apply の件数には、コミットまで遅らせた制約トリガーがしたことも入る。apply の挿入や更新が遅らせたものも入る。
   件数は最初の削除からのトランザクションのものであり、そうしたトリガーが今その間に動くからである。
-  削除のない apply は削除のあとの確認をせず、遅らせたトリガーはこれまでどおりコミットで動く。
+  削除のない apply は削除のあとの検査をせず、遅らせたトリガーはこれまでどおりコミットで動く。
 
 最新のカタログの読み方：
 
 - apply の接続の中で正確に読む手段はない。カタログの問い合わせはスナップショットを見て、`pg_get_constraintdef` も同じである。PostgreSQL 15 と 18 で、`REPEATABLE READ` のトランザクションの中で確かめた。ほかのセッションが外部キーを遅らせられるようにしてコミットしたあとも、`condeferrable` と `pg_get_constraintdef` はどちらもスナップショットの定義を返した。最新のカタログを読む関数には `to_regclass`・`pg_relation_filenode`・`pg_partition_tree` がある。しかし、どれもリレーションの OID か名前を取り、テーブルの外部キー・トリガー・ルールを挙げるものはない。そのため、どれもスナップショットに見えないオブジェクトを見つけられない。
 - apply は、比較のために2つ目の接続を開く。その設定は自分の接続のものであり、libpq の同じ設定、kortopi かそれらの設定のキープアライブ、`application_name` を使う。トランザクションは `READ COMMITTED` で `READ ONLY` であり、計画の設定を固定し、`search_path = pg_catalog` もその1つである。kortopi のロックは取らず、何も作らず、比較の問い合わせを1つだけ実行し、ロールバックして閉じる。
-- 2つ目の接続は、apply の接続が届いたアドレスに届く。ドライバーはホストの一覧のどれを選んだかを伝えないので、そのアドレスはソケットから知る。
-  TCP では、設定のホストのうち次のものだけを使い、TLS の設定もそのホストのものを使う。そのアドレスのポートを持ち、TLS の有無が apply の接続と同じで、TLS ならそのサーバー名を持つホストである。
-  その接続のダイヤルはどれもそのアドレスに向かい、名前の解決もどれもそのアドレスを返す。Unix ソケットでは、apply が届いたソケットを持つホストだけを使う。
+- 2つ目の接続は、apply の接続が届いたアドレスに届く。ドライバーはホストの一覧のどれを選んだかを伝えないので、そのアドレスはソケットから知る。TCP では、その接続のダイヤルはどれもそのアドレスに向かい、名前の解決もどれもそのアドレスを返す。
+  2つ目の接続が唯一のホストとして使い、その TLS の設定も使うのは、設定の TCP のホストのうち次のものである。そのアドレスのポートを持ち、TLS の有無が apply の接続と同じで、次のどちらかにあたるホストである。
+  - アドレスで与えたホスト。ただし、そのアドレスが apply の届いたものであるときに限る。TLS はアドレスにはサーバー名を送らず、証明書は apply と同じくそのアドレスに対して検証される。
+  - そうでなければホスト名。TLS のハンドシェイクが名前を送ったときはその名前のもの、送らなかったときは最初のものである。証明書は、apply と同じくその名前に対して検証される。
+
+  一覧の中の Unix ソケットは、こうしたホストにならない。Unix ソケットでは、apply が届いたソケットを持つホストだけを使う。
 - 2つ目の接続の待ちには、セッションの設定によらず、どれも上限がある。接続は最大 10 秒であり、`connect_timeout` のほうが短ければそれに従う。問い合わせのロック待ちは `SET LOCAL lock_timeout` で最大 5 秒とし、`--lock-timeout` のほうが短ければそれに従う。
   2つ目の接続が待つ間も、apply はロックと削除した行を持つ。カタログの `VACUUM FULL` のように、システムカタログのロックを apply の背後で待つセッションは、2つ目の接続の読み取りを待たせる。
   上限がなければ、3つは互いを際限なく待つ。この循環は kortopi を通るので、PostgreSQL はデッドロックを見つけない。
   ロックを待たないカタログの読み取りは数ミリ秒で済み、5 秒よりはるかに短い。遅いネットワーク越しの TLS の接続も、10 秒よりはるかに短い。
 - 問い合わせは、`pg_postmaster_start_time()` と `current_database()` でサーバーとデータベースを挙げ、それは apply のものと同じでなければならない。違えば、接続は別のサーバーに届いており、比較はできない。同じアドレスのプロキシやコネクションプーラーは、新しい接続をそのように送りうる。
-- 次のとき、apply はコミットの前に止まり、何も変わらない。2つ目の接続ができないとき、上限がその待ちを終わらせたとき、その問い合わせがほかの理由で失敗したとき、別のサーバーやデータベースに届いたときである。どのエラーも、削除のあとの確認が失敗したことと、その理由を伝える。
+- 次のとき、apply はコミットの前に止まり、何も変わらない。2つ目の接続ができないとき、上限がその待ちを終わらせたとき、その問い合わせがほかの理由で失敗したとき、別のサーバーやデータベースに届いたときである。どのエラーも、削除のあとの検査が失敗したことと、その理由を伝える。
   - 上限が接続を終わらせたときは、`could not open its second connection within 10s, the most that the check waits` と伝える。`connect_timeout` のほうが短ければ、`within 3s, as connect_timeout allows` のように伝える。サーバーか、プールのふさがったコネクションプーラーが、新しい接続を間に合うように受け付けなかったことも伝える。
   - 上限が問い合わせを終わらせたときは、`its read waited 5s, the most that the check waits, for a lock on a system catalog` と伝える。`--lock-timeout` のほうが短ければ、`as --lock-timeout allows` と伝える。ほかのセッションがそうしたロックを持つか、apply 自身の背後でそれを待つことも伝える。カタログの `VACUUM FULL` が apply のロックを待つのがその例である。
   - 別のサーバーやデータベースに届いたときは、kortopi をサーバーそのものにつなぐよう伝える。ホストの一覧ではなく1つのホストを与え、新しい接続を別のサーバーに送りうるプロキシやコネクションプーラーを通さない。さもなければ、行を削除せずに apply する。
-- 2つ目の接続の読み取り中に割り込みが来ると、ほかの文と同じくそのキャンセル要求を送り（ADR-0043）、確認はすぐに戻る。
+
+  これらは2つ目の接続のエラーである。kortopi が apply のセッションの待ちに付ける助言は、これらには付けない。その待ちは `--lock-timeout` が決めるものである。
+- 2つ目の接続の読み取り中に割り込みが来ると、ほかの文と同じくそのキャンセル要求を送り（ADR-0043）、検査はすぐに戻る。
   次に、apply のセッションがロールバックして閉じ、それは最大 5 秒の自分の待ちを持つ。その接続は何もしていなかったが、ロックと削除した行を持っている。
   2つ目のセッションはそのあと、読み取りが終わってから閉じる。読み取りは、キャンセル要求によって割り込みから最大 5 秒で終わる。2つ目のセッションのロールバックも、最大 5 秒の自分の待ちを持つ。
   セッションの終わりをサーバーが確かめなかったときは、ADR-0043 のメッセージがそのセッションを挙げる。apply のセッションを先に挙げ、2つ目のセッションはそのあとの自分の行で `the read-only session of the check after the deletions` と挙げる。
-  その問い合わせは、kortopi がいなくなったことにサーバーが気づくまで動き続け、システムカタログのロックを持つか待つことがある。接続の最中の割り込みはその接続を終わらせ、apply のセッションは上と同じく閉じる。
+  その問い合わせは、kortopi がいなくなったことにサーバーが気づくまで動き続け、システムカタログのロックを持つか待つことがある。読み取りが終わったあと、2つ目のセッションが閉じるところに来た割り込みも、同じように挙げる。
+  接続の最中や、そのトランザクションの `BEGIN` の最中の割り込みは、まずその接続を終わらせる。サーバーがセッションを始めていれば、それは自分の待ちを持つ。apply のセッションはそのあとに閉じるが、行はやはり apply のセッションを先に挙げる。
 
 apply がすること：
 
 - apply はコミットの前に止まる。エラーは最初の変更を挙げ、ほかのセッションがどのテーブルのどのオブジェクトに何をしたかを伝え、ほかの変更の数を数える。
 
   ```text
-  kortopi: another session changed the schema while the apply ran: it added foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+  kortopi: another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
   kortopi: nothing was changed
   ```
 
   変更の部分は、次のどれかである。
 
-  - `it added`、`it dropped`、`it changed foreign key "<name>" of table <table>, which references table <table>`。変えたときは `or enabled or disabled its triggers` が付く。
-  - `it created`、`it dropped`、`it changed trigger` か `rule "<name>" of table <table>`。変えたときは `or enabled or disabled it` が付く。
+  - `it added or renamed`、`it dropped or renamed`、`it changed` のどれか。そのあとに `foreign key "<name>" of table <table>, which references table <table>` が続く。変えたときは `or enabled or disabled its triggers` が付く。
+  - `it created or renamed`、`it dropped or renamed`、`it changed trigger` か `rule "<name>" of table <table>`。変えたときは `or enabled or disabled it` が付く。
+  - `it added or renamed`、`it dropped or renamed`、`it changed constraint "<name>" of table <table>`。変えたときは `or enabled or disabled its triggers` が付く。
   - `it attached or created partition <partition> of table <table>`。
   - `it detached or dropped partition <partition> of table <table>`。
   - `it began to detach partition <partition> of table <table>`。`DETACH PARTITION ... CONCURRENTLY` の印についてである。
   - `it changed partition <partition> of table <table>`。パーティションの行のそのほかの変更についてであり、PostgreSQL 15 から 18 の文は、印のあとにそうした変更をしない。
 
   最初の変更は、ほかのセッションの文がそれ自身でした変更である。
-  パーティションのアタッチやデタッチは、そのパーティションがもたらすか持ち去るオブジェクトより前に来る。そうしたオブジェクトには、パーティション自身のものと、それを参照する外部キーの行がある。その文はそれらをそれとして足したり削除したりしていないので、数えるだけで挙げない。
+  パーティションのアタッチやデタッチは、そのパーティションがもたらすか持ち去るオブジェクトより前に来る。そうしたオブジェクトには、パーティション自身のものと、その中のパーティションと、それを参照する外部キーの行がある。その文はそれらをそれとして足したり削除したりしていないので、数えるだけで挙げない。
   文が挙げるオブジェクトは、PostgreSQL がそれからパーティションに作ったオブジェクトより前に来る。テーブルの各パーティションに与える外部キーがその例である。変更がほかにもあれば、最初の変更のあとに次の句が続く。
 
   ```text
-  and made <n> more changes to the foreign keys, the triggers, the rules, or the partitions of the tables that the deletions reach
+  and made <n> more changes to the schema of the tables that the deletions reach
   ```
 
-- コミットまで遅らせた制約が、確認で動かしたときに失敗すると、書き込みのエラーで apply は止まる。
+- コミットまで遅らせた制約が、検査で動かしたときに失敗すると、書き込みのエラーで apply は止まる。助言は、削除も含めて apply のすべての書き込みが済んだ時点で成り立つものである。
 
   ```text
-  kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it before its commit: a row refers to a row that does not exist, or a deleted row is still referenced
+  kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: a row refers to a row that does not exist, or a row that the apply deleted is still referenced: declare the referenced row, or keep in the declaration a row that other rows reference
   kortopi: nothing was changed
   ```
+
+  助言は、失敗した制約の種類のものである。
+
+  - 外部キー。上のとおりである。
+  - 一意キーか主キー。`two rows hold the same value of the key: change the declared value, or the row of the database that holds it` である。
+  - 排他制約。`two rows conflict on it: change the declared values, or the row of the database that conflicts with them` である。
+  - どんなエラーも出しうる制約トリガー。`check the constraint triggers of the tables that the apply writes, and what their functions read and write` である。
 
 - もう一度実行した apply は、新しいスナップショットを取り、新しいスキーマで計画し、そのすることを数える。
 
@@ -156,15 +171,17 @@ apply がすること：
   残りは、接続から閉じるまでの2つ目の接続にかかり、それが負担の大半である。1回ずつの比較は 9 から 107 ミリ秒であり、最も遅いものは負荷の下で出た。ネットワーク越しのサーバーでは接続の往復が加わり、TLS ではそのハンドシェイクが加わる。
 - 削除のない apply と計画は、2つ目の接続を開かない。
 
-件数の確認：
+件数の検査：
 
 - スナップショットのあとにほかのセッションが足すか変えた外部キー・パーティション・外部キーの無効にしたトリガーは、今は比較で apply を止める。そのため、行と件数のエラーは、それらをもう原因に挙げない。
   件数には遅らせた制約トリガーがしたことも入るので、件数のエラーはそれを原因に挙げ、件数が最初の削除からのものだと伝える。
 
   ```text
   kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-  kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table t.archive
+  kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
   ```
+
+  テーブルを変えたトリガーやルールは、apply が書いたテーブルの制約トリガーのように、別のテーブルのものでありうる。そのため、助言はそれを探す場所を伝える。
 
   スナップショットの時点ですでに無効だった外部キーのトリガーは、`--allow-delete` 付きの apply をどの書き込みよりも前に止める（ADR-0039）。
 
@@ -177,15 +194,16 @@ apply がすること：
 
 これは ADR-0039 を細かくする。
 
-- 今は、件数を読む前に、スキーマの比較がそうしたキーやパーティションで apply を止める。範囲の残す幅にはよらない。そのため、ADR-0039 の次の文は成り立たない。「別のトランザクションが足した外部キーかパーティションは、そのすることが数に収まらない限り、ここで apply を止める。それが加える削除は決して収まらず、その更新が収まるのは、下の範囲が残す幅の中だけである。」
+- ADR-0039 は「別のトランザクションが足した外部キーかパーティションは、そのすることが数に収まらない限り、ここで apply を止める。それが加える削除は決して収まらず、その更新が収まるのは、下の範囲が残す幅の中だけである。」とした。
+  スキーマの比較は、範囲の残す幅によらず、件数を読む前にそうしたキーやパーティションで apply を止める。
 - 見えないものの中の「トリガー・ルール、または apply の間に別のトランザクションが足す `SET NULL` か `SET DEFAULT` の外部キーかパーティションが範囲の中でする更新」は、今は、トリガーかルールが範囲の中でする更新である。
 - 見えないものの中の「コミットまで遅らせた制約トリガーが消すか変える行。それは、コミットのときに、検査のあとで働く。」が成り立つのは、削除のない apply だけである。
-  削除をする apply は、そうしたトリガーを削除のあとの確認の前に動かし、それが削除し更新したものもほかと一緒に数える。挿入や更新が遅らせたトリガーも同じである。
-- 「`--allow-delete` 付きの apply の順序」の手順 6 で、削除のあとの確認は `SET CONSTRAINTS ALL IMMEDIATE` から始まり、次にスキーマを比べる。比較は2つ目の接続を開く。
+  削除をする apply は、そうしたトリガーを削除のあとの検査の前に動かし、それが削除し更新したものもほかと一緒に数える。挿入や更新が遅らせたトリガーも同じである。
+- 「`--allow-delete` 付きの apply の順序」の手順 6 で、削除のあとの検査は `SET CONSTRAINTS ALL IMMEDIATE` から始まり、次にスキーマを比べる。比較は2つ目の接続を開く。
 
 これは ADR-0042 を細かくする。
 
-- 「コミットまで遅らせた制約トリガーは、比較のあとに働く。それが変えるものは比べない。」これが成り立つのは、削除のない apply である。削除をする apply では、そうしたトリガーは削除のあとの確認の前に動き、コミット前の比較はそれが変えたものを見る。
+- 「コミットまで遅らせた制約トリガーは、比較のあとに働く。それが変えるものは比べない。」これが成り立つのは、削除のない apply である。削除をする apply では、そうしたトリガーは削除のあとの検査の前に動き、コミット前の比較はそれが変えたものを見る。
 
 これは ADR-0043 を細かくする。
 
@@ -202,36 +220,42 @@ apply がすること：
 - 悪い点：削除をする apply は2つ目の接続を開く。そのぶんサーバーへの接続と空いた接続枠がかかる。サーバー・ロール・コネクションプーラーに間に合う空きがなければ apply は失敗し、プロキシが接続を別のサーバーに送っても失敗する。
 - 悪い点：システムカタログのロックを 5 秒より長く、または `--lock-timeout` より長く持つか待つセッションは、削除をする apply を止め、その apply はもう一度実行しなければならない。
 - 悪い点：削除に働けなかった変更も、比較より前にコミットすれば apply を止める。削除が読んだだけのテーブルのトリガーや、削除のあとにアタッチしたパーティションがその例である。
-- 悪い点：行を削除するか更新する、コミットまで遅らせた制約トリガーは、そのしたことを件数が許さなければ、削除をする apply を止める。apply の挿入や更新が遅らせたものも同じである。以前は、それは確認のあとに働いていた。
+- 悪い点：行を削除するか更新する、コミットまで遅らせた制約トリガーは、そのしたことを件数が許さなければ、削除をする apply を止める。apply の挿入や更新が遅らせたものも同じである。以前は、それは検査のあとに働いていた。
 - 悪い点：トリガーの関数、列の既定値、削除のない apply は、比較から見えないままである。
 
 ### 確認の方法
 
 - `internal/postgres` の単体テストは、次のことを確かめる。
-  - 比較とそのエラーと、変更の順（`TestSchemaChanges`）。来たか去ったパーティションはそのオブジェクトより前に来て、オブジェクトは数えるだけになる。オブジェクトは、PostgreSQL がそれから作ったものより前に来る。
+  - 比較とそのエラーと、変更の順（`TestSchemaChanges`）。来たか去ったパーティションはそのオブジェクトより前に来て、その中のパーティションも含め、オブジェクトは数えるだけになる。オブジェクトは、PostgreSQL がそれから作ったものより前に来る。名前の変更と、名前で挙げる遅らせられる一意キーも確かめる。
   - 別のサーバーやデータベースのエラー（`TestCompareSchemaOnAnotherServer`）。
   - ホストの一覧があるときの、2つ目の接続のホスト・ポート・TLS の設定・アドレス。TCP、TLS、Unix ソケットのそれぞれで確かめる（`TestNewestConfig`、`TestRemoteAddressOfAUnixSocket`）。固定したアドレスへのダイヤルも確かめる（`TestDialPinned`）。
   - 上限（`TestNewestBounds`）と、割り込みのあとの2つのセッションのメッセージ（`TestJoinNotEnded`）。
   - 2つ目の接続のトランザクションを始める文（`TestBeginSQL`）。
+  - 遅らせた制約を検査で動かしたときに失敗する、制約の種類ごとの助言（`TestDeferredError`）。
 - `make check-all` で PostgreSQL 15 から 18 に対して動く `internal/postgres` の結合テスト：
   - `TestApplyAfterSchemaChanges`：次の変更を計画の前かたどる処理と削除の間にすると、apply はそのオブジェクトを挙げるエラーで止まり、何も変えない。
     削除する行を持つテーブルへの `SET NULL` の外部キーと、削除が着くテーブルと削除する行を持つテーブルのトリガーがそうである。
     トリガーやルールを無効にすること、レプリカで有効にすること、常に有効にすること、無効にしたものを有効にすることも同じである。
-    無効にした外部キーのトリガー、削除が着くテーブルのルール、そうしたテーブルが持つ外部キーも同じである。
-    削除が着かないテーブルのトリガーは止めず、元のままのトリガーやルールも止めない。どの確認のあとも、2つ目のセッションは `pg_stat_activity` から消えている。
+    無効にした外部キーのトリガー、削除が着くテーブルのルール、そうしたテーブルが持つ外部キーも同じである。名前を変えたトリガーと、足した遅らせられる一意キーも同じである。
+    削除が着かないテーブルのトリガーは止めず、元のままのトリガーやルールも止めない。どの検査のあとも、2つ目のセッションは `pg_stat_activity` から消えている。
   - `TestApplyAfterADetachConcurrently`：たどる処理と削除の間に `DETACH PARTITION ... CONCURRENTLY` がデタッチを始めたパーティションは、apply を止める。その apply では、参照される行の削除が成功していた。エラーはデタッチを挙げ、何も変わらない。
-  - `TestDeferredKeyBeforeADetach`：削除がコミットまで検査を遅らせる外部キーは、削除のあとの確認で失敗し、エラーは書き込みのエラーである。そのため、確認のあとに始まったデタッチが、コミットでの検査からそのパーティションを外すことはできない。何も変わらない。
-  - `TestDeferredTriggersOfAnApplyThatDeletes`：遅らせた制約トリガーは、セッションの設定で削除のあとの確認で動き、コミットでもう一度動くことはない。
-  - `TestCheckThatWaitsForACatalog`：apply の背後で待つカタログの `VACUUM FULL` は、2つ目の接続の読み取りを待たせ、5 秒の上限かより短い `--lock-timeout` がそれを終わらせる。apply は上限のエラーで止まり、何も変わらず、2つ目のセッションは消えている。
-  - `TestInterruptDuringTheCheck`：キャンセル要求が終わらせない2つ目の接続の読み取りの最中に割り込みが来ると、確認はすぐに戻る。2つ目のセッションがまだ読んでいる間に apply のセッションが終わり、メッセージは2つ目のセッションだけをそのプロセス ID とともに挙げる。
-  - `TestCheckThroughSeveralHosts`：最初のホストが接続を断るホストの一覧でも、2つ目の接続は apply が届いたホストに届く。
+  - `TestDeferredKeyBeforeADetach`：削除がコミットまで検査を遅らせる外部キーは、削除のあとの検査で失敗し、エラーは書き込みのエラーである。そのため、検査のあとに始まったデタッチが、コミットでの検査からそのパーティションを外すことはできない。何も変わらない。
+  - `TestDeferredTriggersOfAnApplyThatDeletes`：遅らせた制約トリガーは、セッションの設定で削除のあとの検査で動き、コミットでもう一度動くことはない。
+  - `TestDeferredUniqueKeyAfterTheDeletions`：宣言した2つの行が破る遅らせた一意キーは、削除のあとの検査で一意キーの助言とともに失敗し、何も変わらない。
+  - `TestDeferredTriggerThatChangesAnotherTable`：削除する行を持つテーブルの遅らせた制約トリガーが別のテーブルを変えると、apply は件数で止まり、助言は探す場所を挙げる。
+  - `TestCheckThatWaitsForACatalog`：apply の背後で待つカタログの `VACUUM FULL` は、2つ目の接続の読み取りを待たせ、5 秒の上限かより短い `--lock-timeout` がそれを終わらせる。apply は上限のエラーだけで止まり、何も変わらず、2つ目のセッションは消えている。
+  - `TestInterruptDuringTheCheck`：キャンセル要求が終わらせない2つ目の接続の読み取りの最中に割り込みが来ると、検査はすぐに戻る。2つ目のセッションがまだ読んでいる間に apply のセッションが終わる。2つ目のセッションの待ちは1分であり、2度目の割り込みがそれを終わらせる。閉じたときのメッセージは、2つ目のセッションだけをそのプロセス ID とともに挙げる。
+  - `TestInterruptAsTheCheckClosesItsSession`：読み取りのあと、2つ目のセッションが閉じるところに、割り込みと2度目の割り込みが来る。閉じたときのメッセージは apply のセッションを挙げ、そのあとの自分の行で2つ目のセッションを挙げる。
+  - `TestInterruptAsTheCheckConnects`：答えないサーバーへ2つ目の接続がつなぐ最中に割り込みが来ると、接続と apply は終わり、何も変わらない。
+  - `TestCheckThatReachesAnotherDatabase`：テストの継ぎ目が同じサーバーの別のデータベースに送った2つ目のセッションは、別のサーバーやデータベースのエラーで apply を止める。
+  - `TestCheckThroughSeveralHosts`：1つのポートに2つのホストを置く。最初のホストは apply の接続を断り、そのあとはどの接続も別のデータベースに送る。それでも2つ目の接続は apply が届いたホストに届く。固定がなければ、このテストは失敗する。
   - `TestApplyEffectAfterConcurrentChanges`：別のトランザクションが足した外部キーとパーティションは、今は比較で apply を止める。ほかのテーブルの行を消すトリガーは、新しい原因の一覧とともに件数で止める。
   - `TestApplyEffectAfterConcurrentChangesOfUpdates`：別のトランザクションが足した `SET NULL` の外部キーとパーティションも、比較で apply を止める。
   - `TestApplyEffectWithoutRoomForAnotherKey`：範囲に幅がなくても、別のトランザクションが足した外部キーは比較で apply を止める。
   - `TestSecondSessionOfTheCheck`：2つ目の接続は `READ COMMITTED` で `READ ONLY` であり、apply のロック待ちの上限・検索パス・`application_name` を持つ。割り込みは、その文をサーバーで終わらせる。
   - `TestCheckWithoutASecondConnection`：接続を1つしか持てないロールは、コミットの前に apply を止め、何も変えない。
 - `cmd/kortopi` の `TestSchemaChangedDuringTheDeletionsCommand` は、issue 59 の再現を、範囲に幅のある場合とない場合について各バージョンで動かす。apply は新しいキーを挙げるエラーで止まり、何も変えない。次の apply はそのキーとともに計画し、コミットする。
-- 2つ目の接続を別のサーバーに届かせるテストはない。コネクションプーラーやプロキシを通すテストがないからである。接続の上限を確かめるテストもない。接続を待たせるテストのサーバーがないからである。
+- 2つ目の接続を別のサーバーに届かせるテストはない。テストはバージョンごとに1つのサーバーを動かすからである。接続の上限に達するテストもない。接続を 10 秒待たせるテストのサーバーがないからである。
 
 ## 選択肢の長所と短所
 
@@ -265,4 +289,4 @@ apply がすること：
 - [`SET CONSTRAINTS`](https://www.postgresql.org/docs/current/sql-set-constraints.html)：それがすぐに動かす遅らせた検査について
 - 利用者向けの説明：[docs/reference/apply.ja.md](../reference/apply.ja.md#削除の安全策)
 
-<!-- i18n-source: ADR-0048-compare-the-schema-that-decides-what-the-deletions-do-after-the-deletions-of-an-apply.md sha256:481bab254fb78dabff74281342bf2536327503a2adfca2f066275aeafe95f05c -->
+<!-- i18n-source: ADR-0048-compare-the-schema-that-decides-what-the-deletions-do-after-the-deletions-of-an-apply.md sha256:69f7083ecae6a529da690e0474eca09dc7128ee6ee5dee09cc269042e89ceb2f -->
