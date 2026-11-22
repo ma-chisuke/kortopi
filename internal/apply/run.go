@@ -31,13 +31,29 @@ import (
 // from the effect of the plan (ADR-0039). After the deletions, and before the
 // commit, it lets the database check that they did what the effect counted.
 //
-// Every statement must change as many rows as the plan shows. On any error
-// before the commit, Run returns without committing, so the transaction is
-// rolled back when the session closes, and the database is as it was. So it
-// is when the database rejects the commit. Only an error of the commit that
-// matches ErrUnknownOutcome leaves the outcome open: the changes may have been
-// made or not. Run writes nothing and does not commit when there is nothing
-// to write.
+// Last, before the commit, Run lets the database compare every declared
+// table again, and stops when a difference is left that the run does not
+// report: a row to insert or to update, or a row to delete but those that it
+// left out without Options.AllowDelete (ADR-0042), as many of them as the
+// plan shows. Without Options.AllowDelete, a table whose rows to delete the
+// apply leaves in place must also have lost no row to the writes, and gained
+// none but those of its insert. The database counts the rows that the writes
+// delete and insert, from PrepareLeftOut, before the first write, to
+// CountLeftOut, and its counts show a row deleted and another added, which
+// leave the number of rows as it was.
+// An apply writes only the rows that its plan shows, so every
+// write is held to the plan (CheckCount): an insert and a deletion must write
+// as many rows as the plan shows. An update must not pick more, and one that
+// picks fewer goes on, because the other writes of the apply can have done
+// its work already: the comparison decides, and the result names such
+// updates in Result.Uneven.
+//
+// On any error before the commit, Run returns without committing, so the
+// transaction is rolled back when the session closes, and the database is
+// as it was. So it is when the database rejects the commit. Only an error of
+// the commit that matches ErrUnknownOutcome leaves the outcome open: the
+// changes may have been made or not. Run writes nothing, compares nothing
+// again, and does not commit when there is nothing to write.
 func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Settings, db Database, opts Options) (*Result, error) {
 	rec := &recorder{Database: db, requests: make(map[declaration.TableName]plan.DiffRequest)}
 	// An apply has no --no-pending: the plan marks the tables and columns
@@ -79,8 +95,13 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		return r, nil
 	}
 	deleting := plan.Deleting(p.Tables)
-	if opts.AllowDelete && len(deleting) > 0 {
+	switch {
+	case opts.AllowDelete && len(deleting) > 0:
 		if err := db.PrepareDeletes(ctx); err != nil {
+			return nil, err
+		}
+	case len(deleting) > 0:
+		if err := db.PrepareLeftOut(ctx, deleting); err != nil {
 			return nil, err
 		}
 	}
@@ -99,18 +120,34 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 	}
 
+	// inserted holds the rows that the insert of each table wrote.
+	inserted := make(map[declaration.TableName]int)
 	for _, name := range sorted {
 		t, req := tables[name], rec.requests[name]
-		inserted, err := write(ctx, db.Insert, req, "insert", len(t.Diff.Inserts))
-		if err != nil {
-			return nil, err
+		for _, w := range []struct {
+			kind      string
+			statement func(context.Context, plan.DiffRequest) (Count, error)
+			planned   int
+			total     *int
+		}{
+			{KindInsert, db.Insert, len(t.Diff.Inserts), &r.Inserted},
+			{KindUpdate, db.Update, len(t.Diff.Updates), &r.Updated},
+		} {
+			c, err := write(ctx, w.statement, req, w.planned)
+			if err != nil {
+				return nil, err
+			}
+			if err := CheckCount(name, w.kind, w.planned, c); err != nil {
+				return nil, err
+			}
+			*w.total += c.Wrote
+			if w.kind == KindInsert {
+				inserted[name] = c.Wrote
+			}
+			if c.Wrote < w.planned {
+				r.Uneven = append(r.Uneven, Uneven{Table: name, Wrote: c.Wrote, Planned: w.planned})
+			}
 		}
-		r.Inserted += inserted
-		updated, err := write(ctx, db.Update, req, "update", len(t.Diff.Updates))
-		if err != nil {
-			return nil, err
-		}
-		r.Updated += updated
 	}
 	if opts.AllowDelete && len(deleting) > 0 {
 		if err := checkEffectAgain(ctx, decl, db, p, deleting); err != nil {
@@ -118,13 +155,24 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 		for _, name := range DeletionOrder(sorted, keys, deferred, p) {
 			t, req := tables[name], rec.requests[name]
-			n, err := write(ctx, db.Delete, req, "delete", len(t.Diff.Deletes))
+			c, err := write(ctx, db.Delete, req, len(t.Diff.Deletes))
 			if err != nil {
 				return nil, err
 			}
-			r.Deleted += n
+			if err := CheckCount(name, KindDelete, len(t.Diff.Deletes), c); err != nil {
+				return nil, err
+			}
+			r.Deleted += c.Wrote
 		}
 		if err := db.CheckEffect(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err := checkResult(ctx, decl, db, p, rec.requests, opts.AllowDelete, r.Uneven); err != nil {
+		return nil, err
+	}
+	if !opts.AllowDelete && len(deleting) > 0 {
+		if err := checkLeftOut(ctx, decl, db, p, inserted); err != nil {
 			return nil, err
 		}
 	}
@@ -139,6 +187,7 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	if err := db.Commit(context.WithoutCancel(ctx)); err != nil {
 		return nil, err
 	}
+	r.Committed = true
 	return r, nil
 }
 
@@ -156,21 +205,12 @@ func Writes(p *plan.Plan, deletes bool) map[declaration.TableName]bool {
 }
 
 // write runs one statement of a table when the plan has rows for it, and
-// checks that it changed exactly those rows. A difference means that a
-// trigger or a rule changed what the statement did.
-func write(ctx context.Context, statement func(context.Context, plan.DiffRequest) (int, error), req plan.DiffRequest, kind string, want int) (int, error) {
-	if want == 0 {
-		return 0, nil
+// returns what it did.
+func write(ctx context.Context, statement func(context.Context, plan.DiffRequest) (Count, error), req plan.DiffRequest, planned int) (Count, error) {
+	if planned == 0 {
+		return Count{}, nil
 	}
-	got, err := statement(ctx, req)
-	if err != nil {
-		return 0, err
-	}
-	if got != want {
-		return 0, fmt.Errorf("table %s: the %s changed %s, but the plan has %s to %s: a trigger or a rule on the table may have changed what the statement did",
-			req.Table.Name, kind, rows(got), rows(want), kind)
-	}
-	return got, nil
+	return statement(ctx, req)
 }
 
 // pending returns an error for each table and column that the database does
@@ -331,6 +371,14 @@ func plural(n int, singular, plurals string) string {
 		return "1 " + singular
 	}
 	return strconv.Itoa(n) + " " + plurals
+}
+
+// word returns one when n is 1, and many otherwise, without n.
+func word(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // recorder passes the calls of plan.Build to the database, and keeps the

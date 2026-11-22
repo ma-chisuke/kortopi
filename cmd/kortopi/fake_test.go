@@ -29,6 +29,15 @@ type fakeSession struct {
 	// missing names the tables that the database does not have.
 	missing map[declaration.TableName]bool
 	keys    []apply.ForeignKey
+	// written overrides the number of rows that a write returns, by call,
+	// such as "Update app.plans".
+	written map[string]int
+	// left holds what DiffAgain returns for the tables that it names.
+	left map[declaration.TableName]plan.TableDiff
+	// counted, when it is not nil, holds what CountLeftOut returns, and
+	// leftOut the tables that PrepareLeftOut named.
+	counted map[declaration.TableName]apply.Written
+	leftOut []declaration.TableName
 	// fail makes a write or Commit return an error, by call, such as
 	// "Insert app.plans" or "Commit".
 	fail map[string]error
@@ -120,20 +129,73 @@ func (s *fakeSession) Defer(_ context.Context, keys []apply.ForeignKey) error {
 	return s.record("Defer " + strings.Join(names, " "))
 }
 
-func (s *fakeSession) Insert(_ context.Context, req plan.DiffRequest) (int, error) {
-	return len(s.diffs[req.Table.Name].Inserts), s.record("Insert " + req.Table.Name.String())
+// write records the call of a write, and returns that it picked and wrote
+// the number of rows that written gives it, or else n.
+func (s *fakeSession) write(call string, n int) (apply.Count, error) {
+	if w, ok := s.written[call]; ok {
+		n = w
+	}
+	return apply.Count{Picked: n, Wrote: n}, s.record(call)
 }
 
-func (s *fakeSession) Update(_ context.Context, req plan.DiffRequest) (int, error) {
-	return len(s.diffs[req.Table.Name].Updates), s.record("Update " + req.Table.Name.String())
+func (s *fakeSession) Insert(_ context.Context, req plan.DiffRequest) (apply.Count, error) {
+	return s.write("Insert "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Inserts))
 }
 
-func (s *fakeSession) Delete(_ context.Context, req plan.DiffRequest) (int, error) {
-	return len(s.diffs[req.Table.Name].Deletes), s.record("Delete " + req.Table.Name.String())
+func (s *fakeSession) Update(_ context.Context, req plan.DiffRequest) (apply.Count, error) {
+	return s.write("Update "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Updates))
+}
+
+func (s *fakeSession) Delete(_ context.Context, req plan.DiffRequest) (apply.Count, error) {
+	return s.write("Delete "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Deletes))
 }
 
 func (s *fakeSession) CheckEffect(context.Context) error {
 	return s.record("CheckEffect")
+}
+
+// DiffAgain returns what left holds for the table, or what a database leaves
+// that did what the plan shows: the rows to delete of a table that Delete
+// did not write.
+func (s *fakeSession) DiffAgain(_ context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
+	name := req.Table.Name
+	if err := s.record("DiffAgain " + name.String()); err != nil {
+		return plan.TableDiff{}, err
+	}
+	if d, ok := s.left[name]; ok {
+		return d, nil
+	}
+	var d plan.TableDiff
+	if req.Deletes && !slices.Contains(s.calls, "Delete "+name.String()) {
+		d.Deletes = s.diffs[name].Deletes
+	}
+	return d, nil
+}
+
+func (s *fakeSession) PrepareLeftOut(_ context.Context, names []declaration.TableName) error {
+	s.leftOut = names
+	return s.record("PrepareLeftOut")
+}
+
+// CountLeftOut returns what counted holds, or what a database counts that
+// did what the plan shows: for each table that PrepareLeftOut named, the rows
+// that its insert wrote.
+func (s *fakeSession) CountLeftOut(context.Context) (map[declaration.TableName]apply.Written, error) {
+	if err := s.record("CountLeftOut"); err != nil {
+		return nil, err
+	}
+	if s.counted != nil {
+		return s.counted, nil
+	}
+	counts := make(map[declaration.TableName]apply.Written, len(s.leftOut))
+	for _, name := range s.leftOut {
+		n := len(s.diffs[name].Inserts)
+		if w, ok := s.written["Insert "+name.String()]; ok {
+			n = w
+		}
+		counts[name] = apply.Written{Inserted: n}
+	}
+	return counts, nil
 }
 
 func (s *fakeSession) Commit(context.Context) error {

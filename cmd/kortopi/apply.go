@@ -233,8 +233,9 @@ func (e *commitFailure) Unwrap() error {
 	return e.err
 }
 
-// committed reports whether an apply committed: it does when it wrote a row
-// (apply.Run).
+// committed reports whether an apply committed. An apply that had rows to
+// write commits, also when the other writes of the apply had done the work
+// of all of its statements, so that they wrote no row (ADR-0042).
 func committed(r *apply.Result) bool {
-	return r.Inserted+r.Updated+r.Deleted > 0
+	return r.Committed
 }

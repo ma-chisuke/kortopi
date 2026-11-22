@@ -420,8 +420,8 @@ func TestInterruptDuringTheCommit(t *testing.T) {
 					if _, err := s.Diff(ctx, req); err != nil {
 						t.Fatal(err)
 					}
-					if n, err := s.Update(ctx, req); err != nil || n != 1 {
-						t.Fatalf("Update = %d, %v", n, err)
+					if n, err := s.Update(ctx, req); err != nil || n.Wrote != 1 {
+						t.Fatalf("Update = %+v, %v", n, err)
 					}
 					committed := make(chan error, 1)
 					go func() { committed <- s.Commit(context.WithoutCancel(ctx)) }()
@@ -607,8 +607,8 @@ func TestLockTimeoutInEachPhase(t *testing.T) {
 				if _, err := s.Diff(t.Context(), req); err != nil {
 					t.Fatal(err)
 				}
-				if n, err := s.Update(t.Context(), req); err != nil || n != 1 {
-					t.Fatalf("Update = %d, %v", n, err)
+				if n, err := s.Update(t.Context(), req); err != nil || n.Wrote != 1 {
+					t.Fatalf("Update = %+v, %v", n, err)
 				}
 				if err := s.Commit(t.Context()); err != nil {
 					t.Fatal(err)

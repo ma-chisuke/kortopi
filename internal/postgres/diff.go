@@ -37,7 +37,8 @@ const maxFlaggedRows = 5
 // The work of one table runs inside a savepoint, so that an error leaves the
 // session usable. The savepoint is released, and the declared rows stay
 // loaded until the session ends: Effects reads them for every table, and in
-// an apply, Insert, Update, and Delete write from them.
+// an apply, Insert, Update, and Delete write from them, and DiffAgain
+// compares them again before the commit.
 //
 // What the rows to delete do to other rows through foreign keys, Effects
 // computes once every table is compared (ADR-0039).
@@ -92,20 +93,8 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		if err := s.checkNotNull(ctx, tx, table, c, req.Updates); err != nil {
 			return err
 		}
-		if diff.Inserts, err = queryRows(ctx, tx, c.insertsSQL(), len(c.key), len(c.compare)); err != nil {
-			return fmt.Errorf("find the rows to insert into table %s: %w", table.Name, err)
-		}
-		if req.Updates && len(c.compare) > 0 {
-			if diff.Updates, err = queryUpdates(ctx, tx, c); err != nil {
-				return fmt.Errorf("find the rows to update in table %s: %w", table.Name, err)
-			}
-		}
-		if req.Deletes {
-			if diff.Deletes, err = queryRows(ctx, tx, c.deletesSQL(), len(c.key), 0); err != nil {
-				return fmt.Errorf("find the rows to delete from table %s: %w", table.Name, err)
-			}
-		}
-		return nil
+		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes)
+		return err
 	})
 	if err != nil {
 		return plan.TableDiff{}, err
@@ -120,6 +109,51 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		}
 	}
 	s.loaded[table.Name] = lt
+	return diff, nil
+}
+
+// compareRows compares the declared rows in the temporary table of c with
+// the stored rows of table, and returns the rows to insert, and the rows to
+// update and to delete when updates and deletes say so. It is the comparison
+// of a plan, which Diff runs once the rows are loaded and checked, and
+// DiffAgain runs again after the writes of an apply (ADR-0042).
+func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison, updates, deletes bool) (plan.TableDiff, error) {
+	var diff plan.TableDiff
+	var err error
+	if diff.Inserts, err = queryRows(ctx, tx, c.insertsSQL(), len(c.key), len(c.compare)); err != nil {
+		return plan.TableDiff{}, fmt.Errorf("find the rows to insert into table %s: %w", table, err)
+	}
+	if updates && len(c.compare) > 0 {
+		if diff.Updates, err = queryUpdates(ctx, tx, c); err != nil {
+			return plan.TableDiff{}, fmt.Errorf("find the rows to update in table %s: %w", table, err)
+		}
+	}
+	if deletes {
+		if diff.Deletes, err = queryRows(ctx, tx, c.deletesSQL(), len(c.key), 0); err != nil {
+			return plan.TableDiff{}, fmt.Errorf("find the rows to delete from table %s: %w", table, err)
+		}
+	}
+	return diff, nil
+}
+
+// DiffAgain compares the declared rows that Diff loaded for the table of req
+// with the rows of the table again, after the writes of an apply and before
+// its commit (ADR-0042), and returns what still differs. It runs the
+// comparison of Diff, with the kinds of change that Diff computed for the
+// table, on the temporary table that Diff loaded: in the transaction of the
+// apply, which sees its writes, and in the pinned settings, which every
+// write sets again after it (ADR-0037). It reads the declared columns, as
+// Diff does, and changes no row.
+func (s *Session) DiffAgain(ctx context.Context, req plan.DiffRequest) (_ plan.TableDiff, err error) {
+	defer s.explainRead(ctx, &err)
+	lt, err := s.loadedFor(req)
+	if err != nil {
+		return plan.TableDiff{}, err
+	}
+	diff, err := compareRows(ctx, s.tx, req.Table.Name, lt.c, lt.updating, lt.sync)
+	if err != nil {
+		return plan.TableDiff{}, fmt.Errorf("the check before the commit, which compares table %s again, failed, so the apply stops, and nothing was changed: %w", req.Table.Name, err)
+	}
 	return diff, nil
 }
 

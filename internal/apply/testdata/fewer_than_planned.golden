@@ -1,0 +1,15 @@
+catalog.plans (sync, key: code)
+  ~ code=basic  name: Basic -> "Basic Plan"
+  ~ code=pro  name: Pro -> "Pro Plan"
+  - code=legacy
+  0 to insert, 2 to update, 1 to delete
+
+geo.regions (sync, key: code)
+  - code=north
+  - code=south
+  0 to insert, 0 to update, 2 to delete
+
+Plan: 0 to insert, 2 to update, 3 to delete in 2 tables.
+
+Applied: 0 inserted, 1 updated, 3 deleted.
+Fewer than planned: 1 row to update of catalog.plans held its declared values already, after the other writes of the apply.

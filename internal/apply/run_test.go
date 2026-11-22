@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,8 +34,24 @@ type fakeDB struct {
 	conflictsAgain []plan.Conflict
 	effectsCalls   int
 	keys           []ForeignKey
-	// changed overrides the number of rows that a write returns, by call.
+	// changed overrides the number of rows that a write writes, by call.
 	changed map[string]int
+	// picked overrides the number of rows that the pick of a write takes, by
+	// call; without it, the pick takes the rows that the write writes.
+	picked map[string]int
+	// left holds what DiffAgain returns for the tables that it names. For
+	// another table, DiffAgain returns what a database leaves that did what
+	// the plan shows: the rows to delete of a table that Delete did not
+	// write.
+	left map[declaration.TableName]plan.TableDiff
+	// counted holds what CountLeftOut returns. Without it, CountLeftOut
+	// returns what a database counts that did what the plan shows: for each
+	// table that PrepareLeftOut named, the rows that its insert wrote.
+	counted map[declaration.TableName]Written
+	// leftOut and inserted hold the tables that PrepareLeftOut named, and
+	// the rows that the insert of each table wrote.
+	leftOut  []declaration.TableName
+	inserted map[declaration.TableName]int
 	// fail makes a call return an error, by call.
 	fail map[string]error
 	// cancel is called after the call that it names.
@@ -45,10 +62,11 @@ type fakeDB struct {
 	requests map[declaration.TableName]plan.DiffRequest
 	// mismatch records a write whose request differs from that of Diff.
 	mismatch []string
-	// commitErr and checkErr are the errors of the contexts of Commit and
-	// CheckEffect.
+	// commitErr, checkErr, and againErr are the errors of the contexts of
+	// Commit, CheckEffect, and the last DiffAgain.
 	commitErr error
 	checkErr  error
+	againErr  error
 }
 
 func (f *fakeDB) record(call string) error {
@@ -142,33 +160,64 @@ func (f *fakeDB) Defer(_ context.Context, keys []ForeignKey) error {
 	return f.record("Defer " + strings.Join(names, " "))
 }
 
-func (f *fakeDB) write(kind string, req plan.DiffRequest, n int) (int, error) {
+func (f *fakeDB) write(kind string, req plan.DiffRequest, n int) (Count, error) {
 	call := kind + " " + req.Table.Name.String()
 	if err := f.record(call); err != nil {
-		return 0, err
+		return Count{}, err
 	}
 	if !reflect.DeepEqual(req, f.requests[req.Table.Name]) {
 		f.mismatch = append(f.mismatch, call)
 	}
 	if c, ok := f.changed[call]; ok {
-		return c, nil
+		n = c
 	}
-	return n, nil
+	c := Count{Picked: n, Wrote: n}
+	if p, ok := f.picked[call]; ok {
+		c.Picked = p
+	}
+	if kind == "Insert" {
+		if f.inserted == nil {
+			f.inserted = make(map[declaration.TableName]int)
+		}
+		f.inserted[req.Table.Name] = c.Wrote
+	}
+	return c, nil
 }
 
 func (f *fakeDB) PrepareDeletes(context.Context) error {
 	return f.record("PrepareDeletes")
 }
 
-func (f *fakeDB) Insert(_ context.Context, req plan.DiffRequest) (int, error) {
+func (f *fakeDB) PrepareLeftOut(_ context.Context, names []declaration.TableName) error {
+	f.leftOut = names
+	return f.record("PrepareLeftOut " + namesOf(names))
+}
+
+// CountLeftOut returns what counted holds, or the rows that the insert of
+// each table that PrepareLeftOut named wrote.
+func (f *fakeDB) CountLeftOut(context.Context) (map[declaration.TableName]Written, error) {
+	if err := f.record("CountLeftOut"); err != nil {
+		return nil, err
+	}
+	if f.counted != nil {
+		return f.counted, nil
+	}
+	counts := make(map[declaration.TableName]Written, len(f.leftOut))
+	for _, name := range f.leftOut {
+		counts[name] = Written{Inserted: f.inserted[name]}
+	}
+	return counts, nil
+}
+
+func (f *fakeDB) Insert(_ context.Context, req plan.DiffRequest) (Count, error) {
 	return f.write("Insert", req, len(f.diffs[req.Table.Name].Inserts))
 }
 
-func (f *fakeDB) Update(_ context.Context, req plan.DiffRequest) (int, error) {
+func (f *fakeDB) Update(_ context.Context, req plan.DiffRequest) (Count, error) {
 	return f.write("Update", req, len(f.diffs[req.Table.Name].Updates))
 }
 
-func (f *fakeDB) Delete(_ context.Context, req plan.DiffRequest) (int, error) {
+func (f *fakeDB) Delete(_ context.Context, req plan.DiffRequest) (Count, error) {
 	return f.write("Delete", req, len(f.diffs[req.Table.Name].Deletes))
 }
 
@@ -176,6 +225,32 @@ func (f *fakeDB) Delete(_ context.Context, req plan.DiffRequest) (int, error) {
 func (f *fakeDB) CheckEffect(ctx context.Context) error {
 	f.checkErr = ctx.Err()
 	return f.record("CheckEffect")
+}
+
+// DiffAgain records the call, with the error of its context, and returns
+// what left holds for the table, or what a database leaves that did what the
+// plan shows.
+func (f *fakeDB) DiffAgain(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error) {
+	name := req.Table.Name
+	call := "DiffAgain " + name.String()
+	if err := f.record(call); err != nil {
+		return plan.TableDiff{}, err
+	}
+	// The comparison is a query, which an interrupt cancels.
+	if f.againErr = ctx.Err(); f.againErr != nil {
+		return plan.TableDiff{}, f.againErr
+	}
+	if !reflect.DeepEqual(req, f.requests[name]) {
+		f.mismatch = append(f.mismatch, call)
+	}
+	if d, ok := f.left[name]; ok {
+		return d, nil
+	}
+	var d plan.TableDiff
+	if req.Deletes && !slices.Contains(f.calls, "Delete "+name.String()) {
+		d.Deletes = f.diffs[name].Deletes
+	}
+	return d, nil
 }
 
 func (f *fakeDB) Commit(ctx context.Context) error {
@@ -299,7 +374,7 @@ func TestRun(t *testing.T) {
 			settings:   nil,
 			db:         &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}},
 			opts:       all,
-			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Commit"),
+			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1},
 		},
 		{
@@ -307,15 +382,16 @@ func TestRun(t *testing.T) {
 			settings:   sync,
 			db:         &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}},
 			opts:       all,
-			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child", "Delete z.parent", "CheckEffect", "Commit"),
+			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child", "Delete z.parent", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1, Deleted: 3},
 		},
 		{
-			name:       "deletions left out without allowing them",
-			settings:   sync,
-			db:         &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}},
-			opts:       Options{MaxDelete: 1},
-			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Commit"),
+			name:     "deletions left out without allowing them",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}},
+			opts:     Options{MaxDelete: 1},
+			want: append(diffs, "PrepareLeftOut a.child z.parent", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child",
+				"DiffAgain a.child", "DiffAgain z.parent", "CountLeftOut", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1, SkippedDeletes: 3},
 		},
 		{
@@ -331,7 +407,7 @@ func TestRun(t *testing.T) {
 			settings:   sync,
 			db:         &fakeDB{diffs: full},
 			opts:       Options{AllowDelete: true, MaxDelete: 3},
-			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert a.child", "Insert z.parent", "Update z.parent", "Delete z.parent", "Delete a.child", "CheckEffect", "Commit"),
+			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert a.child", "Insert z.parent", "Update z.parent", "Delete z.parent", "Delete a.child", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1, Deleted: 3},
 		},
 		{
@@ -370,7 +446,7 @@ func TestRun(t *testing.T) {
 			settings:   sync,
 			db:         &fakeDB{diffs: cascading, effects: cascadingEffects},
 			opts:       Options{AllowDelete: true, MaxDelete: 25},
-			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Delete z.parent", "Delete a.child", "CheckEffect", "Commit"),
+			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Delete z.parent", "Delete a.child", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantResult: Result{Deleted: 3},
 		},
 		{
@@ -444,7 +520,7 @@ func TestRun(t *testing.T) {
 				parent: {Steps: []plan.Step{unknownStep(1, "b.orders", "orders_parent", "CASCADE", plan.NoTableSelect)}},
 			}},
 			opts:       Options{MaxDelete: 0},
-			want:       append(diffs, "ForeignKeys a.child z.parent", "Insert z.parent", "Commit"),
+			want:       append(diffs, "PrepareLeftOut z.parent", "ForeignKeys a.child z.parent", "Insert z.parent", "DiffAgain a.child", "DiffAgain z.parent", "CountLeftOut", "Commit"),
 			wantResult: Result{Inserted: 1, SkippedDeletes: 1},
 		},
 		{
@@ -452,7 +528,7 @@ func TestRun(t *testing.T) {
 			settings:   sync,
 			db:         &fakeDB{diffs: full, keys: []ForeignKey{deferrable(fk("self", "a.child", "a.child")), childOfParent}},
 			opts:       all,
-			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child", "Delete z.parent", "CheckEffect", "Commit"),
+			want:       append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child", "Delete z.parent", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1, Deleted: 3},
 		},
 		{
@@ -504,7 +580,7 @@ func TestRun(t *testing.T) {
 			}},
 			opts: all,
 			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Defer child_parent",
-				"Insert a.child", "Insert z.parent", "Update z.parent", "Delete z.parent", "Delete a.child", "CheckEffect", "Commit"),
+				"Insert a.child", "Insert z.parent", "Update z.parent", "Delete z.parent", "Delete a.child", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantResult: Result{Inserted: 3, Updated: 1, Deleted: 3},
 		},
 		{
@@ -568,27 +644,135 @@ func TestRun(t *testing.T) {
 			wantErr:  errDB.Error(),
 		},
 		{
-			name:     "an insert changes more rows than the plan shows",
+			// The comparison before the commit finds the tables as
+			// declared, so the apply goes on and commits, and the result
+			// counts what the statements wrote.
+			name:     "an update that finds fewer rows to update than the plan shows",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Update z.parent": 0}},
+			opts:     all,
+			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child",
+				"Delete a.child", "Delete z.parent", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
+			wantResult: Result{Inserted: 3, Updated: 0, Deleted: 3, Uneven: []Uneven{{Table: parent, Wrote: 0, Planned: 1}}},
+		},
+		{
+			// An apply writes only the rows that its plan shows, the way
+			// that it shows them: an insert keeps its strict count.
+			name:     "an insert that finds fewer rows to insert than the plan shows",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Insert z.parent": 1}},
+			opts:     all,
+			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent"),
+			wantErr: "the insert into table z.parent found 1 row to insert, but the plan has 2: another write of the apply had written declared rows of the table before the insert, " +
+				"and an apply writes only the rows that its plan shows, the way that it shows them, so it stops: " +
+				"if the cascade of a foreign key into a column of the match key wrote them, change the referenced key first, and then apply: " +
+				"with an apply of the schema of the referenced table alone, through --schema, when the referencing table is in another schema, " +
+				"or else with an UPDATE of your own on the referenced row, which the cascade follows; " +
+				"if a trigger or a rule wrote them, change it so that it does not write rows of table z.parent, or leave the table out of the declaration",
+		},
+		{
+			name:     "an insert that finds more rows to insert than the plan shows",
 			settings: sync,
 			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Insert z.parent": 3}},
 			opts:     all,
 			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent"),
-			wantErr:  "table z.parent: the insert changed 3 rows, but the plan has 2 rows to insert: a trigger or a rule on the table may have changed what the statement did",
+			wantErr: "the insert into table z.parent found 3 rows to insert, but the plan has 2: another write of the apply deleted declared rows of the table after the plan, " +
+				"through a trigger or a rule, and an apply writes only the rows that its plan shows, so it stops: " +
+				"change the trigger or the rule that deletes rows of table z.parent while the apply writes other tables",
 		},
 		{
-			name:     "a deletion changes fewer rows than the plan shows",
+			name:     "an update that finds more rows to update than the plan shows",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Update z.parent": 2}},
+			opts:     all,
+			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent"),
+			wantErr: "the update of table z.parent found 2 rows that differ from the declaration, but the plan has 1: " +
+				"another write of the apply changed declared rows of the table after the plan, through a trigger of this table or of another, " +
+				"or a cascade or another action of a foreign key, and an apply writes only the rows that its plan shows, so it stops: " +
+				"declare the values that those writes give, or change the trigger or the foreign key",
+		},
+		{
+			// A trigger BEFORE INSERT that returns NULL keeps a row out of
+			// the statement, also when it inserts the row itself.
+			name:     "an insert that writes fewer rows than its pick took",
+			settings: sync,
+			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Insert z.parent": 1},
+				picked: map[string]int{"Insert z.parent": 2}},
+			opts: all,
+			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent"),
+			wantErr: "the insert into table z.parent inserted 1 row, but its pick took 2 rows: a trigger BEFORE INSERT that returns NULL, " +
+				"a policy of row-level security, or a rule created after the plan changed what the statement did, " +
+				"and an apply writes exactly the rows that it picks, so it stops: change the trigger, the policy, or the rule of table z.parent, " +
+				"or leave the table out of the declaration",
+		},
+		{
+			// Fewer rows picked than the plan shows go on to the comparison,
+			// but not fewer rows written than picked.
+			name:     "an update that writes fewer rows than its pick took",
+			settings: sync,
+			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Update z.parent": 0},
+				picked: map[string]int{"Update z.parent": 1}},
+			opts:    all,
+			want:    append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent"),
+			wantErr: "the update of table z.parent updated 0 rows, but its pick took 1 row: a trigger BEFORE UPDATE that returns NULL, ",
+		},
+		{
+			// Another write of the apply deleted a row to delete first.
+			name:     "a deletion whose pick takes fewer rows than the plan shows",
 			settings: sync,
 			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete a.child": 1}},
 			opts:     all,
 			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child"),
-			wantErr:  "table a.child: the delete changed 1 row, but the plan has 2 rows to delete",
+			wantErr: "the deletion from table a.child found 1 row to delete, but the plan has 2: " +
+				"another write of the apply had deleted rows that the plan deletes before the deletion, through a trigger, a rule, or the action of a foreign key, " +
+				"and an apply deletes exactly the rows that its plan shows, so it stops: " +
+				"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, " +
+				"or change the trigger, the rule, or the foreign key that deletes them while the apply writes",
+		},
+		{
+			// Another write of the apply added a row that the declaration
+			// lacks.
+			name:     "a deletion whose pick takes more rows than the plan shows",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete z.parent": 2}},
+			opts:     all,
+			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child",
+				"Delete a.child", "Delete z.parent"),
+			wantErr: "the deletion from table z.parent found 2 rows to delete, but the plan has 1: " +
+				"another write of the apply added rows that the declaration lacks to the table after the plan, through a trigger, a rule, or the action of a foreign key, " +
+				"and an apply deletes only the rows that its plan shows, so it stops: " +
+				"declare the rows that those writes add, or change the trigger, the rule, or the foreign key that adds them",
+		},
+		{
+			// A trigger BEFORE DELETE that returns NULL keeps a row.
+			name:     "a deletion that deletes fewer rows than its pick took",
+			settings: sync,
+			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete a.child": 1},
+				picked: map[string]int{"Delete a.child": 2}},
+			opts: all,
+			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child"),
+			wantErr: "the deletion from table a.child deleted 1 row, but its pick took 2 rows: a trigger BEFORE DELETE that returns NULL, " +
+				"a policy of row-level security, or a rule created after the plan changed what the statement did, " +
+				"and an apply writes exactly the rows that it picks, so it stops: change the trigger, the policy, or the rule of table a.child, " +
+				"or leave the table out of the declaration",
+		},
+		{
+			// The pick and the statement both took more rows than the plan
+			// shows: the pick is held to the plan first.
+			name:     "a deletion that deletes as many rows as its pick took, more than the plan shows",
+			settings: sync,
+			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete a.child": 3},
+				picked: map[string]int{"Delete a.child": 3}},
+			opts:    all,
+			want:    append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child"),
+			wantErr: "the deletion from table a.child found 3 rows to delete, but the plan has 2: ",
 		},
 		{
 			name:     "the commit fails",
 			settings: sync,
 			db:       &fakeDB{diffs: map[declaration.TableName]plan.TableDiff{child: {Inserts: rowsOf(1)}}, fail: map[string]error{"Commit": errDB}},
 			opts:     all,
-			want:     append(diffs, "ForeignKeys a.child z.parent", "Insert a.child", "Commit"),
+			want:     append(diffs, "ForeignKeys a.child z.parent", "Insert a.child", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 			wantErr:  errDB.Error(),
 		},
 		{
@@ -632,8 +816,12 @@ func TestRun(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
+			// A run that called Commit committed.
+			if want := slices.Contains(tt.want, "Commit"); r.Committed != want {
+				t.Errorf("Run().Committed = %t, want %t", r.Committed, want)
+			}
 			got := *r
-			got.Plan = nil
+			got.Plan, got.Committed = nil, false
 			if !reflect.DeepEqual(got, tt.wantResult) {
 				t.Errorf("Run() = %+v, want %+v", got, tt.wantResult)
 			}
@@ -670,7 +858,8 @@ func TestRunPlanned(t *testing.T) {
 			name:   "before the first write",
 			tables: []string{"a.child"},
 			opts:   Options{AllowDelete: true, MaxDelete: 2},
-			want:   []string{"Describe a.child", "Diff a.child", "Planned", "PrepareDeletes", "ForeignKeys a.child", "Insert a.child", "Delete a.child", "CheckEffect", "Commit"},
+			want: []string{"Describe a.child", "Diff a.child", "Planned", "PrepareDeletes", "ForeignKeys a.child", "Insert a.child", "Delete a.child", "CheckEffect",
+				"DiffAgain a.child", "Commit"},
 		},
 		{
 			name:    "before the limit",

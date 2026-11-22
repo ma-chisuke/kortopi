@@ -559,7 +559,7 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 `SET LOCAL` の文には、そのトランザクションが要る。トランザクションの外では、警告を出すだけである。
 `SET LOCAL client_encoding` が効くのは、クライアントがそのあとに別のメッセージとして送る文である。`psql` はそう送る。スクリプト全体を1つのメッセージで送るクライアントでは、スクリプトはすでにそのクライアントの符号化方式で読まれている。そのため、そうしたクライアントは `client_encoding` を UTF8 にして接続する必要がある。データベースのドライバーは、ふつうそうする。
 
-スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除を示すか、何も示さない。
+スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、トリガーやルールが宣言と違うものにした値を示すか、何も示さない。
 
 ### 削除
 
@@ -612,7 +612,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 スクリプトは、適用と同じ変更を同じ順にする。ただし、適用が文の前後ですることはしない。
 
 - ロックを取らない。そのため、同時に動く適用を待たない。
-- 各文が、計画の示す数の行を変えたかを検査しない。行が計画と違うデータベースでは、行の見つからない更新や削除は、エラーなしに何も変えない。挿入がキーで失敗することもある。文のすることを変えるトリガーや、計画のあとに作られたルールにも気づかない。計画のときにあるルールは、計画を止める（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
+- 各文が書く行の数を計画と照らし合わせず、適用のようにコミットの前に宣言したテーブルをもう一度比べることもしない（[kortopi apply](apply.ja.md#書き込みの行数)）。トランザクションは実行する側のものであり、kortopi は文とそのコミットの間に手順を挟めないからである。行が計画と違うデータベースでは、行の見つからない更新や削除は、エラーなしに何も変えない。挿入がキーで失敗することもある。文のすることを変えるトリガーや、計画のあとに作られたルール、たとえば宣言した値を書き換えるトリガーにも、次の計画まで気づかない。計画のときにあるルールは、計画を止める（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
 - `--max-delete` を当てはめず、挿入と更新のあとで削除の外部キーをもう一度たどることも、削除がしたことを確かめることもしない。
 - 更新は値の違う列だけを設定する。そのため、要るのはそれらの列に対する `UPDATE` だけであり、`UPDATE OF` のトリガーもそれらの列でしか働かない。
 - 1つの文で1行を更新する。適用は、テーブルの行を1つの文で更新する。PostgreSQL は、遅らせていない外部キーと、遅らせていなくても `DEFERRABLE` な一意制約を、各文の終わりに検査する。そのため、テーブルのすべての行が変わって初めて成り立つ変更は、適用では動き、スクリプトでは失敗する。そうした一意制約の値を2つの行で入れ替える変更や、同じテーブルのほかの行が参照する値（親カテゴリのコードなど）をその参照と一緒に変える変更である。1つのトランザクションで実行すれば、スクリプトは失敗し、何も変えない。対処は2つある。apply を実行するか、制約を `DEFERRABLE` と宣言し、更新より前の `SET CONSTRAINTS ... DEFERRED` によって、スクリプトのトランザクションの中で遅らせるかである。遅らせられない一意制約は行ごとに検査される。そのため、その値の入れ替えは適用でもできない。
@@ -666,4 +666,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:8164d23ceb32ae9bc92ba261c3e76fc7b4c2b04403d0e7bba5f1adf414e4d1ce -->
+<!-- i18n-source: plan.md sha256:49f78b744e2b6ee73bfde43f81f151056723ea86fb22ea14fcd7c9c5bcb8ce52 -->

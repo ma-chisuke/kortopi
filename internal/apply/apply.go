@@ -1,5 +1,6 @@
 // Package apply brings the rows of the target database to the declared state
-// in one transaction (ADR-0017), behind the guards on deletions (ADR-0018).
+// in one transaction (ADR-0017), behind the guards on deletions (ADR-0018),
+// and commits only when the declared tables are as declared (ADR-0042).
 //
 // The package holds what is the same for every database: the order of the
 // tables along their foreign keys, the cycles, and the guards. What differs
@@ -19,15 +20,20 @@ import (
 //
 // The methods of plan.Database compute the difference. The declared rows
 // that Diff loads stay loaded until the session ends, in a plan too, because
-// Effects reads them (ADR-0039), and Insert, Update, and Delete write from
-// them. Everything happens in one transaction, which only Commit makes
-// lasting.
+// Effects reads them (ADR-0039), Insert, Update, and Delete write from them,
+// and DiffAgain compares them again. Everything happens in one transaction,
+// which only Commit makes lasting.
 //
 // An apply that deletes calls the methods in this order: Diff for every
 // table; Effects, through plan.Build; PrepareDeletes, before any write;
 // Insert and Update; Effects again, after the inserts and updates, whose
 // result the apply compares with the first; Delete for every table with rows
-// to delete; CheckEffect; and Commit.
+// to delete; CheckEffect; DiffAgain for every table; and Commit. An apply
+// without deletions leaves out PrepareDeletes, the second Effects, Delete,
+// and CheckEffect. When its plan has rows to delete, which it leaves in
+// place, it calls PrepareLeftOut before any write, and CountLeftOut after
+// DiffAgain. An apply that writes nothing calls none of the methods after
+// Diff and Effects (ADR-0042).
 type Database interface {
 	plan.Database
 
@@ -46,18 +52,20 @@ type Database interface {
 	// writes.
 	PrepareDeletes(ctx context.Context) error
 
-	// Insert adds the declared rows that the table lacks, and returns their
-	// number. The request is the one that Diff got for the table.
-	Insert(ctx context.Context, req plan.DiffRequest) (int, error)
+	// Insert picks the declared rows that the table lacks when it runs, with
+	// the conditions of the plan, adds them, and returns both numbers, which
+	// the apply holds to the plan (CheckCount). The request is the one that
+	// Diff got for the table.
+	Insert(ctx context.Context, req plan.DiffRequest) (Count, error)
 
-	// Update sets the compared columns of the rows that differ to the
-	// declared values, and returns the number of rows.
-	Update(ctx context.Context, req plan.DiffRequest) (int, error)
+	// Update picks the rows that differ when it runs, sets their compared
+	// columns to the declared values, and returns both numbers.
+	Update(ctx context.Context, req plan.DiffRequest) (Count, error)
 
-	// Delete removes the rows that the declaration lacks, and returns their
-	// number. Effects must have computed the effect of the deletions after
-	// the inserts and updates, before the first Delete.
-	Delete(ctx context.Context, req plan.DiffRequest) (int, error)
+	// Delete picks the rows that the declaration lacks, removes them, and
+	// returns both numbers. Effects must have computed the effect of the
+	// deletions after the inserts and updates, before the first Delete.
+	Delete(ctx context.Context, req plan.DiffRequest) (Count, error)
 
 	// CheckEffect checks, after the deletions and before the commit, that
 	// they did what the last call of Effects counted: every row that it
@@ -68,6 +76,31 @@ type Database interface {
 	// error stops the apply, which then rolls back. Nothing that changes rows
 	// runs between it and Commit.
 	CheckEffect(ctx context.Context) error
+
+	// DiffAgain compares the declared rows that Diff loaded for the table of
+	// req with the rows of the table again, after the writes of the apply
+	// and before its commit, in the same transaction and with the
+	// comparison of Diff, and returns what still differs, as Diff returns
+	// it: the rows to insert, and those to update and to delete when the
+	// mode of the table allows them (ADR-0042). It reads, and changes no row.
+	// The request is the one that Diff got for the table.
+	DiffAgain(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error)
+
+	// PrepareLeftOut checks, before the first write of an apply without
+	// Options.AllowDelete, what CountLeftOut needs from the session to count
+	// what the writes do to the named tables, whose rows to delete the apply
+	// leaves in place, and starts to count, so that an apply that could not
+	// count stops before it writes (ADR-0042).
+	PrepareLeftOut(ctx context.Context, names []declaration.TableName) error
+
+	// CountLeftOut returns, after the writes of the apply, the rows that its
+	// transaction deleted from and inserted into each table that
+	// PrepareLeftOut named, since then, as the database counts them. It
+	// leaves out a table whose counts would not tell a row that moves within
+	// the table, from one of its partitions to another, from a row deleted
+	// and another inserted: the apply checks such a table by the number of
+	// its rows that the declaration lacks alone.
+	CountLeftOut(ctx context.Context) (map[declaration.TableName]Written, error)
 
 	// Commit makes the changes lasting. Without it, closing the session
 	// leaves the database as it was. When the database rejects the commit,
@@ -118,11 +151,48 @@ const DefaultMaxDelete = 100
 type Result struct {
 	// Plan is the difference that the apply found, as a plan shows it.
 	Plan *plan.Plan
-	// Inserted, Updated, and Deleted count the rows that the apply wrote.
+	// Inserted, Updated, and Deleted count the rows that the statements of
+	// the apply wrote, as the database reported them.
 	Inserted int
 	Updated  int
 	Deleted  int
 	// SkippedDeletes counts the rows to delete that the apply left in place
 	// because Options.AllowDelete was false.
 	SkippedDeletes int
+	// Uneven holds the updates whose picks found fewer rows that still
+	// differ than the plan shows, in the order of the writes. The check
+	// before the commit found the declared tables as declared all the same:
+	// the other writes of the apply had brought the rows to their declared
+	// values already (ADR-0042). Any other count that differs from the plan
+	// stops the apply (CheckCount).
+	Uneven []Uneven
+	// Committed is true when the apply committed its transaction.
+	Committed bool
+}
+
+// Uneven is an update of an apply whose pick found fewer rows that still
+// differ than the plan shows, and that wrote the rows that it picked.
+type Uneven struct {
+	Table declaration.TableName
+	// Wrote is the number of rows that the update picked and wrote, and
+	// Planned the number that the plan shows.
+	Wrote   int
+	Planned int
+}
+
+// Count is what one write of an apply did: Picked is the number of rows
+// that its pick took, with the conditions of the plan, when the write ran,
+// and Wrote the number of rows that its statement then inserted, updated, or
+// deleted, as the database reports it (ADR-0037).
+type Count struct {
+	Picked int
+	Wrote  int
+}
+
+// Written counts the rows that the transaction of an apply deleted from a
+// table and inserted into it, by every statement, trigger, rule, and action
+// of a foreign key, as CountLeftOut returns them.
+type Written struct {
+	Deleted  int
+	Inserted int
 }

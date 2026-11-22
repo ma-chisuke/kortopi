@@ -11,10 +11,13 @@ import (
 // RenderSummary writes what an apply wrote, for the lines after its plan,
 // which Options.Planned shows: a blank line and the count of the rows
 // inserted, updated, and deleted, and a line of the rows that the deletions
-// also deleted and changed through foreign keys (ADR-0039). When deletions
-// were left out, a line counts them, with what they would also do, and names
-// the flag that allows them (ADR-0018); when they were all that differed,
-// that line stands alone and says that nothing was written. An
+// also deleted and changed through foreign keys (ADR-0039). When updates
+// found fewer rows to update than the plan shows, a line says which, and that
+// the other writes of the apply had done their work already, as the check
+// before the commit confirmed (ADR-0042). When
+// deletions were left out, a line counts them, with what they would also
+// do, and names the flag that allows them (ADR-0018); when they were all that
+// differed, that line stands alone and says that nothing was written. An
 // apply that found nothing to change writes nothing more than its plan,
 // which says so.
 func RenderSummary(w io.Writer, r *Result) error {
@@ -23,7 +26,7 @@ func RenderSummary(w io.Writer, r *Result) error {
 	}
 	var b bytes.Buffer
 	b.WriteString("\n")
-	wrote := r.Inserted+r.Updated+r.Deleted > 0
+	wrote := r.Committed || r.Inserted+r.Updated+r.Deleted > 0
 	totals := r.Plan.Totals()
 	if wrote || r.SkippedDeletes == 0 {
 		fmt.Fprintf(&b, "Applied: %d inserted, %d updated, %d deleted.\n", r.Inserted, r.Updated, r.Deleted)
@@ -33,6 +36,9 @@ func RenderSummary(w io.Writer, r *Result) error {
 				deletions = "deletion"
 			}
 			fmt.Fprintf(&b, "Through foreign keys, the %s also %s.\n", deletions, reach)
+		}
+		for _, line := range unevenLines(r.Uneven) {
+			b.WriteString(line + "\n")
 		}
 	}
 	if r.SkippedDeletes > 0 {
@@ -57,4 +63,19 @@ func RenderSummary(w io.Writer, r *Result) error {
 	}
 	_, err := w.Write(b.Bytes())
 	return err
+}
+
+// unevenLines returns the line of the updates that found fewer rows to
+// update than the plan shows, whose rows the other writes of the apply had
+// brought to their declared values already, or nothing.
+func unevenLines(uneven []Uneven) []string {
+	if len(uneven) == 0 {
+		return nil
+	}
+	fewer := make([]string, len(uneven))
+	for i, u := range uneven {
+		n := u.Planned - u.Wrote
+		fewer[i] = rowsTo(n, KindUpdate) + " of " + u.Table.String() + " held " + word(n, "its", "their") + " declared values already"
+	}
+	return []string{"Fewer than planned: " + joinAnd(fewer) + ", after the other writes of the apply."}
 }

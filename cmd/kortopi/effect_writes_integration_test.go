@@ -227,8 +227,7 @@ func TestApplyAfterItsWrites(t *testing.T) {
 					),
 					wantErr: `kortopi: an apply that deletes rows needs track_counts = on, but the session has "off": ` +
 						"the apply checks before its commit what its deletions did by the counts of the rows that its transaction deleted and updated, " +
-						"which PostgreSQL keeps only with track_counts on: apply in a session that leaves track_counts on, as it is by default, " +
-						"or apply without deleting rows\n" +
+						"which PostgreSQL keeps only with track_counts on: apply in a session that leaves track_counts on, as it is by default\n" +
 						"kortopi: nothing was changed\n",
 					wantRows: []string{"plan basic legacy", "orders 1 2"},
 				},

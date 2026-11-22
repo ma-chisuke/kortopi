@@ -1,0 +1,11 @@
+catalog.plans (sync, key: code)
+  ~ code=basic  name: Basic -> "Basic Plan"
+  ~ code=pro  name: Pro -> "Pro Plan"
+  - code=legacy
+  0 to insert, 2 to update, 1 to delete
+
+Plan: 0 to insert, 2 to update, 1 to delete in 1 table.
+
+Applied: 0 inserted, 0 updated, 0 deleted.
+Fewer than planned: 2 rows to update of catalog.plans held their declared values already, after the other writes of the apply.
+Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.

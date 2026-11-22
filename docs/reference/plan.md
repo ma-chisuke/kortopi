@@ -559,7 +559,7 @@ A tool of versioned migrations usually runs each file in a transaction of its ow
 The `SET LOCAL` statements need the transaction: outside one, they only warn.
 `SET LOCAL client_encoding` applies to the statements that the client sends after it as messages of their own, as `psql` does. A client that sends the whole script as one message has had it read in its own encoding already, so it must connect with `client_encoding` set to UTF8, as database drivers usually do.
 
-After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, or nothing.
+After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, the values that a trigger or a rule made other than the declaration says, or nothing.
 
 ### Deletions
 
@@ -612,7 +612,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 The script makes the changes of an apply, in its order, but it does not do what an apply does around its statements:
 
 - It takes no lock, so it does not wait for an apply that runs at the same time.
-- It does not check that each statement changed as many rows as the plan shows. Against a database whose rows differ from the plan, an update or a deletion that finds no row changes nothing, without an error, and an insert can fail on a key. A trigger, or a rule created after the plan, that changes what a statement does goes unnoticed: a rule that exists when the plan runs stops the plan ([Declaration files](declaration.md#a-table-with-a-rule)).
+- It does not hold the number of rows that each statement writes to the plan, and it does not compare the declared tables again before the commit, as an apply does ([kortopi apply](apply.md#the-counts-of-the-writes)): the transaction is yours, and kortopi has no step between the statements and its commit. Against a database whose rows differ from the plan, an update or a deletion that finds no row changes nothing, without an error, and an insert can fail on a key. A trigger, or a rule created after the plan, that changes what a statement does, such as a trigger that rewrites a declared value, goes unnoticed until the next plan: a rule that exists when the plan runs stops the plan ([Declaration files](declaration.md#a-table-with-a-rule)).
 - It does not apply `--max-delete`, it does not follow the foreign keys of the deletions again after the inserts and updates, and it does not check what the deletions did.
 - An update sets only the columns that differ, so it needs `UPDATE` on those columns alone, and fires `UPDATE OF` triggers for those columns alone.
 - It updates one row in each statement, where an apply updates the rows of a table in one statement. PostgreSQL checks a foreign key that is not deferred, and a unique constraint that is `DEFERRABLE` even while it is not deferred, at the end of each statement. So a change that holds only once every row of a table has changed works in an apply and fails in the script: two rows that swap the values of such a unique constraint, or a value that other rows of the same table reference, such as the code of a parent category, changed together with those references. Run in one transaction, the script then fails and changes nothing. Run an apply instead, or make the constraint `DEFERRABLE` and defer it in the transaction of the script, with `SET CONSTRAINTS ... DEFERRED` before the updates. A unique constraint that is not deferrable is checked row by row, so two rows cannot swap its values in an apply either.

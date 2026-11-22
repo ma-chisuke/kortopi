@@ -117,6 +117,12 @@ type Session struct {
 	// the top of each relation.
 	deletesChecked bool
 	writtenBefore  map[uint32]written
+	// leftOut holds the tables whose rows to delete an apply without
+	// --allow-delete leaves in place and whose writes CountLeftOut counts,
+	// and leftOutBefore the counters of the rows that the transaction had
+	// deleted and inserted before its first write, by relation (ADR-0042).
+	leftOut       []*loadedTable
+	leftOutBefore map[uint32]written
 	// effect is the temporary table of the rows that the deletions reach,
 	// which Effects made last (ADR-0039), and effectUpdates the most updates
 	// that the deletions may make in each partitioned table at the top of a

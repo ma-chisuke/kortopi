@@ -76,11 +76,17 @@ type applyResult struct {
 // computes the effect of the deletions, defers the deferrable foreign keys,
 // inserts and updates from referenced to referencing tables, and, when
 // allowDelete is true, computes the effect again, stops on a declared row in
-// the way, deletes the other way, and checks the effect. It then commits. It
-// does not compare the two effects, which the package apply does.
+// the way, deletes the other way, and checks the effect. It holds the count
+// of every write to the plan with apply.CheckCount, as the package apply
+// does. It then compares every table again, stops when a difference is left
+// but as many rows to delete as it left out, and, without allowDelete, when
+// the writes deleted rows of a table with rows to delete or inserted other
+// rows into it than its insert wrote, by CountLeftOut, and commits. It does
+// not compare the two effects, which the package apply does.
 func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDelete bool) (applyResult, error) {
 	var r applyResult
 	byName := make(map[declaration.TableName]plan.DiffRequest, len(reqs))
+	diffs := make(map[declaration.TableName]plan.TableDiff, len(reqs))
 	names := make([]declaration.TableName, 0, len(reqs))
 	var deleting []declaration.TableName
 	for _, req := range reqs {
@@ -88,11 +94,19 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		if err != nil {
 			return r, err
 		}
-		byName[req.Table.Name] = req
+		byName[req.Table.Name], diffs[req.Table.Name] = req, d
 		names = append(names, req.Table.Name)
 		if len(d.Deletes) > 0 {
 			deleting = append(deleting, req.Table.Name)
 		}
+	}
+	// write runs a write of the table name, and holds its count to the plan.
+	write := func(name declaration.TableName, kind string, planned int, statement func(context.Context, plan.DiffRequest) (apply.Count, error)) (int, error) {
+		c, err := statement(ctx, byName[name])
+		if err != nil {
+			return 0, err
+		}
+		return c.Wrote, apply.CheckCount(name, kind, planned, c)
 	}
 	// As plan.Build does; the conflicts are left to the deletions.
 	if _, err := s.Effects(ctx, deleting); err != nil {
@@ -100,6 +114,11 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 	}
 	if allowDelete && len(deleting) > 0 {
 		if err := s.PrepareDeletes(ctx); err != nil {
+			return r, err
+		}
+	}
+	if !allowDelete && len(deleting) > 0 {
+		if err := s.PrepareLeftOut(ctx, deleting); err != nil {
 			return r, err
 		}
 	}
@@ -120,13 +139,15 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 	if err != nil {
 		return r, err
 	}
+	inserted := make(map[declaration.TableName]int)
 	for _, name := range order {
-		n, err := s.Insert(ctx, byName[name])
+		n, err := write(name, apply.KindInsert, len(diffs[name].Inserts), s.Insert)
 		if err != nil {
 			return r, err
 		}
 		r.inserted += n
-		if n, err = s.Update(ctx, byName[name]); err != nil {
+		inserted[name] = n
+		if n, err = write(name, apply.KindUpdate, len(diffs[name].Updates), s.Update); err != nil {
 			return r, err
 		}
 		r.updated += n
@@ -140,7 +161,7 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 			return r, fmt.Errorf("after the inserts and updates, %d foreign keys reach declared rows: %+v", len(again.Conflicts), again.Conflicts)
 		}
 		for _, name := range slices.Backward(order) {
-			n, err := s.Delete(ctx, byName[name])
+			n, err := write(name, apply.KindDelete, len(diffs[name].Deletes), s.Delete)
 			if err != nil {
 				return r, err
 			}
@@ -148,6 +169,30 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		}
 		if err := s.CheckEffect(ctx); err != nil {
 			return r, err
+		}
+	}
+	for _, req := range reqs {
+		left, err := s.DiffAgain(ctx, req)
+		if err != nil {
+			return r, err
+		}
+		skipped := 0
+		if !allowDelete {
+			skipped = len(diffs[req.Table.Name].Deletes)
+		}
+		if len(left.Inserts)+len(left.Updates) > 0 || len(left.Deletes) != skipped {
+			return r, fmt.Errorf("after the writes, table %s differs: %v", req.Table.Name, diffLines(left))
+		}
+	}
+	if !allowDelete && len(deleting) > 0 {
+		counts, err := s.CountLeftOut(ctx)
+		if err != nil {
+			return r, err
+		}
+		for name, w := range counts {
+			if w.Deleted != 0 || w.Inserted != inserted[name] {
+				return r, fmt.Errorf("after the writes, table %s lost %d rows and gained %d, and its insert wrote %d", name, w.Deleted, w.Inserted, inserted[name])
+			}
 		}
 	}
 	return r, s.Commit(ctx)
@@ -508,8 +553,11 @@ func TestReferences(t *testing.T) {
 	}
 }
 
-// After each statement, the number of rows that it changed must be the
-// number that the plan showed: a trigger that skips a row stops the apply.
+// A write returns the number of rows that its statement changed, which the
+// package apply compares with the plan: a trigger that skips a row makes the
+// insert write 2 of the 3 rows of the plan. The comparison after the writes
+// finds the row that the table lacks, and a session of a plan has none
+// (ADR-0042).
 func TestApplyRowCount(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -523,11 +571,26 @@ func TestApplyRowCount(t *testing.T) {
 			`)
 			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,a\n2,b\n3,c\n"})
 			s := db.applySession(t, db.Config, dir)
-			_, err := applyAll(t.Context(), s, []plan.DiffRequest{request(t, s, csvTable("app", "t", "id", "v"), nil, config.ModeUpsert)}, false)
-			want := "insert into table app.t changed 2 rows, but the plan has 3: " +
-				"a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops"
-			if err == nil || err.Error() != want {
-				t.Errorf("apply: %v\nwant %s", err, want)
+			req := request(t, s, csvTable("app", "t", "id", "v"), nil, config.ModeUpsert)
+			if _, err := s.Diff(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			// The pick takes the 3 rows of the plan, and the trigger keeps one
+			// of them out of the statement.
+			if c, err := s.Insert(t.Context(), req); c != (apply.Count{Picked: 3, Wrote: 2}) || err != nil {
+				t.Errorf("Insert = %+v, %v, want 3 rows picked and 2 written", c, err)
+			}
+			left, err := s.DiffAgain(t.Context(), req)
+			if lines := diffLines(left); err != nil || !slices.Equal(lines, []string{`+ "2" | "b"`}) {
+				t.Errorf("DiffAgain = %v, %v, want the row that the trigger skipped", lines, err)
+			}
+
+			plain := db.session(t, dir)
+			if _, err := plain.Diff(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := plain.DiffAgain(t.Context(), req); !errors.Is(err, errNotApply) {
+				t.Errorf("DiffAgain on a session of a plan: %v, want %v", err, errNotApply)
 			}
 		})
 	}
@@ -630,8 +693,8 @@ func TestApplyWaitsForAnotherApply(t *testing.T) {
 			// The first holds the lock, and the second waits for it, in a
 			// transaction: neither holds a lock of its session.
 			waitForLocks(t, db, 1, 1)
-			if n, err := first.Insert(t.Context(), req); err != nil || n != 1 {
-				t.Fatalf("Insert = %d, %v", n, err)
+			if c, err := first.Insert(t.Context(), req); err != nil || c.Wrote != 1 {
+				t.Fatalf("Insert = %+v, %v", c, err)
 			}
 			if err := first.Commit(t.Context()); err != nil {
 				t.Fatal(err)
@@ -822,8 +885,8 @@ func TestApplyLoadErrorKeepsTheSession(t *testing.T) {
 			if _, err := s.Diff(t.Context(), b); err == nil {
 				t.Fatal("Diff of a bad value succeeded")
 			}
-			if n, err := s.Insert(t.Context(), a); err != nil || n != 1 {
-				t.Fatalf("Insert = %d, %v", n, err)
+			if c, err := s.Insert(t.Context(), a); err != nil || c.Wrote != 1 {
+				t.Fatalf("Insert = %+v, %v", c, err)
 			}
 			if _, err := s.Insert(t.Context(), b); err == nil {
 				t.Error("Insert of a table that did not load succeeded")

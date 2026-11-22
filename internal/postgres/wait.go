@@ -59,6 +59,21 @@ func (s *Session) moreTime() string {
 // rolls back, so the advice is to run the command again. After an interrupt,
 // the cancel is kortopi's own, and the error stays as it is.
 func (s *Session) explainWait(ctx context.Context, err *error) {
+	s.explain(ctx, err, true)
+}
+
+// explainRead is explainWait for the comparison before the commit of an
+// apply (ADR-0042), which reads the tables that the plan read and locked
+// already, so a cancel ends it while it works rather than while it waits
+// for a lock.
+func (s *Session) explainRead(ctx context.Context, err *error) {
+	s.explain(ctx, err, false)
+}
+
+// explain adds to *err what happened, for explainWait and explainRead: waits
+// says whether a cancel most likely came while the statement waited for a
+// lock.
+func (s *Session) explain(ctx context.Context, err *error, waits bool) {
 	var pgErr *pgconn.PgError
 	var explained *waitError
 	if *err == nil || ctx.Err() != nil || !errors.As(*err, &pgErr) || errors.As(*err, &explained) {
@@ -75,6 +90,11 @@ func (s *Session) explainWait(ctx context.Context, err *error) {
 			"and the %s waited for it as long as %s allows%s: run the %s again once that session has released the lock%s",
 			s.work(), s.work(), s.lockLimit(), unchanged, s.work(), s.moreTime())}
 	case queryCanceled:
+		if !waits {
+			*err = &waitError{err: *err, advice: fmt.Sprintf("the statement was cancelled, by statement_timeout or by another session%s: "+
+				"run the %s again, and allow the statement more time if statement_timeout ended it", unchanged, s.work())}
+			return
+		}
 		*err = &waitError{err: *err, advice: fmt.Sprintf("the statement was cancelled, by statement_timeout or by another session, "+
 			"often while it waited for a lock that another session holds%s: run the %s again once that session has released the lock, or allow the statement more time",
 			unchanged, s.work())}
