@@ -168,6 +168,9 @@
 | identity column | 識別列 |
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |
+| partition, attach and detach（パーティションを） | パーティション、アタッチする、デタッチする |
+| storage（テーブルの）、rewrite（新しいストレージを与えるスキーマの変更がテーブルを） | ストレージ、書き換える |
+| MVCC-safe（PostgreSQL のコマンドが） | MVCC に対して安全 |
 | inherit（テーブルを） | 継承する |
 | text form（値の） | テキスト表現 |
 | byte order mark | バイトオーダーマーク |
@@ -268,4 +271,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:2919a37495c6e2767b52a73358b84ca9c52e685e66ecab60da42450a714ea327 -->
+<!-- i18n-source: translation.md sha256:c69d667e3f58538e36c51830242d95c33353e557f7a99231b6040ee12bca28fa -->
