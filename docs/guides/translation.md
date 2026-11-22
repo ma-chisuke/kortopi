@@ -206,6 +206,15 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | set-based statement | 集合単位の文 |
 | phase (of an apply) | 段階 |
 | outcome (of a commit) | 結果 |
+| cancel request (of the protocol of PostgreSQL) | キャンセル要求 |
+| lock timeout (`lock_timeout`, `--lock-timeout`) | ロック待ちの上限 |
+| keepalive, probe (of TCP) | キープアライブ、プローブ |
+| signal (of the operating system) | シグナル |
+| process ID | プロセス ID |
+| start-up parameter (of a connection) | 起動パラメータ |
+| give up (a wait) | 待つのをやめる |
+| job runner (that runs a pipeline) | ジョブの実行役 |
+| synchronous standby | 同期スタンバイ |
 | script (the plan printed as SQL) | スクリプト |
 | statement, keyword (of SQL) | 文、キーワード |
 | string literal, standard string, escape string (`E'...'`) | 文字列リテラル、標準の文字列、エスケープ文字列 |
