@@ -9,23 +9,24 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
 
-// written counts the rows of a relation that the transaction deleted and
-// updated.
+// written counts the rows of a relation that the transaction deleted,
+// updated, and inserted.
 type written struct {
-	deleted int64
-	updated int64
+	deleted  int64
+	updated  int64
+	inserted int64
 }
 
-// writtenRows returns the rows that the transaction deleted and updated so
-// far in each table that is not temporary, by the partitioned table at the
-// top of each relation: PostgreSQL counts the rows of a partitioned table in
-// its partitions.
+// writtenRows returns the rows that the transaction deleted, updated, and
+// inserted so far in each table that is not temporary, by the partitioned
+// table at the top of each relation: PostgreSQL counts the rows of a
+// partitioned table in its partitions.
 func (s *Session) writtenRows(ctx context.Context) (map[uint32]written, error) {
 	rows, err := s.tx.Query(ctx, `SELECT COALESCE(pg_catalog.pg_partition_root(t.relid)::pg_catalog.oid, t.relid),
-			pg_catalog.sum(t.n_tup_del)::pg_catalog.int8, pg_catalog.sum(t.n_tup_upd)::pg_catalog.int8
+			pg_catalog.sum(t.n_tup_del)::pg_catalog.int8, pg_catalog.sum(t.n_tup_upd)::pg_catalog.int8, pg_catalog.sum(t.n_tup_ins)::pg_catalog.int8
 		FROM pg_catalog.pg_stat_xact_user_tables AS t
 		JOIN pg_catalog.pg_class AS c ON c.oid = t.relid
-		WHERE c.relpersistence <> 't' AND (t.n_tup_del > 0 OR t.n_tup_upd > 0)
+		WHERE c.relpersistence <> 't' AND (t.n_tup_del > 0 OR t.n_tup_upd > 0 OR t.n_tup_ins > 0)
 		GROUP BY 1`)
 	if err != nil {
 		return nil, fmt.Errorf("read the rows that the apply deleted and updated: %w", err)
@@ -35,7 +36,7 @@ func (s *Session) writtenRows(ctx context.Context) (map[uint32]written, error) {
 	for rows.Next() {
 		var oid uint32
 		var w written
-		if err := rows.Scan(&oid, &w.deleted, &w.updated); err != nil {
+		if err := rows.Scan(&oid, &w.deleted, &w.updated, &w.inserted); err != nil {
 			return nil, fmt.Errorf("read the rows that the apply deleted and updated: %w", err)
 		}
 		out[oid] = w
@@ -55,7 +56,10 @@ func (s *Session) writtenRows(ctx context.Context) (map[uint32]written, error) {
 //     times than one for each referencing row and foreign key that such an
 //     action can change, by the counters of the rows of the transaction
 //     since the first deletion, by the partitioned table at the top of each
-//     relation; a table that Effects did not reach lost and changed none.
+//     relation; a table that Effects did not reach lost and changed none. In
+//     a table where such an action sets a column of a partition key, a
+//     changed row that moves to another partition counts as one deletion
+//     and one insertion instead of an update.
 //
 // The first finds a row that another transaction deleted, or pointed at
 // another row, after the snapshot, or that a trigger BEFORE DELETE, a rule of
@@ -219,12 +223,26 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 	for _, oid := range oids {
 		want := expected[oid]
 		most := s.effectUpdates[oid]
-		got := written{deleted: now[oid].deleted - s.writtenBefore[oid].deleted, updated: now[oid].updated - s.writtenBefore[oid].updated}
+		got := written{
+			deleted:  now[oid].deleted - s.writtenBefore[oid].deleted,
+			updated:  now[oid].updated - s.writtenBefore[oid].updated,
+			inserted: now[oid].inserted - s.writtenBefore[oid].inserted,
+		}
+		// PostgreSQL moves a row whose partition key changes to another
+		// partition, as a deletion and an insertion: each further deletion
+		// must come with an insertion, and counts as one change.
+		var moved int64
+		gone := got.deleted == want.deleted
+		if s.effectMoves[oid] {
+			moved = got.deleted - want.deleted
+			gone = moved >= 0 && got.inserted == moved
+		}
+		changes := got.updated + moved
 		switch {
-		case got.deleted != want.deleted:
+		case !gone:
 			// Rows that a cascade would delete and a trigger or a rule kept,
 			// or rows that the deletions reached beyond the plan.
-		case got.updated < want.updated || got.updated > most:
+		case changes < want.updated || changes > most:
 			// Rows that the actions SET NULL and SET DEFAULT that the plan
 			// counted did not change, or changes beyond them: of a key or a
 			// partition that the catalogs of the snapshot do not show, a
@@ -239,15 +257,22 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			return fmt.Errorf("read the name of a table that the deletions changed: %w", err)
 		}
 		what := fmt.Sprintf("deleted %d %s of table %s, and the plan counted %d", got.deleted, plural(got.deleted, "row", "rows"), name, want.deleted)
+		allows := strconv.FormatInt(want.updated, 10)
+		if most != want.updated {
+			allows = fmt.Sprintf("from %d to %d", want.updated, most)
+		}
 		switch {
-		case got.deleted != want.deleted:
+		case !gone && s.effectMoves[oid] && moved >= 0:
+			what = fmt.Sprintf("deleted %d %s of table %s and inserted %d, and the plan counted %d deleted, "+
+				"and one more deleted and one inserted for each row that SET NULL or SET DEFAULT moves to another partition",
+				got.deleted, plural(got.deleted, "row", "rows"), name, got.inserted, want.deleted)
+		case !gone:
 		case most == 0:
-			what = fmt.Sprintf("changed %d %s of table %s, which the plan did not count", got.updated, plural(got.updated, "row", "rows"), name)
+			what = fmt.Sprintf("changed %d %s of table %s, which the plan did not count", changes, plural(changes, "row", "rows"), name)
+		case s.effectMoves[oid]:
+			what = fmt.Sprintf("updated rows of table %s, or moved them to another partition, %d %s, and the plan allows %s",
+				name, changes, plural(changes, "time", "times"), allows)
 		default:
-			allows := strconv.FormatInt(want.updated, 10)
-			if most != want.updated {
-				allows = fmt.Sprintf("from %d to %d", want.updated, most)
-			}
 			what = fmt.Sprintf("updated rows of table %s %d %s, and the plan allows %s", name, got.updated, plural(got.updated, "time", "times"), allows)
 		}
 		return fmt.Errorf("the deletions %s: a foreign key or a partition that another transaction added while the apply ran, "+

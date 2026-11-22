@@ -109,6 +109,9 @@ type Session struct {
 	// relation, as it counted them; CheckEffect compares the counts with them.
 	effect        string
 	effectUpdates map[uint32]int64
+	// effectMoves holds the partitioned tables at the top of a relation in
+	// which a change of the deletions can move a row to another partition.
+	effectMoves map[uint32]bool
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.

@@ -74,7 +74,7 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 		return out, nil
 	}
 	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
-		w := &walk{s: s, tx: tx, table: s.nextTemp(), updates: make(map[uint32]int64)}
+		w := &walk{s: s, tx: tx, table: s.nextTemp(), updates: make(map[uint32]int64), moves: make(map[uint32]bool)}
 		if err := w.partitionTrees(ctx); err != nil {
 			return err
 		}
@@ -106,7 +106,7 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 			})
 		}
 		out.Conflicts = w.conflicts
-		s.effect, s.effectUpdates = w.table, w.updates
+		s.effect, s.effectUpdates, s.effectMoves = w.table, w.updates, w.moves
 		return nil
 	})
 	if err != nil {
@@ -128,6 +128,10 @@ type walk struct {
 	// referencing row and foreign key, also of a row that a deletion takes
 	// away too (ADR-0039).
 	updates map[uint32]int64
+	// moves holds the partitioned tables at the top of a relation in which
+	// SET NULL or SET DEFAULT sets a column of a partition key, so that a
+	// changed row can move to another partition.
+	moves map[uint32]bool
 }
 
 // level is one level of the walk from the rows to delete of a table: the
@@ -472,6 +476,21 @@ func (w *walk) countUpdates(ctx context.Context, r refs, root *loadedTable, i, l
 		return fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
 	}
 	w.updates[r.e.top] += n
+	if n == 0 || w.moves[r.e.top] {
+		return nil
+	}
+	// A row moves only within the tree of the relation that the action
+	// updates: a partitioned table of it whose key holds a column that the
+	// action sets, or an expression, which may read one.
+	var moves bool
+	if err := w.tx.QueryRow(ctx, `SELECT EXISTS (SELECT FROM pg_catalog.pg_partition_tree($1::pg_catalog.oid::pg_catalog.regclass) AS p
+			JOIN pg_catalog.pg_partitioned_table AS pt ON pt.partrelid = p.relid
+			WHERE pt.partexprs IS NOT NULL OR EXISTS (SELECT FROM pg_catalog.unnest(pt.partattrs::pg_catalog.int2[]) AS k(attnum)
+				JOIN pg_catalog.pg_attribute AS a ON a.attrelid = pt.partrelid AND a.attnum = k.attnum
+				WHERE a.attname::pg_catalog.text OPERATOR(pg_catalog.=) ANY ($2::pg_catalog.text[])))`, r.e.fromOID, r.e.set).Scan(&moves); err != nil {
+		return fmt.Errorf("read the partition keys of table %s: %w", r.e.table, err)
+	}
+	w.moves[r.e.top] = moves
 	return nil
 }
 
