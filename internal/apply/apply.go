@@ -24,9 +24,10 @@ import (
 // lasting.
 //
 // An apply that deletes calls the methods in this order: Diff for every
-// table; Effects, through plan.Build; Insert and Update; Effects again, after
-// the inserts and updates, whose result the apply compares with the first;
-// Delete for every table with rows to delete; CheckEffect; and Commit.
+// table; Effects, through plan.Build; PrepareDeletes, before any write;
+// Insert and Update; Effects again, after the inserts and updates, whose
+// result the apply compares with the first; Delete for every table with rows
+// to delete; CheckEffect; and Commit.
 type Database interface {
 	plan.Database
 
@@ -38,6 +39,12 @@ type Database interface {
 	// Defer postpones the check of the given foreign keys, which must be
 	// deferrable, to the commit.
 	Defer(ctx context.Context, keys []ForeignKey) error
+
+	// PrepareDeletes checks, before the first write of an apply that
+	// deletes, what CheckEffect needs from the session to check the
+	// deletions, so that an apply that could not check them stops before it
+	// writes.
+	PrepareDeletes(ctx context.Context) error
 
 	// Insert adds the declared rows that the table lacks, and returns their
 	// number. The request is the one that Diff got for the table.

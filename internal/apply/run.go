@@ -78,6 +78,12 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	if len(writes) == 0 {
 		return r, nil
 	}
+	deleting := plan.Deleting(p.Tables)
+	if opts.AllowDelete && len(deleting) > 0 {
+		if err := db.PrepareDeletes(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	keys, err := db.ForeignKeys(ctx, names)
 	if err != nil {
@@ -106,7 +112,7 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 		r.Updated += updated
 	}
-	if deleting := plan.Deleting(p.Tables); opts.AllowDelete && len(deleting) > 0 {
+	if opts.AllowDelete && len(deleting) > 0 {
 		if err := checkEffectAgain(ctx, decl, db, p, deleting); err != nil {
 			return nil, err
 		}

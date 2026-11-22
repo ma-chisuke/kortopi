@@ -31,7 +31,7 @@ func TestRunEffectAgain(t *testing.T) {
 	diffs := map[declaration.TableName]plan.TableDiff{parent: {Inserts: rowsOf(1), Deletes: deletesOf(1)}, child: {Inserts: rowsOf(1)}}
 	planned := map[declaration.TableName]plan.Effect{parent: {Steps: []plan.Step{cascadeStep("b.orders", "orders_parent", 2)}}}
 	before := []string{
-		"Describe a.child z.parent", "Diff a.child", "Diff z.parent", "ForeignKeys a.child z.parent", "Insert a.child", "Insert z.parent",
+		"Describe a.child z.parent", "Diff a.child", "Diff z.parent", "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert a.child", "Insert z.parent",
 	}
 	all := Options{AllowDelete: true, MaxDelete: DefaultMaxDelete}
 	tests := []struct {
@@ -216,7 +216,7 @@ func TestRunDeletesReachedTablesFirst(t *testing.T) {
 	if _, err := Run(t.Context(), decl, sync, db, Options{AllowDelete: true, MaxDelete: DefaultMaxDelete}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Describe m.order_tag m.plan", "Diff m.order_tag", "Diff m.plan", "ForeignKeys m.order_tag m.plan",
+	want := []string{"Describe m.order_tag m.plan", "Diff m.order_tag", "Diff m.plan", "PrepareDeletes", "ForeignKeys m.order_tag m.plan",
 		"Delete m.order_tag", "Delete m.plan", "CheckEffect", "Commit"}
 	if !reflect.DeepEqual(db.calls, want) {
 		t.Errorf("calls = %v, want %v", db.calls, want)

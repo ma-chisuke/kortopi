@@ -108,6 +108,10 @@ func (s *fakeSession) ForeignKeys(context.Context, []declaration.TableName) ([]a
 	return s.keys, s.record("ForeignKeys")
 }
 
+func (s *fakeSession) PrepareDeletes(context.Context) error {
+	return s.record("PrepareDeletes")
+}
+
 func (s *fakeSession) Defer(_ context.Context, keys []apply.ForeignKey) error {
 	names := make([]string, len(keys))
 	for i, k := range keys {

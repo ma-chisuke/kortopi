@@ -98,6 +98,11 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 	if _, err := s.Effects(ctx, deleting); err != nil {
 		return r, err
 	}
+	if allowDelete && len(deleting) > 0 {
+		if err := s.PrepareDeletes(ctx); err != nil {
+			return r, err
+		}
+	}
 	keys, err := s.ForeignKeys(ctx, names)
 	if err != nil {
 		return r, err

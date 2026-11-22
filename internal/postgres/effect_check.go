@@ -76,6 +76,29 @@ func (s *Session) CheckEffect(ctx context.Context) (err error) {
 	return s.checkWrittenRows(ctx)
 }
 
+// PrepareDeletes returns an error, before the first write of an apply that
+// deletes, when the session cannot count the rows that its transaction
+// deletes and updates, which CheckEffect compares with the effect of the
+// deletions: with track_counts off, PostgreSQL counts none, and every
+// deletion would look like one that did less than the plan counted.
+func (s *Session) PrepareDeletes(ctx context.Context) (err error) {
+	defer s.explainWait(ctx, &err)
+	if !s.apply {
+		return errNotApply
+	}
+	var counts string
+	if err := s.tx.QueryRow(ctx, "SELECT pg_catalog.current_setting('track_counts')").Scan(&counts); err != nil {
+		return fmt.Errorf("read track_counts: %w", err)
+	}
+	if counts != "on" {
+		return fmt.Errorf("an apply that deletes rows needs track_counts = on, but the session has %q: "+
+			"the apply checks before its commit what its deletions did by the counts of the rows that its transaction deleted and updated, "+
+			"which PostgreSQL keeps only with track_counts on: apply in a session that leaves track_counts on, as it is by default, "+
+			"or apply without deleting rows", counts)
+	}
+	return nil
+}
+
 // reachedTable is a relation through which Effects reached rows.
 type reachedTable struct {
 	oid         uint32

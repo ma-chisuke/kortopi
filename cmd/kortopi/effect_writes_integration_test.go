@@ -23,7 +23,8 @@ import (
 //     in a column that the declaration does not name: the apply goes on, and
 //     the result is what the plan said;
 //   - a table of mode sync whose rows to delete a cascade from another table
-//     reaches is deleted first, so that its statement deletes its rows.
+//     reaches is deleted first, so that its statement deletes its rows;
+//   - a session with track_counts off stops before the first write.
 func TestApplyAfterItsWrites(t *testing.T) {
 	for _, srv := range pgtest.Servers() {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -33,6 +34,8 @@ func TestApplyAfterItsWrites(t *testing.T) {
 				name   string
 				schema string
 				files  map[string]string
+				// options are the options of the connection, as PGOPTIONS.
+				options string
 				// rows prints the stored rows through a plain connection.
 				rows       string
 				wantStdout string
@@ -158,11 +161,44 @@ func TestApplyAfterItsWrites(t *testing.T) {
 					),
 					wantRows: []string{"plan basic", "orders 1", "order_tag 1"},
 				},
+				{
+					name:    "a session with track_counts off",
+					options: "-c track_counts=off",
+					schema: `CREATE SCHEMA m; CREATE SCHEMA t;
+						CREATE TABLE m.plan (id int PRIMARY KEY, code text NOT NULL UNIQUE);
+						INSERT INTO m.plan VALUES (1, 'basic'), (2, 'legacy');
+						CREATE TABLE t.orders (id int PRIMARY KEY, plan_id int REFERENCES m.plan ON DELETE CASCADE);
+						INSERT INTO t.orders VALUES (1, 1), (2, 2);`,
+					files: map[string]string{
+						"kortopi.toml": "[tables.\"m.plan\"]\nkey = [\"code\"]\nmode = \"sync\"\n",
+						"m/plan.csv":   "id,code\n1,basic\n3,team\n",
+					},
+					rows: `SELECT 'plan ' || string_agg(code, ' ' ORDER BY code) FROM m.plan
+						UNION ALL SELECT 'orders ' || string_agg(id::text, ' ' ORDER BY id) FROM t.orders`,
+					wantStdout: lines(
+						"m.plan (sync, key: code)",
+						"  + code=team  id=3",
+						"  - code=legacy",
+						"  1 to insert, 0 to update, 1 to delete",
+						"  Through foreign keys, the deletion of this row also reaches other rows:",
+						"    1 row of t.orders (plan_id) references it through orders_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too.",
+						"",
+						"Plan: 1 to insert, 0 to update, 1 to delete in 1 table.",
+						"Through foreign keys, the deletion also deletes 1 row.",
+					),
+					wantErr: `kortopi: an apply that deletes rows needs track_counts = on, but the session has "off": ` +
+						"the apply checks before its commit what its deletions did by the counts of the rows that its transaction deleted and updated, " +
+						"which PostgreSQL keeps only with track_counts on: apply in a session that leaves track_counts on, as it is by default, " +
+						"or apply without deleting rows\n" +
+						"kortopi: nothing was changed\n",
+					wantRows: []string{"plan basic legacy", "orders 1 2"},
+				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					db := srv.Database(t)
 					db.Exec(t, tt.schema)
 					t.Setenv("PGPASSWORD", db.Config.Password)
+					t.Setenv("PGOPTIONS", tt.options)
 					dir := writeFiles(t, tt.files)
 					before := db.Objects(t)
 					args := []string{"apply", "--dir", dir, "--allow-delete", "--max-delete", "10",
