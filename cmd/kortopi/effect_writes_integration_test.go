@@ -24,6 +24,10 @@ import (
 //     the result is what the plan said;
 //   - a table of mode sync whose rows to delete a cascade from another table
 //     reaches is deleted first, so that its statement deletes its rows;
+//   - inserts with values of on_insert, updates, and deletions with a cascade
+//     and SET NULL write temporary tables of their own (ADR-0037), which the
+//     check after the deletions leaves out of its counts, and the apply
+//     commits;
 //   - a session with track_counts off stops before the first write.
 func TestApplyAfterItsWrites(t *testing.T) {
 	for _, srv := range pgtest.Servers() {
@@ -162,6 +166,41 @@ func TestApplyAfterItsWrites(t *testing.T) {
 					wantRows: []string{"plan basic", "orders 1", "order_tag 1"},
 				},
 				{
+					name: "inserts with on_insert, updates, and deletions",
+					schema: `CREATE SCHEMA m; CREATE SCHEMA t;
+						CREATE TABLE m.plan (id int PRIMARY KEY, code text NOT NULL UNIQUE, name text, created_by text NOT NULL);
+						INSERT INTO m.plan VALUES (1, 'basic', 'Basic', 'seed'), (2, 'legacy', 'Legacy', 'seed');
+						CREATE TABLE t.orders (id int PRIMARY KEY, plan_id int REFERENCES m.plan ON DELETE CASCADE);
+						INSERT INTO t.orders VALUES (1, 1), (2, 2), (3, 2);
+						CREATE TABLE t.notes (id int PRIMARY KEY, plan_id int REFERENCES m.plan ON DELETE SET NULL);
+						INSERT INTO t.notes VALUES (1, 2), (2, 1);`,
+					files: map[string]string{
+						"kortopi.toml": "[tables.\"m.plan\"]\nkey = [\"code\"]\nmode = \"sync\"\non_insert = { created_by = \"kortopi\" }\n",
+						"m/plan.csv":   "id,code,name\n1,basic,Basic Plan\n3,team,Team\n",
+					},
+					rows: `SELECT 'plan ' || string_agg(format('%s/%s/%s', code, name, created_by), ' ' ORDER BY code) FROM m.plan
+						UNION ALL SELECT 'orders ' || string_agg(id::text, ' ' ORDER BY id) FROM t.orders
+						UNION ALL SELECT 'notes ' || string_agg(format('%s/%s', id, coalesce(plan_id::text, 'NULL')), ' ' ORDER BY id) FROM t.notes`,
+					wantStdout: lines(
+						"m.plan (sync, key: code)",
+						`  on insert: created_by="kortopi"`,
+						"  + code=team  id=3  name=Team",
+						`  ~ code=basic  name: Basic -> "Basic Plan"`,
+						"  - code=legacy",
+						"  1 to insert, 1 to update, 1 to delete",
+						"  Through foreign keys, the deletion of this row also reaches other rows:",
+						"    1 row of t.notes (plan_id) references it through notes_plan_id_fkey, ON DELETE SET NULL, so the deletion sets plan_id of this row to NULL.",
+						"    2 rows of t.orders (plan_id) reference it through orders_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.",
+						"",
+						"Plan: 1 to insert, 1 to update, 1 to delete in 1 table.",
+						"Through foreign keys, the deletion also deletes 2 rows and changes 1 row.",
+						"",
+						"Applied: 1 inserted, 1 updated, 1 deleted.",
+						"Through foreign keys, the deletion also deleted 2 rows and changed 1 row.",
+					),
+					wantRows: []string{"plan basic/Basic Plan/seed team/Team/kortopi", "orders 1", "notes 1/NULL 2/1"},
+				},
+				{
 					name:    "a session with track_counts off",
 					options: "-c track_counts=off",
 					schema: `CREATE SCHEMA m; CREATE SCHEMA t;
@@ -223,6 +262,95 @@ func TestApplyAfterItsWrites(t *testing.T) {
 						t.Errorf("rows after the apply: %v, want %v", got, tt.wantRows)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestApplyDeletesWithSelectOnTheDeclaredColumns runs apply as a role that
+// may read the declared tables in their declared columns alone, which is
+// enough for a plan and for the writes of an apply (ADR-0024, ADR-0037):
+//
+//   - the rows to delete of m.kind are found by its declared key, and the
+//     foreign key of t.uses references that key: the walk reads t.uses, which
+//     the role may read as a whole, and the apply deletes and checks what
+//     the plan counted;
+//   - m.node references itself, and the walk reads the identities of the
+//     rows of a referencing table, which a privilege on columns does not
+//     cover: the apply stops before any write, and says what to grant.
+func TestApplyDeletesWithSelectOnTheDeclaredColumns(t *testing.T) {
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			t.Setenv("PGSSLMODE", "disable")
+			t.Setenv("PGCONNECT_TIMEOUT", "10")
+			db := srv.Database(t)
+			db.Exec(t, `CREATE SCHEMA m; CREATE SCHEMA t;
+				CREATE TABLE m.kind (id int PRIMARY KEY, code text NOT NULL UNIQUE, secret text);
+				INSERT INTO m.kind VALUES (1, 'keep', 's'), (2, 'gone', 's');
+				CREATE TABLE t.uses (id int PRIMARY KEY, kind_code text REFERENCES m.kind (code) ON DELETE CASCADE);
+				INSERT INTO t.uses VALUES (1, 'keep'), (2, 'gone');
+				CREATE TABLE m.node (id int PRIMARY KEY, parent_id int REFERENCES m.node ON DELETE CASCADE, name text, secret text);
+				INSERT INTO m.node VALUES (1, NULL, 'root', 's'), (2, 1, 'a', 's'), (3, 2, 'b', 's');`)
+			role := db.Role(t, "columns")
+			db.Exec(t, "GRANT USAGE ON SCHEMA m, t TO "+role.User+"; GRANT TEMPORARY ON DATABASE "+db.Name+" TO "+role.User+
+				"; GRANT SELECT (code), DELETE ON m.kind TO "+role.User+"; GRANT SELECT ON t.uses TO "+role.User+
+				"; GRANT SELECT (id, parent_id, name), DELETE ON m.node TO "+role.User)
+			t.Setenv("PGPASSWORD", role.Password)
+			conn := []string{"--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", role.User, "--dbname", db.Name}
+			rows := func() []string {
+				var got []string
+				for _, r := range db.Query(t, `SELECT 'kind ' || string_agg(code, ' ' ORDER BY code) FROM m.kind
+					UNION ALL SELECT 'uses ' || string_agg(id::text, ' ' ORDER BY id) FROM t.uses
+					UNION ALL SELECT 'node ' || string_agg(id::text, ' ' ORDER BY id) FROM m.node`) {
+					got = append(got, r[0])
+				}
+				return got
+			}
+
+			kinds := writeFiles(t, map[string]string{
+				"kortopi.toml": "[tables.\"m.kind\"]\nkey = [\"code\"]\nmode = \"sync\"\n",
+				"m/kind.csv":   "code\nkeep\n",
+			})
+			code, stdout, stderr := runTest(t, append([]string{"apply", "--dir", kinds, "--allow-delete"}, conn...), buildDialects(t))
+			checkRun(t, code, stdout, stderr, exitOK, lines(
+				"m.kind (sync, key: code)",
+				"  - code=gone",
+				"  0 to insert, 0 to update, 1 to delete",
+				"  Through foreign keys, the deletion of this row also reaches other rows:",
+				"    1 row of t.uses (kind_code) references it through uses_kind_code_fkey, ON DELETE CASCADE, so the deletion deletes this row too.",
+				"",
+				"Plan: 0 to insert, 0 to update, 1 to delete in 1 table.",
+				"Through foreign keys, the deletion also deletes 1 row.",
+				"",
+				"Applied: 0 inserted, 0 updated, 1 deleted.",
+				"Through foreign keys, the deletion also deleted 1 row.",
+			))
+			if got := rows(); !slices.Equal(got, []string{"kind keep", "uses 1", "node 1 2 3"}) {
+				t.Errorf("rows after the apply: %v", got)
+			}
+
+			nodes := writeFiles(t, map[string]string{
+				"kortopi.toml": "[tables.\"m.node\"]\nmode = \"sync\"\n",
+				"m/node.csv":   "id,parent_id,name\n1,,root\n",
+			})
+			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", nodes, "--allow-delete"}, conn...), buildDialects(t))
+			checkRun(t, code, stdout, stderr, exitError, lines(
+				"m.node (sync, key: id)",
+				"  - id=2",
+				"  - id=3",
+				"  0 to insert, 0 to update, 2 to delete",
+				"  Through foreign keys, the deletions of these rows also reach other rows:",
+				"    Rows of m.node (parent_id) may reference them through node_parent_id_fkey, ON DELETE CASCADE, but the role may not read the table, so what the deletions do to them is not known.",
+				"",
+				"Plan: 0 to insert, 0 to update, 2 to delete in 1 table.",
+				"What the deletions do through 1 foreign key is not known.",
+			),
+				`kortopi: the deletion of rows of m.node reaches rows of m.node through foreign key "node_parent_id_fkey", ON DELETE CASCADE, `+
+					"and the role may not read m.node as a whole, so what the deletion does to them cannot be counted for the limit on deletions: "+
+					"grant the role SELECT on m.node, on the table and not only on its columns, or remove those rows first\n"+
+					"kortopi: nothing was changed\n")
+			if got := rows(); !slices.Equal(got, []string{"kind keep", "uses 1", "node 1 2 3"}) {
+				t.Errorf("rows after the failed apply: %v", got)
 			}
 		})
 	}
