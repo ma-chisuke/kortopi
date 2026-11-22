@@ -153,7 +153,22 @@ func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ int, err 
 	if err != nil || lt.inserts == 0 {
 		return 0, err
 	}
-	return s.write(ctx, lt, "insert into", lt.c.insertSQL(), lt.inserts)
+	table := lt.meta.name
+	picked, values := s.nextTemp(), ""
+	prepare := []batchStatement{{what: "pick the rows to insert into table " + table.String(), sql: lt.c.pickInsertsSQL(picked)}}
+	if len(lt.c.onInsert) > 0 {
+		// The values of on_insert are read in the pinned settings, as a plan
+		// reads them, into one row typed like their columns (ADR-0035).
+		values = s.nextTemp()
+		columns := make([]tempColumn, len(lt.c.onInsert))
+		for i, col := range lt.c.onInsert {
+			columns[i] = tempColumn{name: col.name, typed: true}
+		}
+		prepare = append(prepare,
+			batchStatement{what: "create the temporary table of the values of on_insert of table " + table.String(), sql: createDeclaredSQL(values, table, columns)},
+			batchStatement{what: "read the values of on_insert of table " + table.String(), sql: lt.c.insertValuesSQL(values)})
+	}
+	return s.write(ctx, lt, "insert into", prepare, lt.c.insertSQL(picked, values), lt.inserts)
 }
 
 // Update sets the compared columns that differ to the declared values, and
@@ -164,7 +179,9 @@ func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (_ int, err 
 	if err != nil || lt.updates == 0 || !req.Updates {
 		return 0, err
 	}
-	return s.write(ctx, lt, "update", lt.c.updateSQL(), lt.updates)
+	picked := s.nextTemp()
+	pick := batchStatement{what: "pick the rows to update in table " + lt.meta.name.String(), sql: lt.c.pickUpdatesSQL(picked)}
+	return s.write(ctx, lt, "update", []batchStatement{pick}, lt.c.updateSQL(picked), lt.updates)
 }
 
 // Delete removes the rows that the declaration lacks, and returns their
@@ -186,7 +203,9 @@ func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err 
 	if err := s.checkReferences(ctx, lt); err != nil {
 		return 0, err
 	}
-	return s.write(ctx, lt, "delete from", lt.c.deleteSQL(), lt.deletes)
+	picked := s.nextTemp()
+	pick := batchStatement{what: "pick the rows to delete from table " + lt.meta.name.String(), sql: lt.c.pickDeletesSQL(picked)}
+	return s.write(ctx, lt, "delete from", []batchStatement{pick}, lt.c.deleteSQL(picked), lt.deletes)
 }
 
 // checkDeletes returns an error when the role may not delete from a loaded
@@ -223,12 +242,19 @@ func (s *Session) Commit(ctx context.Context) error {
 	case s.closed || s.committed:
 		return errors.New("the session has ended: there is nothing to commit")
 	}
+	// The transaction commits with commitSQL, which sets the settings of
+	// the session first: the deferred constraints and triggers of the
+	// writes run with them, as the writes do (ADR-0037).
 	if err := s.tx.Commit(ctx); err != nil {
 		return commitError(err)
 	}
 	s.committed = true
 	return nil
 }
+
+// inFailedTransaction is the SQLSTATE of PostgreSQL for a statement in a
+// transaction that has failed, which ignores every statement until its end.
+const inFailedTransaction = "25P02"
 
 // commitError turns the error of COMMIT into the error of Commit. An error
 // of PostgreSQL that rejects the commit, such as a deferred foreign key or a
@@ -237,14 +263,19 @@ func (s *Session) Commit(ctx context.Context) error {
 // context ended while kortopi waited, and the commit may have been made or
 // not. A FATAL error is such a case too: the server ended the session, and
 // its message does not say whether the commit came first.
+//
+// A transaction that had failed before the commit is rolled back. COMMIT
+// alone gets the answer ROLLBACK then; the statement that sets the settings
+// of the session before COMMIT (commitSQL) gets the error of a failed
+// transaction instead, and COMMIT does not run.
 func commitError(err error) error {
 	var pgErr *pgconn.PgError
 	switch {
-	case errors.As(err, &pgErr) && pgErr.SeverityUnlocalized != "FATAL" && pgErr.SeverityUnlocalized != "PANIC":
-		return &writeError{statement: "commit", err: pgErr, advice: adviceFor(pgErr, "commit", declaration.TableName{})}
-	case errors.Is(err, pgx.ErrTxCommitRollback):
+	case errors.Is(err, pgx.ErrTxCommitRollback) || errors.As(err, &pgErr) && pgErr.Code == inFailedTransaction:
 		// PostgreSQL answered with ROLLBACK: the transaction had failed.
 		return fmt.Errorf("commit the apply: PostgreSQL rolled the transaction back, so nothing was changed: %w", err)
+	case errors.As(err, &pgErr) && pgErr.SeverityUnlocalized != "FATAL" && pgErr.SeverityUnlocalized != "PANIC":
+		return &writeError{statement: "commit", err: pgErr, advice: adviceFor(pgErr, "commit", declaration.TableName{})}
 	}
 	return fmt.Errorf("commit the apply: %w (cause: %w)", apply.ErrUnknownOutcome, err)
 }
@@ -283,32 +314,42 @@ func (lt *loadedTable) matchKeyIndex(index string) bool {
 	return true
 }
 
-// write runs one statement of an apply, and checks that it changed want
-// rows: a trigger or a rule that changes what the statement does makes the
-// apply stop.
-func (s *Session) write(ctx context.Context, lt *loadedTable, verb, sql string, want int) (int, error) {
+// write runs one statement of an apply, after the statements of prepare,
+// which pick its rows, and checks that it changed want rows: a trigger or a
+// rule that changes what the statement does makes the apply stop. The
+// statement runs with the settings of the session, and the others with the
+// pinned settings (execWrite).
+func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepare []batchStatement, sql string, want int) (int, error) {
 	table := lt.meta.name
-	tag, err := s.tx.Exec(ctx, sql)
+	tag, failed, isWrite, err := s.execWrite(ctx, prepare, batchStatement{what: verb + " table " + table.String(), sql: sql})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			e := &writeError{statement: verb + " table " + table.String(), err: pgErr, advice: adviceFor(pgErr, verb, table)}
-			if pgErr.Code == "23505" && lt.matchKeyIndex(pgErr.ConstraintName) {
-				// Another transaction added a row with the key after the
-				// apply read the table.
-				e.conflict = true
-				e.advice = ErrConflict.Error()
-			}
-			return 0, e
-		}
-		return 0, fmt.Errorf("%s table %s: %w", verb, table, err)
+		return 0, lt.writeFailure(failed, isWrite, verb, err)
 	}
 	if got := int(tag.RowsAffected()); got != want {
 		return 0, fmt.Errorf("%s table %s changed %d %s, but the plan has %d: "+
-			"a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops",
+			"a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops",
 			verb, table, got, plural(int64(got), "row", "rows"), want)
 	}
 	return want, nil
+}
+
+// writeFailure returns the error of a statement of the batch of a write
+// that failed, which failed names. An error of PostgreSQL keeps its message,
+// detail, hint, and constraint, and gets the advice of its kind, whichever
+// statement of the batch it comes from (ADR-0026); a violation of the index
+// of the match key in the write itself means that another transaction
+// added a row with the key after the apply read the table.
+func (lt *loadedTable) writeFailure(failed string, isWrite bool, verb string, err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return fmt.Errorf("%s: %w", failed, err)
+	}
+	e := &writeError{statement: failed, err: pgErr, advice: adviceFor(pgErr, verb, lt.meta.name)}
+	if isWrite && pgErr.Code == "23505" && lt.matchKeyIndex(pgErr.ConstraintName) {
+		e.conflict = true
+		e.advice = ErrConflict.Error()
+	}
+	return e
 }
 
 // writeError is an error of PostgreSQL in a statement of an apply. It keeps

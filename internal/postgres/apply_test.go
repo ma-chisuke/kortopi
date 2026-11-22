@@ -15,40 +15,118 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
+// A write takes the rows that a pick statement chose with the conditions of
+// the plan: a declared row by its identifier in the temporary table, a stored
+// row by its key, with the equality of the key, named with its schema. It
+// reads no system column of the table (ADR-0037).
 func TestWriteStatements(t *testing.T) {
 	c := testComparison()
 	c.table = `"s"."t"`
 	match := c.match()
-	insert := `INSERT INTO "s"."t" ("a", "b", "x", "j") SELECT d."a", d."b", d."x", d."j" FROM pg_temp."kortopi_1" AS d ` +
+	const picked = `pg_temp."kortopi_2"`
+
+	pickInserts := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT d.ctid AS "row" FROM pg_temp."kortopi_1" AS d ` +
 		`WHERE NOT EXISTS (SELECT FROM ONLY "s"."t" AS s WHERE ` + match + `)`
-	if got := c.insertSQL(); got != insert {
+	if got := c.pickInsertsSQL(picked); got != pickInserts {
+		t.Errorf("pickInsertsSQL =\n%s\nwant\n%s", got, pickInserts)
+	}
+	insert := `INSERT INTO "s"."t" ("a", "b", "x", "j") SELECT d."a", d."b", d."x", d."j" ` +
+		`FROM pg_temp."kortopi_2" AS w JOIN pg_temp."kortopi_1" AS d ON d.ctid OPERATOR(pg_catalog.=) w."row"`
+	if got := c.insertSQL(picked, ""); got != insert {
 		t.Errorf("insertSQL =\n%s\nwant\n%s", got, insert)
 	}
 	c.overriding = true
-	if got := c.insertSQL(); !strings.Contains(got, `("a", "b", "x", "j") OVERRIDING SYSTEM VALUE SELECT`) {
+	if got := c.insertSQL(picked, ""); !strings.Contains(got, `("a", "b", "x", "j") OVERRIDING SYSTEM VALUE SELECT`) {
 		t.Errorf("insertSQL with an identity key =\n%s", got)
 	}
-	// The columns of on_insert follow, each with its value as a literal.
+	// The columns of on_insert follow, each from the one row of the values,
+	// which the literals fill in the pinned settings.
 	c.overriding = false
 	c.onInsert = []insertColumn{{name: "created at", literal: "'now'"}, {name: `n"`, literal: `E'a\\b'`}}
-	withValues := `INSERT INTO "s"."t" ("a", "b", "x", "j", "created at", "n""") SELECT d."a", d."b", d."x", d."j", 'now', E'a\\b' ` +
-		`FROM pg_temp."kortopi_1" AS d WHERE NOT EXISTS (SELECT FROM ONLY "s"."t" AS s WHERE ` + match + `)`
-	if got := c.insertSQL(); got != withValues {
+	withValues := `INSERT INTO "s"."t" ("a", "b", "x", "j", "created at", "n""") SELECT d."a", d."b", d."x", d."j", v."created at", v."n""" ` +
+		`FROM pg_temp."kortopi_2" AS w JOIN pg_temp."kortopi_1" AS d ON d.ctid OPERATOR(pg_catalog.=) w."row" CROSS JOIN pg_temp."kortopi_3" AS v`
+	if got := c.insertSQL(picked, `pg_temp."kortopi_3"`); got != withValues {
 		t.Errorf("insertSQL with values of on_insert =\n%s\nwant\n%s", got, withValues)
 	}
+	values := `INSERT INTO pg_temp."kortopi_3" ("created at", "n""") VALUES ('now', E'a\\b')`
+	if got := c.insertValuesSQL(`pg_temp."kortopi_3"`); got != values {
+		t.Errorf("insertValuesSQL =\n%s\nwant\n%s", got, values)
+	}
 	c.onInsert = nil
-	update := `UPDATE ONLY "s"."t" AS s SET "x" = CASE WHEN ` + c.differs(c.compare[0]) + ` THEN d."x" ELSE s."x" END, ` +
-		`"j" = CASE WHEN ` + c.differs(c.compare[1]) + ` THEN d."j" ELSE s."j" END ` +
-		`FROM pg_temp."kortopi_1" AS d WHERE ` + match + ` AND (` + c.differs(c.compare[0]) + ` OR ` + c.differs(c.compare[1]) + `)`
-	if got := c.updateSQL(); got != update {
+
+	pickUpdates := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT d.ctid AS "declared", s."a" AS "k1", s."b" AS "k2", ` +
+		c.differs(c.compare[0]) + ` AS "c1", ` + c.differs(c.compare[1]) + ` AS "c2" ` +
+		`FROM pg_temp."kortopi_1" AS d JOIN ONLY "s"."t" AS s ON ` + match + ` WHERE ` + c.differs(c.compare[0]) + ` OR ` + c.differs(c.compare[1])
+	if got := c.pickUpdatesSQL(picked); got != pickUpdates {
+		t.Errorf("pickUpdatesSQL =\n%s\nwant\n%s", got, pickUpdates)
+	}
+	update := `UPDATE ONLY "s"."t" AS s SET "x" = CASE WHEN w."c1" THEN d."x" ELSE s."x" END, "j" = CASE WHEN w."c2" THEN d."j" ELSE s."j" END ` +
+		`FROM pg_temp."kortopi_2" AS w JOIN pg_temp."kortopi_1" AS d ON d.ctid OPERATOR(pg_catalog.=) w."declared" ` +
+		`WHERE w."k1" OPERATOR("pg_catalog".=) s."a" AND w."k2" OPERATOR("pg_catalog".=) s."b"`
+	if got := c.updateSQL(picked); got != update {
 		t.Errorf("updateSQL =\n%s\nwant\n%s", got, update)
 	}
-	del := `DELETE FROM ONLY "s"."t" AS s WHERE NOT EXISTS (SELECT FROM pg_temp."kortopi_1" AS d WHERE ` + match + `)`
-	if got := c.deleteSQL(); got != del {
+
+	pickDeletes := `CREATE TEMPORARY TABLE pg_temp."kortopi_2" ON COMMIT DROP AS SELECT s."a" AS "k1", s."b" AS "k2" ` +
+		`FROM ONLY "s"."t" AS s WHERE NOT EXISTS (SELECT FROM pg_temp."kortopi_1" AS d WHERE ` + match + `)`
+	if got := c.pickDeletesSQL(picked); got != pickDeletes {
+		t.Errorf("pickDeletesSQL =\n%s\nwant\n%s", got, pickDeletes)
+	}
+	del := `DELETE FROM ONLY "s"."t" AS s USING pg_temp."kortopi_2" AS w ` +
+		`WHERE w."k1" OPERATOR("pg_catalog".=) s."a" AND w."k2" OPERATOR("pg_catalog".=) s."b"`
+	if got := c.deleteSQL(picked); got != del {
 		t.Errorf("deleteSQL =\n%s\nwant\n%s", got, del)
 	}
 	if got := c.matchWith("r"); !strings.Contains(got, `d."a" OPERATOR("pg_catalog".=) r."a"`) {
 		t.Errorf("matchWith = %s", got)
+	}
+}
+
+// The settings of a write are every pinned setting but client_encoding, set
+// with set_config, named with its schema, until the end of the transaction.
+func TestSettingsOfWrites(t *testing.T) {
+	pinned := pinnedForWrites()
+	if len(pinned) != len(settings)-1 {
+		t.Errorf("pinnedForWrites = %v", pinned)
+	}
+	for _, p := range pinned {
+		if p[0] == "client_encoding" {
+			t.Errorf("pinnedForWrites holds %v", p)
+		}
+	}
+	want := "SELECT pg_catalog.set_config($1, $2, true), pg_catalog.set_config($3, $4, true)"
+	if got := setSQL(2); got != want {
+		t.Errorf("setSQL(2) = %s, want %s", got, want)
+	}
+	params, oids := setParams([][2]string{{"TimeZone", "Asia/Tokyo"}, {"search_path", `"$user", public`}})
+	if len(params) != 4 || string(params[1]) != "Asia/Tokyo" || string(params[3]) != `"$user", public` || len(oids) != 4 || oids[0] != 25 {
+		t.Errorf("setParams = %q, %v", params, oids)
+	}
+	// The commit sets them in the same message, with literals.
+	got, err := commitSQL([][2]string{{"TimeZone", "Asia/Tokyo"}, {"search_path", `"$user", it's`}, {"x", `a\b`}})
+	want = `SELECT pg_catalog.set_config('TimeZone', 'Asia/Tokyo', true), pg_catalog.set_config('search_path', '"$user", it''s', true), ` +
+		`pg_catalog.set_config('x', E'a\\b', true); COMMIT`
+	if err != nil || got != want {
+		t.Errorf("commitSQL = %s, %v, want %s", got, err, want)
+	}
+}
+
+// The statement of a batch that failed is the first with an error, or the
+// one after the last result.
+func TestFailedStatement(t *testing.T) {
+	ok, failed := &pgconn.Result{}, &pgconn.Result{Err: errors.New("x")}
+	for _, tt := range []struct {
+		results []*pgconn.Result
+		want    int
+	}{
+		{nil, 0},
+		{[]*pgconn.Result{ok}, 1},
+		{[]*pgconn.Result{ok, failed}, 1},
+		{[]*pgconn.Result{ok, ok, ok}, 3},
+	} {
+		if got := failedStatement(tt.results); got != tt.want {
+			t.Errorf("failedStatement(%d results) = %d, want %d", len(tt.results), got, tt.want)
+		}
 	}
 }
 
@@ -123,6 +201,39 @@ func TestWriteError(t *testing.T) {
 	plain := &writeError{statement: "insert into table s.t", err: &pgconn.PgError{Code: "23505", Message: "m"}}
 	if errors.Is(plain, ErrConflict) || plain.Error() != "insert into table s.t: m" {
 		t.Errorf("writeError = %v", plain)
+	}
+}
+
+// An error of any statement of the batch of a write names that statement,
+// keeps what PostgreSQL said, and gets the advice of its kind; only the
+// write itself turns a violation of the match key into a conflict.
+func TestWriteFailure(t *testing.T) {
+	meta := testMeta()
+	meta.keyIndexes = map[string][]string{"t_pkey": {"id"}}
+	op := equality{kind: compareOperator, schema: "pg_catalog", op: "="}
+	lt := &loadedTable{meta: meta, c: &comparison{key: []column{{name: "id", eq: op}}}}
+	rls := &pgconn.PgError{Code: "42501", Message: `query would be affected by row-level security policy for table "t"`, Detail: "d", Hint: "h", ConstraintName: "c"}
+	err := lt.writeFailure("pick the rows to update in table s.t", false, "update", rls)
+	want := `pick the rows to update in table s.t: query would be affected by row-level security policy for table "t" (detail: d) (hint: h) (constraint: c): ` +
+		"the role lacks a privilege that the statement needs: grant it to the role"
+	if err == nil || err.Error() != want {
+		t.Errorf("writeFailure of a pick =\n%v\nwant\n%s", err, want)
+	}
+	serialization := &pgconn.PgError{Code: "40001", Message: "could not serialize access"}
+	err = lt.writeFailure("pick the rows to delete from table s.t", false, "delete from", serialization)
+	if !errors.Is(err, ErrConflict) || !strings.HasPrefix(err.Error(), "pick the rows to delete from table s.t: could not serialize access: ") {
+		t.Errorf("writeFailure of a serialization failure in a pick = %v, want ErrConflict", err)
+	}
+	key := &pgconn.PgError{Code: "23505", Message: "duplicate key value", ConstraintName: "t_pkey"}
+	if err := lt.writeFailure("insert into table s.t", true, "insert into", key); !errors.Is(err, ErrConflict) {
+		t.Errorf("writeFailure of the match key in the write = %v, want ErrConflict", err)
+	}
+	if err := lt.writeFailure("read the values of on_insert of table s.t", false, "insert into", key); errors.Is(err, ErrConflict) {
+		t.Errorf("writeFailure of the match key around the write = %v, want no ErrConflict", err)
+	}
+	broken := lt.writeFailure("set the settings of the session to update table s.t", false, "update", io.ErrUnexpectedEOF)
+	if !errors.Is(broken, io.ErrUnexpectedEOF) || broken.Error() != "set the settings of the session to update table s.t: unexpected EOF" {
+		t.Errorf("writeFailure of a broken connection = %v", broken)
 	}
 }
 
@@ -269,6 +380,11 @@ func TestCommitOutcome(t *testing.T) {
 		{
 			name: "rolled back by PostgreSQL",
 			err:  pgx.ErrTxCommitRollback,
+			want: "commit the apply: PostgreSQL rolled the transaction back, so nothing was changed",
+		},
+		{
+			name: "a transaction that had failed",
+			err:  &pgconn.PgError{Severity: "ERROR", SeverityUnlocalized: "ERROR", Code: "25P02", Message: "current transaction is aborted"},
 			want: "commit the apply: PostgreSQL rolled the transaction back, so nothing was changed",
 		},
 		{

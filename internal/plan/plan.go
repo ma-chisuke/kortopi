@@ -98,7 +98,31 @@ type TableInfo struct {
 	// a schema change.
 	NearNames   []declaration.TableName
 	NearSchemas []string
+	// Rules holds the rules of the table that rewrite a statement that
+	// writes its rows, sorted by name: a rule on INSERT, UPDATE, or DELETE
+	// that fires in a session that writes as an apply does. A rule that is
+	// disabled, or that fires only on a replica, is left out. kortopi does
+	// not write through rules (ADR-0038).
+	Rules []Rule
 }
+
+// Rule is a rule of the database that rewrites the statements of one kind
+// on a table into other statements, or into none.
+type Rule struct {
+	Name string
+	// Event is the kind of statement that the rule rewrites.
+	Event RuleEvent
+}
+
+// RuleEvent is the kind of statement that a rule rewrites.
+type RuleEvent string
+
+// The kinds of statement that write rows, which a rule can rewrite.
+const (
+	RuleOnInsert RuleEvent = "INSERT"
+	RuleOnUpdate RuleEvent = "UPDATE"
+	RuleOnDelete RuleEvent = "DELETE"
+)
 
 // SetAsideKey is a unique index or constraint that cannot match rows as a
 // plan compares them.

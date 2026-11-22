@@ -41,7 +41,10 @@ kortopi は、ファイルのテキストをデータベースと比べること
 | `xmloption` | `content` | `xml` の値は、`pg_dump` が書くのと同じく、文書全体ではなく内容として読む。 |
 | `lc_monetary` | `C` | `money` の値は、C ロケールの形で読み、表示する。どの環境でも同じである。 |
 | `row_security` | `off` | 行単位セキュリティのポリシーが絞り込む問い合わせは、少ない行を返さずに失敗する（[kortopi plan](plan.ja.md#セッションに要るもの)）。 |
+| `array_nulls` | `on` | 配列の `{NULL}` は、テキスト `NULL` ではなく NULL の要素である。 |
+| `timezone_abbreviations` | `Default` | 値の中のタイムゾーンの略称、たとえば `EST` は、PostgreSQL の略称の組 `Default` で読む。そこでは `EST` は UTC より5時間遅れている。 |
 
+apply も、これらの設定で読み、比べる。ただし、行は kortopi が固定する前にセッションが持っていた設定で書く。そのため、テーブルの既定値とトリガーは、アプリケーションの設定を見る（[kortopi apply](apply.ja.md#書き込みの設定)）。
 [kortopi export](export.ja.md) も、これらの設定で値を書く。そのため、計画はそのファイルを同じ値として読み戻す。
 SQL として出力した計画は、設定の違うセッションでも同じに読めるように各値を書く（[スクリプトの値](plan.ja.md#スクリプトの値)）。
 
@@ -198,6 +201,6 @@ PostgreSQL が行を読み込むとき、どの値も列に合う必要がある
 これらは、行を適用したときに見つかる（[kortopi apply](apply.ja.md)）。
 マージの前にこれらを見つける方法は、ADR-0016 にある。CI で、使い捨ての PostgreSQL に新しいスキーマを適用し、続けて行を適用する。
 
-これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0040](../adr/ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) にある。
+これらの決まりの理由は、[ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.ja.md)・[ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0040](../adr/ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) にある。
 
-<!-- i18n-source: comparison.md sha256:688404abc5b0af5d6344297c3e857765fce6642aaf107a173113239b45bd7982 -->
+<!-- i18n-source: comparison.md sha256:12f3fd7b41fd7c5fc5f6d3119d4d89e89f8b5c6e293265b6db07eded724eea54 -->

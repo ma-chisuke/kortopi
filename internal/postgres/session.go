@@ -50,6 +50,10 @@ type Options struct {
 // pg_catalog: a type in a cast must be written with its schema, as a dump
 // writes it. row_security is off, so that a policy of row-level security
 // makes a query fail instead of hiding rows from it.
+//
+// The pinned values are for reading and comparing. The statements of an
+// apply that write rows of the tables run with the values that the session
+// had before kortopi pinned them, all but client_encoding (ADR-0037).
 var settings = [...][2]string{
 	{"search_path", "pg_catalog"},
 	{"TimeZone", "UTC"},
@@ -62,6 +66,11 @@ var settings = [...][2]string{
 	{"xmloption", "content"},
 	{"lc_monetary", "C"},
 	{"row_security", "off"},
+	// array_nulls off would read {NULL} as an array of the text NULL, and
+	// another set of abbreviations would read EST or CST as another zone
+	// (ADR-0037).
+	{"array_nulls", "on"},
+	{"timezone_abbreviations", "Default"},
 }
 
 // applicationName names kortopi to the server, unless the environment names
@@ -105,6 +114,13 @@ type Session struct {
 	// major is the major version of the server, such as 17.
 	major  int
 	closed bool
+	// sessionSettings holds, in a session of an apply, the settings that a
+	// write runs with, each with the value that the session had before
+	// kortopi pinned it: what the server, the database, the role, and the
+	// options of the connection set (ADR-0037). commitSQL sets them again,
+	// and commits.
+	sessionSettings [][2]string
+	commitSQL       string
 }
 
 var _ plan.Database = (*Session)(nil)
@@ -366,6 +382,12 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
 		apply: opts.Apply, export: opts.Export, loaded: make(map[declaration.TableName]*loadedTable),
 	}
+	if s.apply {
+		if err := s.readSessionSettings(ctx); err != nil {
+			_ = conn.Close(ctx)
+			return nil, err
+		}
+	}
 	if err := s.begin(ctx, opts.Wait); err != nil {
 		_ = conn.Close(ctx)
 		return nil, err
@@ -392,7 +414,7 @@ const lockKey = 0x6b6f72746f7069
 func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	waited := false
 	for {
-		options := pgx.TxOptions{IsoLevel: pgx.RepeatableRead}
+		options := pgx.TxOptions{IsoLevel: pgx.RepeatableRead, CommitQuery: s.commitSQL}
 		if s.export {
 			options.AccessMode = pgx.ReadOnly
 		}

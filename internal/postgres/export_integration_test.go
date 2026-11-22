@@ -345,6 +345,78 @@ func TestExportFiles(t *testing.T) {
 	}
 }
 
+// Both formats sort the rows by the columns themselves, in the order of
+// their types, not by the text that the export writes: an integer key 2
+// before 10, a numeric -1 before 2, a date before Christ before one after
+// it and the year 10000 last, for one key column, for a composite key, and
+// for a table without a key, which is sorted by all its columns, text in
+// the order of its bytes. The order is that of ORDER BY on the columns.
+func TestExportOrderOfKeys(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA o;
+				CREATE TABLE o.ints (id integer PRIMARY KEY);
+				INSERT INTO o.ints SELECT pg_catalog.generate_series(12, 1, -1);
+				CREATE TABLE o.nums (n numeric PRIMARY KEY);
+				INSERT INTO o.nums VALUES (9.5), (10), (-1), (100.25), (2);
+				CREATE TABLE o.days (d date PRIMARY KEY);
+				INSERT INTO o.days VALUES ('10000-01-01'), ('2026-11-21'), ('0044-03-15 BC'), ('1999-12-31');
+				CREATE TABLE o.ids (u uuid PRIMARY KEY);
+				INSERT INTO o.ids VALUES ('ffffffff-0000-0000-0000-000000000000'), ('0000000a-0000-0000-0000-000000000000'),
+					('A0000000-0000-0000-0000-000000000000'), ('00000009-0000-0000-0000-000000000000');
+				CREATE TABLE o.pairs (a integer, b date, PRIMARY KEY (a, b));
+				INSERT INTO o.pairs VALUES (10, '2026-01-01'), (2, '2026-01-02'), (2, '10000-01-01'), (1, '2026-01-03');
+				CREATE TABLE o.loose (a integer, b text);
+				INSERT INTO o.loose VALUES (10, 'x'), (9, 'y'), (9, 'B'), (9, 'a');
+			`)
+			s, err := ConnectConfig(t.Context(), db.Config, Options{Export: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = s.Close(context.Background()) }()
+			for _, tt := range []struct {
+				table   string
+				columns []string
+				order   string
+			}{
+				{"ints", []string{"id"}, "x.id"},
+				{"nums", []string{"n"}, "x.n"},
+				{"days", []string{"d"}, "x.d"},
+				{"ids", []string{"u"}, "x.u"},
+				{"pairs", []string{"a", "b"}, "x.a, x.b"},
+				{"loose", []string{"a", "b"}, `x.a, x.b COLLATE "C"`},
+			} {
+				texts := make([]string, len(tt.columns))
+				for i, c := range tt.columns {
+					texts[i] = c + "::text"
+				}
+				// A bare name in ORDER BY would name the column of the result,
+				// which is text: the order goes by the columns of the table.
+				rows := db.Query(t, "SELECT "+strings.Join(texts, ", ")+" FROM o."+tt.table+" AS x ORDER BY "+tt.order)
+				name := declaration.TableName{Schema: "o", Name: tt.table}
+				head := `INSERT INTO "o".` + quoteIdent(tt.table) + " (" + quoteColumns("", tt.columns) + ") VALUES ("
+				wantCSV := strings.Join(tt.columns, ",") + "\n"
+				wantSQL := ""
+				for _, r := range rows {
+					wantCSV += strings.Join(r, ",") + "\n"
+					wantSQL += head + "'" + strings.Join(r, "', '") + "');\n"
+				}
+				for format, want := range map[declaration.Format]string{declaration.CSV: wantCSV, declaration.SQL: wantSQL} {
+					var b bytes.Buffer
+					if _, err := s.Write(t.Context(), &b, export.Request{Table: name, Columns: tt.columns, OrderBy: tt.columns, Format: format}); err != nil {
+						t.Fatalf("Write(%s): %v", name, err)
+					}
+					if b.String() != want {
+						t.Errorf("Write(%s) in format %d =\n%s\nwant\n%s", name, format, b.String(), want)
+					}
+				}
+			}
+		})
+	}
+}
+
 // An export reads only: it runs in a read-only session, with a role that
 // has no TEMPORARY, and it needs USAGE and SELECT on what it reads. Its
 // errors say "an export".
