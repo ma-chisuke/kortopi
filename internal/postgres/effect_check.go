@@ -384,10 +384,13 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 		// checkSchema (ADR-0048). The counts are those of the transaction
 		// since its first deletion, which hold what the constraint triggers
 		// deferred to the commit did too, of any write of the apply, since
-		// runDeferred ran them first.
+		// runDeferred ran them first. The trigger or the rule that changed the
+		// table can belong to another table, so the advice names where to
+		// look for it.
 		return fmt.Errorf("after its first deletion, the apply %s: a trigger or a rule of a table that the deletions reach, "+
 			"or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, "+
-			"so nothing was written: check the triggers and the rules of table %s", what, name)
+			"so nothing was written: check the triggers and the rules of the tables that the deletions reach, "+
+			"and the constraint triggers of the tables that the apply writes, for one that changes table %s", what, name)
 	}
 	return nil
 }

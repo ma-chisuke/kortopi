@@ -35,7 +35,8 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 				"that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: " +
 				"run the apply again, and if this happens again, check the triggers and the rules of table t.lines"
 			beyondCauses := ": a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, " +
-				"which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table "
+				"which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables " +
+				"that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table "
 			schemaChanged := "another session changed the schema while the apply ran: "
 			for _, tt := range []struct {
 				name       string

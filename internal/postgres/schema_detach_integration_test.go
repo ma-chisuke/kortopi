@@ -569,6 +569,51 @@ func TestDeferredTriggersOfAnApplyThatDeletes(t *testing.T) {
 	}
 }
 
+// A constraint trigger deferred to the commit, of the table whose rows the
+// apply deletes, that updates a table that the deletions do not reach runs
+// before the counts, and the error of the counts names the table that it
+// changed, with advice that holds whichever table the trigger belongs to
+// (ADR-0039, ADR-0048).
+func TestDeferredTriggerThatChangesAnotherTable(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, schemaCheckSchema+`
+				CREATE TABLE public.summary (plans int NOT NULL);
+				INSERT INTO public.summary VALUES (2);
+				CREATE FUNCTION public.count_plans() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN
+					UPDATE public.summary SET plans = plans - 1;
+					RETURN NULL;
+				END $$;
+				CREATE CONSTRAINT TRIGGER plan_summary AFTER DELETE ON m.plan
+					DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.count_plans();
+			`)
+			dir := writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n", "kortopi.toml": "[tables.\"m.plan\"]\nkey = [\"code\"]\nmode = \"sync\"\n"})
+			decl, err := declaration.Load(dir, Parser{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, err := config.Load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := db.Query(t, schemaCheckRows)
+			_, err = applyThrough(t, db.Config, decl, settings, true)
+			want := "after its first deletion, the apply changed 1 row of table public.summary, which the plan did not count: " +
+				"a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, " +
+				"did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, " +
+				"and the constraint triggers of the tables that the apply writes, for one that changes table public.summary"
+			if err == nil || err.Error() != want {
+				t.Errorf("apply = %v\nwant %s", err, want)
+			}
+			if got := db.Query(t, schemaCheckRows); !slices.EqualFunc(got, before, slices.Equal) {
+				t.Errorf("rows after the failed apply: %v, want %v", got, before)
+			}
+		})
+	}
+}
+
 // An apply whose settings name several hosts on one port reaches its server
 // through one of them, and the second session of its check reaches the same
 // address, with the settings of that host (ADR-0048). The first host, on the
