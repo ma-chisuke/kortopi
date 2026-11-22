@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
 // RenderSummary writes what an apply wrote, for the lines after its plan,
 // which Options.Planned shows: a blank line and the count of the rows
-// inserted, updated, and deleted. When deletions were left out, a line counts
-// them and names the flag that allows them (ADR-0018); when they were all
-// that differed, that line stands alone and says that nothing was written. An
+// inserted, updated, and deleted, and a line of the rows that the deletions
+// also deleted and changed through foreign keys (ADR-0039). When deletions
+// were left out, a line counts them, with what they would also do, and names
+// the flag that allows them (ADR-0018); when they were all that differed,
+// that line stands alone and says that nothing was written. An
 // apply that found nothing to change writes nothing more than its plan,
 // which says so.
 func RenderSummary(w io.Writer, r *Result) error {
@@ -20,8 +24,16 @@ func RenderSummary(w io.Writer, r *Result) error {
 	var b bytes.Buffer
 	b.WriteString("\n")
 	wrote := r.Inserted+r.Updated+r.Deleted > 0
+	totals := r.Plan.Totals()
 	if wrote || r.SkippedDeletes == 0 {
 		fmt.Fprintf(&b, "Applied: %d inserted, %d updated, %d deleted.\n", r.Inserted, r.Updated, r.Deleted)
+		if reach := plan.Reach(totals, "deleted", "changed"); r.Deleted > 0 && reach != "" {
+			deletions := "deletions"
+			if r.Deleted == 1 {
+				deletions = "deletion"
+			}
+			fmt.Fprintf(&b, "Through foreign keys, the %s also %s.\n", deletions, reach)
+		}
 	}
 	if r.SkippedDeletes > 0 {
 		var tables int
@@ -30,13 +42,16 @@ func RenderSummary(w io.Writer, r *Result) error {
 				tables++
 			}
 		}
-		them, only := "them", "They are the only differences"
+		them, only, their := "them", "They are the only differences", "their"
 		if r.SkippedDeletes == 1 {
-			them, only = "it", "It is the only difference"
+			them, only, their = "it", "It is the only difference", "its"
 		}
 		fmt.Fprintf(&b, "Not deleted: %s of %s.", rows(r.SkippedDeletes), plural(tables, "table", "tables"))
 		if !wrote {
 			fmt.Fprintf(&b, " %s, so nothing was written.", only)
+		}
+		if reach := plan.Reach(totals, "delete", "change"); reach != "" {
+			fmt.Fprintf(&b, " Through foreign keys, %s deletion would also %s.", their, reach)
 		}
 		fmt.Fprintf(&b, " Run apply with --allow-delete to delete %s.\n", them)
 	}

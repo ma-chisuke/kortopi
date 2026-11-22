@@ -15,9 +15,10 @@ import (
 // applyOnlyFlags is the help of the flags that only apply has (ADR-0018).
 var applyOnlyFlags = "  --allow-delete    delete the rows that the declaration lacks, in tables\n" +
 	"                    of mode sync\n" +
-	"  --max-delete <n>  with --allow-delete: change nothing when the apply would\n" +
-	"                    delete more than n rows, counting the rows that a foreign\n" +
-	"                    key ON DELETE CASCADE deletes with them (default: " + strconv.Itoa(apply.DefaultMaxDelete) + ")\n"
+	"  --max-delete <n>  with --allow-delete: change nothing when the deletions\n" +
+	"                    would delete or change more than n rows, counting the\n" +
+	"                    rows that foreign keys delete or change with them, at\n" +
+	"                    every depth (default: " + strconv.Itoa(apply.DefaultMaxDelete) + ")\n"
 
 // applyFlags lists the flags of apply, for its help.
 var applyFlags = sourceFlags("apply") + applyOnlyFlags + connectionFlags

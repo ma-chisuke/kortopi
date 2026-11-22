@@ -2,8 +2,10 @@ catalog.plans (sync, key: code)
   + code=team  name=Team
   ~ code=pro  name: Pro -> "Pro Plan"
   - code=legacy
-    referenced by 2 rows of billing.subscriptions (plan_code), subscriptions_plan_code_fkey: ON DELETE NO ACTION, so the deletion fails while these rows reference it
   1 to insert, 1 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.invoices (plan_code) references it through invoices_plan_code_fkey, ON DELETE SET NULL, so the deletion sets plan_code of this row to NULL.
+    2 rows of billing.subscriptions (plan_code) reference it through subscriptions_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
 
 geo.regions (sync, key: code)
   - code=north
@@ -11,6 +13,7 @@ geo.regions (sync, key: code)
   0 to insert, 0 to update, 2 to delete
 
 Plan: 1 to insert, 1 to update, 3 to delete in 2 tables.
+Through foreign keys, the deletions also delete 2 rows and change 1 row.
 
 Applied: 1 inserted, 1 updated, 0 deleted.
-Not deleted: 3 rows of 2 tables. Run apply with --allow-delete to delete them.
+Not deleted: 3 rows of 2 tables. Through foreign keys, their deletion would also delete 2 rows and change 1 row. Run apply with --allow-delete to delete them.

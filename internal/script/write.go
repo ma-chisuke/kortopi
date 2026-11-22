@@ -37,9 +37,9 @@ type Header struct {
 //     SET LOCAL, and the foreign keys that an apply would defer are deferred.
 //   - The inserts and then the updates of each table follow, from referenced
 //     tables to referencing ones, and then the deletions in the reverse
-//     order. The deletions are comments, under the lines of the references
-//     to their rows: an apply makes them only with --allow-delete
-//     (ADR-0027), and removing the "-- " makes them run.
+//     order. The deletions are comments, under the lines of what they also
+//     do through foreign keys (ADR-0039): an apply makes them only with
+//     --allow-delete (ADR-0027), and removing the "-- " makes them run.
 //   - A cycle that an apply would refuse is no error: its statements stand
 //     in the best order, under a comment that says which may fail and why.
 //   - A table or a column that waits for the schema change is named in a
@@ -145,15 +145,15 @@ func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header
 		b.WriteString("\n")
 		comment(&b, "The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,")
 		comment(&b, `so they are comments here: remove the "-- " before every line of a statement to run it.`)
-		for _, name := range slices.Backward(o.Tables) {
+		for _, name := range apply.DeletionOrder(o.Tables, keys, o.Deferred, p) {
 			t := tables[name]
 			if len(t.Diff.Deletes) == 0 {
 				continue
 			}
 			b.WriteString("\n")
 			comment(&b, plan.FormatTable(t.Name)+": "+counts(t, true))
-			for _, r := range t.Diff.References {
-				comment(&b, "  "+plan.FormatReference(r, len(t.Diff.Deletes)))
+			for _, line := range plan.EffectLines(t) {
+				comment(&b, line)
 			}
 			if err := db.WriteStatements(ctx, &b, Step{Kind: Delete, Table: *t, Comment: true}); err != nil {
 				return err
@@ -193,6 +193,9 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 	}
 	comment(b, fmt.Sprintf("It is the difference at the moment of the plan: %d to insert, %d to update, %d to delete in %s.",
 		inserts, updates, deletes, plural(len(p.Tables), "table", "tables")))
+	for _, line := range p.EffectSummary() {
+		comment(b, line)
+	}
 	comment(b, "Run the statements in one transaction.")
 	for i := range p.Tables {
 		t := &p.Tables[i]

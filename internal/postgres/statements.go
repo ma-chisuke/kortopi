@@ -554,9 +554,6 @@ func (c *comparison) deleteSQL(picked string) string {
 	return "DELETE FROM " + c.stored + " AS " + storedAlias + " USING " + picked + " AS " + pickedAlias + " WHERE " + c.storedPicked()
 }
 
-// referencingAlias is the alias of the referencing rows in referencesSQL.
-const referencingAlias = "r"
-
 // foreignKey is a foreign key that points at the table of a comparison, or
 // at one of its partitions.
 type foreignKey struct {
@@ -579,41 +576,11 @@ type foreignKey struct {
 	ops        []equality
 	collations []string
 	onDelete   string
-	// readable is false when the role may not read the referencing columns
-	// or the referenced columns.
+	// readable is false when the role may not read the referencing table as
+	// a whole, its schema, or when row-level security applies to it.
 	readable bool
 	// self is true for a foreign key from the table to itself.
 	self bool
-}
-
-// referencesSQL counts the rows of the referencing table of fk that point
-// at a row to delete, joined on the columns of the foreign key with its own
-// equality, not on the match key. For a foreign key from the table to
-// itself, it counts only the rows that stay. With written, it also counts,
-// in a second column, the rows among them that the current transaction
-// wrote.
-func (c *comparison) referencesSQL(fk foreignKey, written bool) string {
-	parts := make([]string, 0, len(fk.columns)+1)
-	for i := range fk.columns {
-		ref := referencingAlias + "." + quoteIdent(fk.columns[i])
-		if i < len(fk.collations) && fk.collations[i] != "" {
-			ref = "(" + ref + " COLLATE " + fk.collations[i] + ")"
-		}
-		// The operators of a foreign key take the referenced value first.
-		parts = append(parts, equalExpr(fk.ops[i], storedAlias+"."+quoteIdent(fk.referenced[i]), ref))
-	}
-	parts = append(parts, c.unmatched())
-	counts := "pg_catalog.count(*)"
-	if written {
-		counts += ", pg_catalog.count(*) FILTER (WHERE " + referencingAlias +
-			".xmin OPERATOR(pg_catalog.=) pg_catalog.pg_current_xact_id()::pg_catalog.xid)"
-	}
-	sql := "SELECT " + counts + " FROM " + fk.from + " AS " + referencingAlias +
-		" WHERE EXISTS (SELECT FROM " + fk.to + " AS " + storedAlias + " WHERE " + strings.Join(parts, " AND ") + ")"
-	if fk.self {
-		sql += " AND EXISTS (SELECT FROM " + c.declared + " AS " + declaredAlias + " WHERE " + c.matchWith(referencingAlias) + ")"
-	}
-	return sql
 }
 
 // deletesSQL lists the keys of the stored rows that no declared row matches.

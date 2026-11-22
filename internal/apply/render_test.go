@@ -14,6 +14,12 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 
+// withEffect returns t with the steps as the effect of its deletions.
+func withEffect(t plan.Table, steps ...plan.Step) plan.Table {
+	t.Effect = plan.Effect{Steps: steps}
+	return t
+}
+
 // syncTable returns the plan of a table in mode sync with the key code.
 func syncTable(name string, diff plan.TableDiff) plan.Table {
 	return plan.Table{Name: tn(name), Mode: config.ModeSync, Key: []string{"code"}, Compare: []string{"name"}, Diff: diff}
@@ -28,14 +34,16 @@ func codes(texts ...string) []plan.Value {
 }
 
 var (
-	plansTable = syncTable("catalog.plans", plan.TableDiff{
+	plansTable = withEffect(syncTable("catalog.plans", plan.TableDiff{
 		Inserts: []plan.Row{{Key: codes("team"), Values: codes("Team")}},
 		Updates: []plan.Update{{Key: codes("pro"), Changes: []plan.Change{{Column: "name", Old: plan.Value{Text: "Pro"}, New: plan.Value{Text: "Pro Plan"}}}}},
 		Deletes: []plan.Row{{Key: codes("legacy")}},
-		References: []plan.Reference{{
-			Table: declaration.TableName{Schema: "billing", Name: "subscriptions"}, Columns: []string{"plan_code"},
-			Constraint: "subscriptions_plan_code_fkey", OnDelete: "NO ACTION", Rows: 2,
-		}},
+	}), plan.Step{
+		Level: 1, Table: declaration.TableName{Schema: "billing", Name: "invoices"}, Columns: []string{"plan_code"},
+		Constraint: "invoices_plan_code_fkey", References: tn("catalog.plans"), OnDelete: "SET NULL", Set: []string{"plan_code"}, Rows: 1,
+	}, plan.Step{
+		Level: 1, Table: declaration.TableName{Schema: "billing", Name: "subscriptions"}, Columns: []string{"plan_code"},
+		Constraint: "subscriptions_plan_code_fkey", References: tn("catalog.plans"), OnDelete: "CASCADE", Rows: 2,
 	})
 	regionsTable = syncTable("geo.regions", plan.TableDiff{Deletes: []plan.Row{{Key: codes("north")}, {Key: codes("south")}}})
 	unchanged    = syncTable("geo.countries", plan.TableDiff{})

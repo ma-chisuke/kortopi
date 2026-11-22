@@ -130,35 +130,6 @@ func TestFailedStatement(t *testing.T) {
 	}
 }
 
-func TestReferencesSQL(t *testing.T) {
-	c := testComparison()
-	op := equality{kind: compareOperator, schema: "pg_catalog", op: "="}
-	fk := foreignKey{
-		name: "f", from: `ONLY "x"."y"`, to: c.stored, columns: []string{"ra", "rb"}, referenced: []string{"a", "b"},
-		ops: []equality{op, op}, collations: []string{"", `"pg_catalog"."C"`},
-	}
-	want := `SELECT pg_catalog.count(*) FROM ONLY "x"."y" AS r WHERE EXISTS (SELECT FROM ONLY "s"."t" AS s WHERE ` +
-		`s."a" OPERATOR("pg_catalog".=) r."ra" AND s."b" OPERATOR("pg_catalog".=) (r."rb" COLLATE "pg_catalog"."C") AND ` + c.unmatched() + `)`
-	if got := c.referencesSQL(fk, false); got != want {
-		t.Errorf("referencesSQL =\n%s\nwant\n%s", got, want)
-	}
-	written := strings.Replace(want, "SELECT pg_catalog.count(*) FROM",
-		"SELECT pg_catalog.count(*), pg_catalog.count(*) FILTER (WHERE r.xmin OPERATOR(pg_catalog.=) pg_catalog.pg_current_xact_id()::pg_catalog.xid) FROM", 1)
-	if got := c.referencesSQL(fk, true); got != written {
-		t.Errorf("referencesSQL with the written rows =\n%s\nwant\n%s", got, written)
-	}
-	fk.self = true
-	if got := c.referencesSQL(fk, false); got != want+` AND EXISTS (SELECT FROM pg_temp."kortopi_1" AS d WHERE `+c.matchWith("r")+`)` {
-		t.Errorf("referencesSQL of a foreign key to the table itself =\n%s", got)
-	}
-	// A foreign key that points at a partition joins on the partition.
-	fk.self = false
-	fk.to = `ONLY "s"."t_1"`
-	if got := c.referencesSQL(fk, false); !strings.Contains(got, `EXISTS (SELECT FROM ONLY "s"."t_1" AS s WHERE`) {
-		t.Errorf("referencesSQL of a foreign key to a partition =\n%s", got)
-	}
-}
-
 func TestWriteError(t *testing.T) {
 	table := declaration.TableName{Schema: "s", Name: "t"}
 	tests := []struct {
@@ -323,13 +294,17 @@ func TestCheckWrites(t *testing.T) {
 	}
 	meta.deletable = true
 	want = `an apply needs DELETE on table a.b, and the role "w" lacks it: grant the role DELETE on the table, or apply without deleting rows`
-	if err := s.checkDeletes(); err == nil || err.Error() != want {
+	if err := s.checkDeletes(t.Context()); err == nil || err.Error() != want {
 		t.Errorf("checkDeletes = %v, want %s", err, want)
 	}
 	other.deletable = true
-	if err := s.checkDeletes(); err != nil {
-		t.Errorf("checkDeletes with every privilege: %v", err)
+	// The deletions need their effect, which Effects computes.
+	want = "the effect of the deletions is not known: compute it with Effects before the first deletion"
+	if err := s.checkDeletes(t.Context()); err == nil || err.Error() != want {
+		t.Errorf("checkDeletes without the effect = %v, want %s", err, want)
 	}
+	// With the effect, it reads the rows that the transaction wrote, which
+	// the integration tests show.
 }
 
 func TestMatchKeyIndex(t *testing.T) {

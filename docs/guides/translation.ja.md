@@ -194,6 +194,14 @@
 | connection pooler, transaction mode（プーラーの） | コネクションプーラー、トランザクションモード |
 | defer（制約を） | 遅らせる |
 | cascade（外部キーの） | カスケード |
+| level（カスケードの） | 段 |
+| effect（外部キーを通じた削除の） | 削除の波及 |
+| declared row in the way（削除の） | 削除とぶつかる宣言した行 |
+| walk（削除の外部キーをたどる処理） | たどる処理 |
+| block（計画で、テーブルの削除の波及を示す行の集まり） | まとまり |
+| step（たどる処理の、1つの段の1つの外部キー） | ステップ |
+| not known（ステップの波及が） | 分からない |
+| identity（行の。`tableoid` と `ctid` であり、identity column とは別） | 行の識別子 |
 | trigger, rule（PostgreSQL の） | トリガー、ルール |
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
@@ -251,4 +259,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:6b1b8ea45e84c1d71a154268a8ca65f9b3dbd3263516eade763d03e7e1845ca1 -->
+<!-- i18n-source: translation.md sha256:6be8ee5d436d936053da4f620e66450a1787d5f6b537c9f23f6eb07252f69bf2 -->

@@ -175,7 +175,7 @@ func TestRunApply(t *testing.T) {
 			session:    &fakeSession{diffs: goldAndOld},
 			wantCode:   exitOK,
 			wantStdout: planOfGoldAndOld + "\nApplied: 1 inserted, 0 updated, 1 deleted.\n",
-			wantCalls:  append(diffs, "ForeignKeys", "Insert app.plans", "Delete app.plans", "Commit"),
+			wantCalls:  append(diffs, "PrepareDeletes", "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect", "Commit"),
 		},
 		{
 			name:       "deletions over the limit",
@@ -184,7 +184,7 @@ func TestRunApply(t *testing.T) {
 			session:    &fakeSession{diffs: goldAndOld},
 			wantCode:   exitError,
 			wantStdout: planOfGoldAndOld,
-			wantStderr: "kortopi: the apply would delete 1 row, more than the limit of 0 (1 row of app.plans): " +
+			wantStderr: "kortopi: the apply would delete 1 row, more than the limit of 0: 1 row of app.plans to delete: " +
 				"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 1\n" + nothingChanged,
 			wantCalls: diffs,
 		},

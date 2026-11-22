@@ -481,6 +481,14 @@ kortopi: data/facility/rooms.csv: column "room_type" of table facility.rooms is 
 
 どの行にも値を書いてその列を宣言するか、`kortopi.toml` の `on_insert` でその列に値を与える（[kortopi.toml](#kortopitoml)）か、スキーマを変える道具でその列に既定値を与える。
 
+### 削除が消すか変える宣言した行
+
+```text
+kortopi: data/m/plan_feature.csv: declared rows of table m.plan_feature reference rows that the deletions remove, through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: remove these rows from the declaration too, or point them at rows that stay
+```
+
+宣言は、自分の宣言した行がまだ必要とする行を削除している。その外部キーの動作は、宣言した行を消すか、その宣言した列を設定する（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
+
 ### CSV ファイルの中の現在の時刻を表す語
 
 ```text
@@ -493,10 +501,10 @@ kortopi: data/facility/events.csv: column "starts_at" of table facility.events h
 kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on PostgreSQL before 18, so the rows after it would be lost: write the value in quotes, as "\."
 ```
 
-最後の12個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
+最後の13個の誤りはデータベースを必要とするので、kortopi は接続したあとに報告する。
 
 - 次の誤りは、どの行を読み込むよりも前に、すべてのテーブルについてまとめて報告する。キーの列のないファイル・大小だけが違う名前・`--no-pending` があるときの綴りを誤った名前・パーティションとそのパーティションテーブル・行を照合できないキー・ルールを持つテーブル・`on_insert` の値である。
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
-- 挿入する行が値を得られない列は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
+- 挿入する行が値を得られない列と、削除が消すか変える宣言した行は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:9d38b153183240ac86d8e1e59f8c5ad10bdd995f774ff315e57c5503107e5ba5 -->
+<!-- i18n-source: declaration.md sha256:8c1548fa42febfb1fe4bea20eac842bf4a19e4214508e2714d69a3ed9b217614 -->

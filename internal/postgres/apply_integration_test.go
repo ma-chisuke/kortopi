@@ -73,19 +73,35 @@ type applyResult struct {
 }
 
 // applyAll applies reqs as the package apply does: it compares every table,
-// defers the deferrable foreign keys, inserts and updates from referenced to
-// referencing tables, deletes the other way when allowDelete is true, and
-// commits.
+// computes the effect of the deletions, defers the deferrable foreign keys,
+// inserts and updates from referenced to referencing tables, and, when
+// allowDelete is true, computes the effect again, stops on a declared row in
+// the way, deletes the other way, and checks the effect. It then commits. It
+// does not compare the two effects, which the package apply does.
 func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDelete bool) (applyResult, error) {
 	var r applyResult
 	byName := make(map[declaration.TableName]plan.DiffRequest, len(reqs))
 	names := make([]declaration.TableName, 0, len(reqs))
+	var deleting []declaration.TableName
 	for _, req := range reqs {
-		if _, err := s.Diff(ctx, req); err != nil {
+		d, err := s.Diff(ctx, req)
+		if err != nil {
 			return r, err
 		}
 		byName[req.Table.Name] = req
 		names = append(names, req.Table.Name)
+		if len(d.Deletes) > 0 {
+			deleting = append(deleting, req.Table.Name)
+		}
+	}
+	// As plan.Build does; the conflicts are left to the deletions.
+	if _, err := s.Effects(ctx, deleting); err != nil {
+		return r, err
+	}
+	if allowDelete && len(deleting) > 0 {
+		if err := s.PrepareDeletes(ctx); err != nil {
+			return r, err
+		}
 	}
 	keys, err := s.ForeignKeys(ctx, names)
 	if err != nil {
@@ -115,13 +131,23 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		}
 		r.updated += n
 	}
-	if allowDelete {
+	if allowDelete && len(deleting) > 0 {
+		again, err := s.Effects(ctx, deleting)
+		if err != nil {
+			return r, err
+		}
+		if len(again.Conflicts) > 0 {
+			return r, fmt.Errorf("after the inserts and updates, %d foreign keys reach declared rows: %+v", len(again.Conflicts), again.Conflicts)
+		}
 		for _, name := range slices.Backward(order) {
 			n, err := s.Delete(ctx, byName[name])
 			if err != nil {
 				return r, err
 			}
 			r.deleted += n
+		}
+		if err := s.CheckEffect(ctx); err != nil {
+			return r, err
 		}
 	}
 	return r, s.Commit(ctx)
@@ -447,53 +473,35 @@ func TestReferences(t *testing.T) {
 			reader := db.Role(t, "reader")
 			db.Exec(t, `GRANT USAGE ON SCHEMA ref TO `+quoteIdent(reader.User)+`;
 				GRANT SELECT ON ALL TABLES IN SCHEMA ref TO `+quoteIdent(reader.User))
+			// Rows 2 and 3 go. Row 4 stays and refers to row 2; row 3 refers
+			// to row 2 too, but is deleted itself.
 			dir := writeFiles(t, map[string]string{"ref/types.csv": "id,code,parent\n1,one,\n4,four,2\n"})
-			name := func(schema, table string) declaration.TableName {
-				return declaration.TableName{Schema: schema, Name: table}
-			}
-			want := []plan.Reference{
-				{Table: name("hidden", "secret"), Columns: []string{"type_id"}, Constraint: "secret_type_id_fkey", OnDelete: "NO ACTION", Rows: 1},
-				{Table: name("ref", "by_code"), Columns: []string{"type_code"}, Constraint: "by_code_type_code_fkey", OnDelete: "RESTRICT", Rows: 1},
-				{Table: name("ref", "cas"), Columns: []string{"type_id"}, Constraint: "cas_type_id_fkey", OnDelete: "CASCADE", Rows: 1},
-				{Table: name("ref", "comp"), Columns: []string{"type_id", "type_code"}, Constraint: "comp_type_id_type_code_fkey", OnDelete: "NO ACTION", Rows: 1},
-				{Table: name("ref", "na"), Columns: []string{"type_id"}, Constraint: "na_type_id_fkey", OnDelete: "NO ACTION", Rows: 2},
-				{Table: name("ref", "sn"), Columns: []string{"type_id"}, Constraint: "sn_type_id_fkey", OnDelete: "SET NULL", Rows: 1},
-				// Row 4 stays and refers to row 2; row 3 refers to row 2 too,
-				// but is deleted itself.
-				{Table: name("ref", "types"), Columns: []string{"parent"}, Constraint: "types_parent_fkey", OnDelete: "NO ACTION", Rows: 1},
+			want := []string{
+				"ref.types 1 NO ACTION hidden.secret.secret_type_id_fkey(type_id) -> ref.types: 1",
+				"ref.types 1 RESTRICT ref.by_code.by_code_type_code_fkey(type_code) -> ref.types: 1",
+				"ref.types 1 CASCADE ref.cas.cas_type_id_fkey(type_id) -> ref.types: 1",
+				"ref.types 1 NO ACTION ref.comp.comp_type_id_type_code_fkey(type_id,type_code) -> ref.types: 1",
+				"ref.types 1 NO ACTION ref.na.na_type_id_fkey(type_id) -> ref.types: 2",
+				"ref.types 1 SET NULL ref.sn.sn_type_id_fkey(type_id) -> ref.types set type_id: 1",
+				"ref.types 1 NO ACTION ref.types.types_parent_fkey(parent) -> ref.types: 1",
 			}
 			for _, tt := range []struct {
 				name string
 				cfg  *pgx.ConnConfig
-				want []plan.Reference
+				want []string
 			}{
 				{"superuser", db.Config, want},
-				{"role that may not read a table", reader, append([]plan.Reference{
-					{Table: name("hidden", "secret"), Columns: []string{"type_id"}, Constraint: "secret_type_id_fkey", OnDelete: "NO ACTION", Unreadable: true},
+				{"role that may not read a table", reader, append([]string{
+					"ref.types 1 NO ACTION hidden.secret.secret_type_id_fkey(type_id) -> ref.types: no usage",
 				}, want[1:]...)},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					s := db.sessionWith(t, tt.cfg, dir)
 					req := plan.DiffRequest{Table: csvTable("ref", "types", "id", "code", "parent"), Key: []string{"id"},
 						Compare: []string{"code", "parent"}, Updates: true, Deletes: true}
-					got, err := s.Diff(t.Context(), req)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if lines := diffLines(got); !slices.Equal(lines, []string{`- "2"`, `- "3"`}) {
-						t.Errorf("Diff = %v", lines)
-					}
-					if !slices.EqualFunc(got.References, tt.want, func(a, b plan.Reference) bool {
-						return a.Table == b.Table && slices.Equal(a.Columns, b.Columns) && a.Constraint == b.Constraint &&
-							a.OnDelete == b.OnDelete && a.Rows == b.Rows && a.Unreadable == b.Unreadable
-					}) {
-						t.Errorf("References:\n%+v\nwant\n%+v", got.References, tt.want)
-					}
-					// Without rows to delete, no references are counted.
-					req.Deletes = false
-					if got, err := s.Diff(t.Context(), req); err != nil || got.References != nil {
-						t.Errorf("Diff without deletes: %+v, %v", got.References, err)
-					}
+					steps, conflicts := effectOf(t, s, []plan.DiffRequest{req})
+					checkLines(t, "steps", steps, tt.want)
+					checkLines(t, "conflicts", conflicts, nil)
 				})
 			}
 		})

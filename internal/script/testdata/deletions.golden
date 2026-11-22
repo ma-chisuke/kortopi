@@ -1,5 +1,8 @@
 -- Written by kortopi from the data directory data, against the database shop.
 -- It is the difference at the moment of the plan: 1 to insert, 0 to update, 3 to delete in 2 tables.
+-- Through foreign keys, the deletions also delete 3 rows and change 7 rows.
+-- Through foreign keys ON DELETE NO ACTION or RESTRICT, 2 rows make the deletions fail.
+-- What the deletions do through 1 foreign key is not known.
 -- Run the statements in one transaction.
 
 -- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
@@ -16,6 +19,9 @@ INSERT INTO geo.regions (2, n2);
 -- DELETE FROM geo.cities WHERE (11);
 
 -- geo.regions: 1 to delete
---   referenced by 2 rows of geo.cities (region), cities_region: ON DELETE NO ACTION, so the deletion fails while these rows reference it
---   maybe referenced by rows of geo.stations (region), stations_region: the role may not read the table to count them; ON DELETE CASCADE, so the deletion deletes such rows too
+-- Through foreign keys, the deletion of this row also reaches other rows:
+--   2 rows of geo.cities (region) reference it through cities_region, ON DELETE NO ACTION, so the deletion fails while these rows reference it.
+--   3 rows of geo.lines (region) reference it through lines_region, ON DELETE CASCADE, so the deletion deletes these rows too.
+--     7 rows of geo.stops (line) reference those rows of geo.lines through stops_line, ON DELETE SET NULL, so the deletion sets line of these rows to NULL.
+--   Rows of geo.stations (region) may reference it through stations_region, ON DELETE CASCADE, but the role may not read the table, so what the deletion does to them is not known.
 -- DELETE FROM geo.regions WHERE (1);

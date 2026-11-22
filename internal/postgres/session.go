@@ -90,15 +90,32 @@ type Session struct {
 	tx   pgx.Tx
 	dir  string
 	// apply is true for a session of an apply. loaded holds the declared
-	// rows that Diff loaded for it, and committed is true after Commit.
+	// rows that Diff loaded, in a plan too, and committed is true after
+	// Commit.
 	apply  bool
 	loaded map[declaration.TableName]*loadedTable
 	// export is true for a session of an export, which only reads.
 	export    bool
 	committed bool
 	// deletesChecked is true after the privileges of the deletions were
-	// checked.
+	// checked, and writtenBefore holds the counters of the rows that the
+	// transaction had deleted and updated then, by the partitioned table at
+	// the top of each relation.
 	deletesChecked bool
+	writtenBefore  map[uint32]written
+	// effect is the temporary table of the rows that the deletions reach,
+	// which Effects made last (ADR-0039), and effectUpdates the most updates
+	// that the deletions may make in each partitioned table at the top of a
+	// relation, as it counted them; CheckEffect compares the counts with them.
+	effect        string
+	effectUpdates map[uint32]int64
+	// effectMoves holds the partitioned tables at the top of a relation in
+	// which a change of the deletions can move a row to another partition,
+	// and effectGone the pairs of updates that go when rows go first.
+	effectMoves map[uint32]bool
+	effectGone  []goneFirst
+	// deleted holds the order of the tables whose rows Delete deleted.
+	deleted map[declaration.TableName]int
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.

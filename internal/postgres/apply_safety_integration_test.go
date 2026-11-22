@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -17,11 +16,13 @@ import (
 	"github.com/ma-chisuke/kortopi/internal/script"
 )
 
-// Before it deletes, an apply counts the references again, with its own
-// writes: a row that it wrote and that refers to a row that it deletes
-// stops it, whatever the foreign key does on delete. A row that it moved
-// away from a row to delete is fine.
-func TestApplyReferencesAgainBeforeDeletes(t *testing.T) {
+// Before it deletes, an apply follows the foreign keys again, after its
+// inserts and updates: a row that it wrote and that a deletion would change
+// is a declared row in the way, which stops it. A plan reports such a
+// declared row too, so here the deletions come without the plan, as from a
+// declaration that a plan did not check. A row that it moved away from a
+// row to delete is fine.
+func TestApplyEffectAgainAfterTheWrites(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)
@@ -44,10 +45,8 @@ func TestApplyReferencesAgainBeforeDeletes(t *testing.T) {
 				request(t, s, csvTable("f", "rooms", "id", "room_type"), nil, config.ModeUpsert),
 			}
 			_, err := applyAll(t.Context(), s, reqs, true)
-			want := `delete from table f.room_types: foreign key "rooms_room_type_fkey" of table f.rooms (room_type) now has 1 row that refers ` +
-				`to a row to delete, and the plan counted 0: rows that this apply wrote refer to a row that it deletes, ` +
-				`so the declaration contradicts itself: declare the referencing rows and the deletion consistently`
-			if err == nil || err.Error() != want {
+			want := "after the inserts and updates, 1 foreign keys reach declared rows: [{Table:f.rooms Columns:[room_type] Constraint:rooms_room_type_fkey"
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
 				t.Errorf("apply: %v\nwant %s", err, want)
 			}
 			if err := s.Close(t.Context()); err != nil {
@@ -80,9 +79,12 @@ func TestApplyReferencesAgainBeforeDeletes(t *testing.T) {
 	}
 }
 
-// A foreign key whose referenced columns the role may not read is
-// unreadable, also when the role may read the declared columns.
-func TestReferencesToColumnsThatTheRoleMayNotRead(t *testing.T) {
+// A foreign key whose referenced columns the role may not read is not
+// known, also when the role may read the declared columns, and so is a
+// referencing table of which the role may read only some columns, since the
+// walk reads the identities of its rows, and a referencing table with
+// row-level security, each with its reason.
+func TestEffectsOfColumnsThatTheRoleMayNotRead(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)
@@ -90,24 +92,26 @@ func TestReferencesToColumnsThatTheRoleMayNotRead(t *testing.T) {
 				CREATE SCHEMA cg;
 				CREATE TABLE cg.types (id integer PRIMARY KEY, code text NOT NULL UNIQUE);
 				CREATE TABLE cg.items (id integer PRIMARY KEY, type_id integer REFERENCES cg.types);
+				CREATE TABLE cg.notes (id integer PRIMARY KEY, type_code text REFERENCES cg.types (code), body text);
+				CREATE TABLE cg.guarded (id integer PRIMARY KEY, type_code text REFERENCES cg.types (code) ON DELETE CASCADE);
+				ALTER TABLE cg.guarded ENABLE ROW LEVEL SECURITY;
+				CREATE POLICY guarded_all ON cg.guarded USING (true);
 				INSERT INTO cg.types VALUES (1, 'a'), (2, 'b');
 				INSERT INTO cg.items VALUES (1, 2);
+				INSERT INTO cg.notes VALUES (1, 'b', 'x');
+				INSERT INTO cg.guarded VALUES (1, 'b');
 			`)
 			reader := db.Role(t, "reader")
 			role := quoteIdent(reader.User)
-			db.Exec(t, `GRANT USAGE ON SCHEMA cg TO `+role+`; GRANT SELECT (code) ON cg.types TO `+role+`; GRANT SELECT ON cg.items TO `+role)
+			db.Exec(t, `GRANT USAGE ON SCHEMA cg TO `+role+`; GRANT SELECT (code) ON cg.types TO `+role+`;
+				GRANT SELECT ON cg.items, cg.guarded TO `+role+`; GRANT SELECT (id, type_code) ON cg.notes TO `+role)
 			s := db.sessionWith(t, reader, writeFiles(t, map[string]string{"cg/types.csv": "code\na\n"}))
-			got, err := s.Diff(t.Context(), plan.DiffRequest{Table: csvTable("cg", "types", "code"), Key: []string{"code"}, Deletes: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := []plan.Reference{{
-				Table: declaration.TableName{Schema: "cg", Name: "items"}, Columns: []string{"type_id"},
-				Constraint: "items_type_id_fkey", OnDelete: "NO ACTION", Unreadable: true,
-			}}
-			if fmt.Sprint(got.References) != fmt.Sprint(want) {
-				t.Errorf("References = %+v, want %+v", got.References, want)
-			}
+			steps, _ := effectOf(t, s, []plan.DiffRequest{{Table: csvTable("cg", "types", "code"), Key: []string{"code"}, Deletes: true}})
+			checkLines(t, "steps", steps, []string{
+				"cg.types 1 CASCADE cg.guarded.guarded_type_code_fkey(type_code) -> cg.types: row security",
+				"cg.types 1 NO ACTION cg.items.items_type_id_fkey(type_id) -> cg.types: referenced unreadable",
+				"cg.types 1 NO ACTION cg.notes.notes_type_code_fkey(type_code) -> cg.types: no select",
+			})
 		})
 	}
 }
@@ -132,27 +136,14 @@ func TestReferencesAcrossCollationsAndPartitions(t *testing.T) {
 				INSERT INTO x.offices VALUES (1, 'jp', 'b');
 			`)
 			s := db.session(t, writeFiles(t, map[string]string{"x/codes.csv": "code\na\n", "x/zones.csv": "country,code\njp,a\n"}))
-			for _, tt := range []struct {
-				req  plan.DiffRequest
-				want string
-			}{
-				{
-					req:  plan.DiffRequest{Table: csvTable("x", "codes", "code"), Key: []string{"code"}, Deletes: true},
-					want: "[{Table:x.uses Columns:[code] Constraint:uses_code_fkey OnDelete:NO ACTION Rows:1 Unreadable:false}]",
-				},
-				{
-					req:  plan.DiffRequest{Table: csvTable("x", "zones", "country", "code"), Key: []string{"country", "code"}, Deletes: true},
-					want: "[{Table:x.offices Columns:[country zone] Constraint:offices_country_zone_fkey OnDelete:NO ACTION Rows:1 Unreadable:false}]",
-				},
-			} {
-				got, err := s.Diff(t.Context(), tt.req)
-				if err != nil {
-					t.Fatalf("Diff(%s): %v", tt.req.Table.Name, err)
-				}
-				if fmt.Sprintf("%+v", got.References) != tt.want {
-					t.Errorf("References of %s = %+v, want %s", tt.req.Table.Name, got.References, tt.want)
-				}
-			}
+			steps, _ := effectOf(t, s, []plan.DiffRequest{
+				{Table: csvTable("x", "codes", "code"), Key: []string{"code"}, Deletes: true},
+				{Table: csvTable("x", "zones", "country", "code"), Key: []string{"country", "code"}, Deletes: true},
+			})
+			checkLines(t, "steps", steps, []string{
+				"x.codes 1 NO ACTION x.uses.uses_code_fkey(code) -> x.codes: 1",
+				"x.zones 1 NO ACTION x.offices.offices_country_zone_fkey(country,zone) -> x.zones_jp: 1",
+			})
 		})
 	}
 }

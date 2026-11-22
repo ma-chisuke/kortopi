@@ -53,24 +53,31 @@ var (
 )
 
 // legacyBlock is the block of catalog.plans when only the row legacy
-// differs, with the line of the reference to it.
+// differs, with what its deletion also does.
 var legacyBlock = lines(
 	"catalog.plans (sync, key: code)",
 	"  - code=legacy",
-	"    "+noActionLine,
 	"  0 to insert, 0 to update, 1 to delete",
+	effectHeading,
+	noActionLine,
 )
 
 // legacyPlan is the plan when only the row legacy differs.
 var legacyPlan = legacyBlock + lines("",
 	"Plan: 0 to insert, 0 to update, 1 to delete in 3 tables.",
+	noActionSummary,
 	"2 tables without changes are not shown.")
 
-// noActionLine and cascadeLine are the reference to the row legacy, with the
-// foreign key ON DELETE NO ACTION and ON DELETE CASCADE.
+// effectHeading starts the block of what the deletion of the row legacy
+// does through foreign keys. noActionLine and cascadeLine say what it does
+// with the foreign key ON DELETE NO ACTION and ON DELETE CASCADE, and
+// noActionSummary and cascadeSummary sum it up after the counts of the plan.
 const (
-	noActionLine = "referenced by 1 row of billing.subscriptions (plan_id), subscriptions_plan_id_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it"
-	cascadeLine  = "referenced by 1 row of billing.subscriptions (plan_id), subscriptions_plan_id_fkey: ON DELETE CASCADE, so the deletion deletes this row too"
+	effectHeading   = "  Through foreign keys, the deletion of this row also reaches other rows:"
+	noActionLine    = "    1 row of billing.subscriptions (plan_id) references it through subscriptions_plan_id_fkey, ON DELETE NO ACTION, so the deletion fails while this row references it."
+	cascadeLine     = "    1 row of billing.subscriptions (plan_id) references it through subscriptions_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too."
+	noActionSummary = "Through foreign keys ON DELETE NO ACTION or RESTRICT, 1 row makes the deletion fail."
+	cascadeSummary  = "Through foreign keys, the deletion also deletes 1 row."
 )
 
 // run runs kortopi with args and the flags of the connection, fails the test
@@ -117,8 +124,10 @@ func TestApplyCommand(t *testing.T) {
 			// Without --allow-delete: everything but the deletion. The plan
 			// shows the row that references the row to delete.
 			code, stdout, stderr, rows := e.run(t, "apply", "--dir", dir)
-			checkRun(t, code, stdout, stderr, exitOK, strings.Replace(e2ePlan, "  - code=legacy\n",
-				"  - code=legacy\n    "+noActionLine+"\n", 1)+
+			withEffect := strings.Replace(e2ePlan, "  1 to insert, 1 to update, 1 to delete\n",
+				lines("  1 to insert, 1 to update, 1 to delete", effectHeading, noActionLine), 1)
+			withEffect = strings.Replace(withEffect, "in 3 tables.\n", lines("in 3 tables.", noActionSummary), 1)
+			checkRun(t, code, stdout, stderr, exitOK, withEffect+
 				lines("",
 					"Applied: 3 inserted, 2 updated, 0 deleted.",
 					"Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it."))
@@ -132,7 +141,7 @@ func TestApplyCommand(t *testing.T) {
 			// nothing is changed.
 			code, stdout, stderr, rows = e.run(t, "apply", "--dir", dir, "--allow-delete", "--max-delete", "0")
 			checkRun(t, code, stdout, stderr, exitError, legacyPlan,
-				"kortopi: the apply would delete 1 row, more than the limit of 0 (1 row of catalog.plans): "+
+				"kortopi: the apply would delete 1 row, more than the limit of 0: 1 row of catalog.plans to delete: "+
 					"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 1\n"+
 					"kortopi: nothing was changed\n")
 			checkRows(t, rows, rowsApplied)
@@ -147,10 +156,12 @@ func TestApplyCommand(t *testing.T) {
 				"catalog.plans (sync, key: code)",
 				"  ~ code=basic  name: Basic -> \"Basic Plan\"",
 				"  - code=legacy",
-				"    "+noActionLine,
 				"  0 to insert, 1 to update, 1 to delete",
+				effectHeading,
+				noActionLine,
 				"",
 				"Plan: 0 to insert, 1 to update, 1 to delete in 3 tables.",
+				noActionSummary,
 				"2 tables without changes are not shown.",
 			),
 				"kortopi: delete from table catalog.plans: ", "subscriptions_plan_id_fkey")
@@ -164,9 +175,9 @@ func TestApplyCommand(t *testing.T) {
 			db.Exec(t, `ALTER TABLE billing.subscriptions DROP CONSTRAINT subscriptions_plan_id_fkey,
 				ADD CONSTRAINT subscriptions_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES catalog.plans ON DELETE CASCADE`)
 			code, stdout, stderr, rows = e.run(t, "apply", "--dir", dir, "--allow-delete", "--max-delete", "1")
-			checkRun(t, code, stdout, stderr, exitError, strings.Replace(legacyPlan, noActionLine, cascadeLine, 1),
-				"kortopi: the apply would delete 2 rows, more than the limit of 1 (1 row of catalog.plans, "+
-					"and 1 row of billing.subscriptions that ON DELETE CASCADE deletes with them): "+
+			checkRun(t, code, stdout, stderr, exitError, strings.NewReplacer(noActionLine, cascadeLine, noActionSummary, cascadeSummary).Replace(legacyPlan),
+				"kortopi: the apply would delete 2 rows, more than the limit of 1: 1 row of catalog.plans to delete, "+
+					"and 1 row that ON DELETE CASCADE deletes with them (1 row of billing.subscriptions): "+
 					"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 2\n"+
 					"kortopi: nothing was changed\n")
 			checkRows(t, rows, rowsApplied)

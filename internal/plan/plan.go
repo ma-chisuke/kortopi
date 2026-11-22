@@ -34,6 +34,15 @@ type Database interface {
 	// it must not need the table.
 	CountRows(ctx context.Context, table declaration.Table) (int, error)
 
+	// Effects returns the whole effect of the deletions of the named tables,
+	// in their order, after Diff compared every table of the plan
+	// (ADR-0039): what the foreign keys that reference their rows to delete
+	// do, at every depth, and the declared rows that the deletions would
+	// delete or change. Build calls it once, with the tables that have rows
+	// to delete, in the order of the plan. An implementation reads the rows
+	// in the transaction of the plan, and runs no deletion.
+	Effects(ctx context.Context, names []declaration.TableName) (Effects, error)
+
 	// CheckValues reads each value of on_insert by the type of its column of
 	// an existing table, as an insert of the value would, and returns the
 	// values that the database refuses, in the order of values (ADR-0035).
@@ -217,30 +226,6 @@ type TableDiff struct {
 	Inserts []Row
 	Updates []Update
 	Deletes []Row
-	// References says, for each foreign key that points at the table, how
-	// many rows reference the rows to delete (ADR-0018). It is empty when
-	// there is nothing to delete. It is sorted by the referencing table and
-	// then by the name of the constraint.
-	References []Reference
-}
-
-// Reference is one foreign key that points at rows to delete.
-type Reference struct {
-	// Table and Columns are the referencing table and its columns.
-	Table   declaration.TableName
-	Columns []string
-	// Constraint is the name of the foreign key.
-	Constraint string
-	// OnDelete is what the foreign key does when a referenced row is
-	// deleted, as SQL writes it: NO ACTION, RESTRICT, CASCADE, SET NULL, or
-	// SET DEFAULT.
-	OnDelete string
-	// Rows is the number of rows of Table that reference a row to delete. A
-	// foreign key with no such row is left out.
-	Rows int
-	// Unreadable is true when the role may not read Table, so the rows
-	// could not be counted. Rows is then 0.
-	Unreadable bool
 }
 
 // Table is the plan of one table.
@@ -267,6 +252,10 @@ type Table struct {
 	// (ADR-0035). They are not compared.
 	OnInsert []config.InsertValue
 	Diff     TableDiff
+	// Effect is what the rows to delete of the table do to other rows
+	// through foreign keys, at every depth (ADR-0039). It is empty for a
+	// table without rows to delete.
+	Effect Effect
 }
 
 // Plan is the difference between a declaration and a database.

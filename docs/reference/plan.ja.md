@@ -159,6 +159,9 @@ GRANT SELECT ON facility.room_types, facility.rooms TO planner;
 GRANT SELECT (code, name, capacity) ON facility.room_types TO planner;
 ```
 
+宣言した列だけで足りるのは、削除する行のないテーブルと、削除する行をどの行も参照しないテーブルである。
+削除する行を参照するテーブルには、テーブル全体に対する `SELECT` が要る。宣言したテーブルも、自分自身を参照するテーブルも同じである（[削除がほかの行にすること](#削除がほかの行にすること)）。
+
 どの検査も、失敗すればそれぞれのエラーで計画を止める。エラーは、何が足りないかと、何を与えればよいかを示す。
 
 ```text
@@ -176,8 +179,9 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 ポリシーが隠す行は、存在しないように見える。計画はそれらを挿入する行として示し、更新する行や削除する行としては決して示さない。
 セッションは `row_security` も off に固定する。そのため、ポリシーが絞り込む問い合わせは、少ない行を返さずに失敗する。
 
-削除する行を参照する行を数えるため、計画は参照しているテーブルも読む（[削除する行を参照する行](#削除する行を参照する行)）。
-ロールがそのスキーマに対する `USAGE` か外部キーの列に対する `SELECT` を欠くか、行単位セキュリティがかかるときは、数えられなかったと示して計画を続ける。
+削除がほかの行にすることを数えるため、計画は、削除する行を参照するテーブルと、カスケードが消す行を参照するテーブルも、すべての段で読む（[削除がほかの行にすること](#削除がほかの行にすること)）。
+ロールがそうしたテーブルのスキーマに対する `USAGE` かテーブルに対する `SELECT` を欠くか、そのテーブルに行単位セキュリティがかかるときは、そこで削除がすることを数えられなかったと示して計画を続ける。
+外部キーの列だけに対する `SELECT` では足りない。計画は行の識別子を読み、それはどの列の権限にも含まれないからである。
 
 計画がデータベースの中ですることは、次のことだけである。
 
@@ -185,7 +189,8 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - すべてを分離レベル `REPEATABLE READ` の1つのトランザクションで実行し、最後にロールバックする。そのため、どのテーブルも1つのスナップショットと比べる。
 - 値の読み方を変える設定を固定する（[値の比べ方](comparison.ja.md#セッションの設定)）。
 - どの行を読み込むよりも前に、存在するテーブルの `on_insert` の値ごとに、セーブポイントの中でその列だけの一時テーブルを作って値を挿入する。そのあと、セーブポイントをロールバックする（[挿入のときだけ設定する値](#挿入のときだけ設定する値)）。
-- 宣言したテーブルごとに、セーブポイントの中で一時テーブルを作って宣言の行を読み込む。本物のテーブルと比べ終えたら、セーブポイントをロールバックする。そのため、次のテーブルへ移る前に一時テーブルは消えている。
+- 宣言したテーブルごとに、セーブポイントの中で一時テーブルを作って宣言の行を読み込み、本物のテーブルと比べる。削除の波及は、すべてのテーブルの宣言の行を読むので、一時テーブルは計画が終わるまで残る。
+- 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
 
 計画を止めるには Ctrl-C を押す。
@@ -342,40 +347,66 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - テーブルにない `on_insert` の列は、宣言した列と同じくスキーマの変更を待つ。その行は、名前の出どころを `column floor of on_insert in kortopi.toml: known after the schema is applied` のように示す。
 - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、存在するテーブルのそれぞれの値を列の型で読む。スキーマの変更を待つテーブルの値は、テーブルができてから検査する。値ごとに、ロールバックする専用のセーブポイントの中で、その列だけを持つ一時テーブルを作り、値を挿入する。一時テーブルの列は、テーブルの列から型を受け継ぐ。そのため、ほかの列が値や既定値を得ることはない。また、ロールには、型を読むためにこれらの列に対する `SELECT` が要る。宣言した列と同じである（[セッションに要るもの](#セッションに要るもの)）。
 
-### 削除する行を参照する行
+### 削除がほかの行にすること
 
-テーブルの削除する行の下に、計画はそれを指すすべての外部キーを、テーブルごとに1回だけ示す。
+削除する行をほかの行が参照するテーブルには、件数の行のあとに、削除する行から離して、まとまりを置く。そのまとまりは、削除が外部キーを通じてほかにすることを示す。
 
 ```text
-geo.regions (sync, key: code)
-  - code=north
-    referenced by 1 row of geo.prefectures (region), prefectures_region_fkey: ON DELETE NO ACTION, so the deletion fails while this row references it
-    referenced by 1 row of geo.stations (region), stations_region_fkey: ON DELETE CASCADE, so the deletion deletes this row too
+m.plan (sync, key: code)
+  - code=legacy
   0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of t.orders (plan_id) references it through orders_plan_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      50000 rows of t.order_line (order_id) reference that row of t.orders through order_line_order_id_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+        2000 rows of t.line_note (line_id) reference those rows of t.order_line through line_note_line_id_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+
+m.plan_feature (sync, key: id)
+  - id=2
+  - id=3
+  0 to insert, 0 to update, 2 to delete
+
+Plan: 0 to insert, 0 to update, 3 to delete in 2 tables.
+Through foreign keys, the deletions also delete 52001 rows.
 ```
 
-各行は、参照しているテーブル・その列・制約を挙げ、削除する行を参照する行を数える。そして、それらがまだ参照している間に PostgreSQL が何をするかを、キーの `ON DELETE` の動作に応じて示す。
+まとまりの各行は、参照しているテーブル・その列・外部キーを挙げ、消える行を参照する行を数える。そして、PostgreSQL がそれらに何をするかを、キーの `ON DELETE` の動作に応じて示す。
 
 | 動作 | 行の示すこと |
 |---|---|
-| `NO ACTION`、`RESTRICT` | the deletion fails while these rows reference them |
 | `CASCADE` | the deletion deletes these rows too |
-| `SET NULL` | the deletion sets the reference of these rows to NULL |
-| `SET DEFAULT` | the deletion sets the reference of these rows to the default |
+| `SET NULL` | the deletion sets the columns of these rows to NULL |
+| `SET DEFAULT` | the deletion sets the columns of these rows to their defaults |
+| `NO ACTION`、`RESTRICT` | the deletion fails while these rows reference them |
 
-- どの外部キーも数える。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでも、テーブルの1つのパーティションを指すキーでも数える。
-- 件数は、照合キーではなく、外部キーの列で結び付ける。
-- テーブルから自分自身へのキーでは、残る行だけを数える。
-- 参照している行のないキーは除く。
-- ロールが参照しているテーブルを読めないときは、件数のかわりにそのことを示し、計画を続ける。
+- カスケードが消す行も、続けてたどる。これはすべての段で続き、自分自身を参照するテーブルや循環もたどる。n+1 段目の行は、それが参照するテーブルの行を消す最初の n 段目の行の下に、2文字深く字下げして置く。そして、それらの行のどれかを参照する行を数える。n 段目の別の行が消した行を参照する行も含む。
+- `SET NULL` と `SET DEFAULT` の行は、設定する列を挙げる。PostgreSQL 15 以降の列の一覧が挙げる列も同じである。変わる行から先はたどらない。
+- どの外部キーもたどる。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでもたどる。テーブルの1つのパーティションを指すキーも、テーブルの上にあるパーティションテーブルを指すキーも同じである。件数は、照合キーではなく、外部キーの列で、そのキー自身の演算子と照合順序を使って結び付ける。参照しているテーブルが宣言したテーブル自身・そのパーティション・その上にあるパーティションテーブルのどれかなら、その行のうち宣言したテーブルに属する行を、宣言したテーブルの行とみなす。そのため、外部キーをパーティションテーブルに定義してそのパーティションを宣言したときも、その逆のときも、宣言した行を宣言した行として数える。
+- PostgreSQL 18 が許す `NOT ENFORCED` の外部キーは、削除のときに何もしない。PostgreSQL はその動作も検査も働かせないので、まとまりはそれを除く。
+- 計画が自分で削除する行は数えない。計画が削除の前に別の行を指すように変える行も数えない。apply は削除より先に挿入と更新をするからである。上の例では、`m.plan_feature` の行が `ON DELETE CASCADE` で行 `legacy` を参照しているが、計画がそれらを自分で削除するので、削除する行として1回だけ数える。
+- どの行も1回だけ数える。カスケードが消す行は、変わる行にも、削除を妨げる行にも数えない。2つの外部キーがたどり着く行は、最も浅い段の、最初の外部キーのもとで数える。2つのテーブルの削除がたどり着く行は、先に来るテーブルのものとして数える。
+- 件数に行を足さない外部キーは除く。それを通じて参照する行がないとき、参照している行を計画が自分で削除するか別の行を指すように変えるとき、それを通じて参照する行をすべて前の行が数えたときである。そのため、消える行を参照する行があっても、その外部キーがまとまりにないことがある。
+- テーブルの行を数えられないときは、件数のかわりにその理由を示し、その先はたどらない。
 
   ```text
-  maybe referenced by rows of reservation.audit (room_type_id), audit_room_type_fkey: the role may not read the table to count them; ON DELETE NO ACTION, so the deletion fails while such rows reference them
+  Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not use schema b, so what the deletion does to them is not known.
   ```
 
-apply は、削除の前に参照している行を変えたり削除したりしうる。そのため、各行が示すのは計画が読んだ状態で起きることであり、それが起きるということではない。
-カスケードは1段目だけを示し、参照される列の更新には件数を示さない。
-[kortopi apply](apply.ja.md#削除の安全策) は、削除の上限にこの件数を使う。
+  理由は、ロールがテーブルのスキーマを使えないこと、テーブル全体を読めないこと、参照される列を読めないことである。テーブルに行単位セキュリティがかかるときと、外部キーのトリガーが無効なときも同じである。トリガーが無効なら、PostgreSQL はその動作も検査も働かせない。
+
+- `SET NULL` か `SET DEFAULT` が、別の外部キーの参照する列を変えるときは、その外部キーの `ON UPDATE` の動作がすることは分からないと、行が示す。動作が設定する列を読む格納される生成列は、それとともに変わる。そのため、その生成列を参照するキーも同じに扱う。
+
+`Plan:` の行のあとには、すべてのテーブルをまとめた行を、事実ごとに1行ずつ置く。削除がさらに消し、変える行、削除を失敗させる行、そして波及が分からない外部キーであり、どのキーも1回だけ数える。
+
+```text
+Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
+Through foreign keys, the deletions also delete 126 rows and change 8 rows.
+Through foreign keys ON DELETE NO ACTION or RESTRICT, 15 rows make the deletions fail.
+What the deletions do through 6 foreign keys is not known.
+```
+
+削除が消す宣言した行や、削除が宣言した列を設定する宣言した行は、まとまりの行ではなく誤りである。計画は失敗し、その行と、それを宣言したファイルを挙げる（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
+モード `insert` のテーブルは、保存された行をキーだけで比べる。そのため、そこで保存された行が誤りになるのは、削除がそのキーの列を設定するときだけであり、ほかの列の変更はまとまりの行になる。
+[kortopi apply](apply.ja.md#削除の安全策) は、削除の上限にこの件数を使う。参照される列の更新には件数を示さない。
 
 ### 値と名前
 
@@ -447,7 +478,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### スクリプトの読み方
 
-- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。
+- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行も添える。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。
 - コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。スクリプトが `on_insert` の値を持つときは、コメントが「but those of on_insert」と添えて、それらの値を設定が固定しないことを示す。セッションは、それらの値を自分の設定で読む。
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
@@ -509,8 +540,8 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 
 削除はコメントである。その文のどの行も、コメントの印 `--` で始まる。
 適用がこれらの行を削除するのは `--allow-delete` のときだけである（[kortopi apply](apply.ja.md#削除の安全策)）。同じく、スクリプトがそれらを削除するのは、その印を外したときだけである。
-計画の参照の行は、各テーブルの削除の上にコメントとして置く。
-印を外す前に、それを読む。スクリプトの中には、`--max-delete` を当てはめるものも、参照を数え直すものもない。
+テーブルの削除がほかにすることのまとまり（[削除がほかの行にすること](#削除がほかの行にすること)）は、そのテーブルの削除の上にコメントとして置く。
+印を外す前に、それを読む。スクリプトの中には、`--max-delete` を当てはめるものも、行を数え直すものもない。
 
 ### スクリプトの値
 
@@ -557,7 +588,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 
 - ロックを取らない。そのため、同時に動く適用を待たない。
 - 各文が、計画の示す数の行を変えたかを検査しない。行が計画と違うデータベースでは、行の見つからない更新や削除は、エラーなしに何も変えない。挿入がキーで失敗することもある。文のすることを変えるトリガーや、計画のあとに作られたルールにも気づかない。計画のときにあるルールは、計画を止める（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
-- `--max-delete` を当てはめず、削除の前に参照を数え直すこともしない。
+- `--max-delete` を当てはめず、挿入と更新のあとで削除の外部キーをもう一度たどることも、削除がしたことを確かめることもしない。
 - 更新は値の違う列だけを設定する。そのため、要るのはそれらの列に対する `UPDATE` だけであり、`UPDATE OF` のトリガーもそれらの列でしか働かない。
 - 1つの文で1行を更新する。適用は、テーブルの行を1つの文で更新する。PostgreSQL は、遅らせていない外部キーと、遅らせていなくても `DEFERRABLE` な一意制約を、各文の終わりに検査する。そのため、テーブルのすべての行が変わって初めて成り立つ変更は、適用では動き、スクリプトでは失敗する。そうした一意制約の値を2つの行で入れ替える変更や、同じテーブルのほかの行が参照する値（親カテゴリのコードなど）をその参照と一緒に変える変更である。1つのトランザクションで実行すれば、スクリプトは失敗し、何も変えない。対処は2つある。apply を実行するか、制約を `DEFERRABLE` と宣言し、更新より前の `SET CONSTRAINTS ... DEFERRED` によって、スクリプトのトランザクションの中で遅らせるかである。遅らせられない一意制約は行ごとに検査される。そのため、その値の入れ替えは適用でもできない。
 - 順序と遅らせるキーは、`--allow-delete` のある適用と同じく削除も数えて決める。そのため、削除のコメントを外しても、スクリプトの順序は正しいままである。
@@ -576,7 +607,8 @@ kortopi は、次の順に検査する。
 2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないこと、apply の文を書き換えるルールをどのテーブルも持たないこと（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）も検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
 3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言も `on_insert` も挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
-5. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
+5. 削除する行があるときは、それを参照する外部キーをたどる。削除が消す宣言した行や、削除が宣言した列を NULL か既定値にする宣言した行は誤りであり、手順 4 の誤りと一緒に報告する（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
+6. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
 
 よくある誤りとそのメッセージは、[宣言のファイル](declaration.ja.md#よくある誤り)にある。
 
@@ -609,4 +641,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:75bc74d80eb4d04c8213138c7ae970d1a7fe6e064c9e01a87a73e1e5d89426ba -->
+<!-- i18n-source: plan.md sha256:01b72cb4e164f0fa83fdb2674db026f92ebb38ae1e9bd0f6974d70ab783a74d0 -->
