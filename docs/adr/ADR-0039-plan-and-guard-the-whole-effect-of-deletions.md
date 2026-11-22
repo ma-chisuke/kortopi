@@ -112,6 +112,7 @@ Declared rows in the way:
   kortopi: data/m/plan_feature.csv: declared rows of table m.plan_feature reference rows that the deletions remove, through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: remove these rows from the declaration too, or point them at rows that stay
   ```
 
+- A table whose mode does not update, mode `insert`, compares a stored row by its key alone, so its stored row is in the way only when `SET NULL` or `SET DEFAULT` would set a column of its key, which would take the declared row away. A change of another column leaves the row as the declaration says, and is a changed row of the effect, counted and shown like any other. A row to insert gets the values that it declares, so it is in the way in every mode, and a row that a cascade would delete is in the way in every mode.
 - The walk does not go on from such a row. A declared row that references a row to delete through `NO ACTION` or `RESTRICT` makes the deletion fail, and counts as in the way, as for any other table.
 
 The order of an apply with `--allow-delete`:
@@ -197,6 +198,7 @@ What this refines:
   - `TestApplyEffectAgainAfterTheWrites`: the second walk;
   - `TestApplyEffectAfterConcurrentChanges`: through a second connection, a referencing row that another transaction inserts, deletes, or points at another row, a foreign key and a partition that it adds; and a trigger that keeps a row, a rule that PostgreSQL refuses, and a trigger that deletes rows of another table;
   - `TestEffectsOnLargeTables`: the cost on large tables, on the newest version alone;
+  - `TestEffectsOfAModeThatDoesNotUpdate`: a stored row of mode `insert` that `SET NULL` changes outside the key, a key that `SET DEFAULT` changes, and a row to insert;
   - `TestEffectsLeaveOutKeysNotEnforced`: keys `NOT ENFORCED` under `CASCADE` and `NO ACTION`, on PostgreSQL 18;
   - `TestApplyNeedsTrackCounts`: `track_counts` off in the options of the session and in the settings of the role;
   - `TestEffectsOfForeignKeysOfIntervals`: a foreign key over intervals that equal each other with different texts, which fails when the walk compares the text;

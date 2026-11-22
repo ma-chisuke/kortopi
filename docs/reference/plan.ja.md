@@ -405,6 +405,7 @@ What the deletions do through 6 foreign keys is not known.
 ```
 
 削除が消す宣言した行や、削除が宣言した列を設定する宣言した行は、まとまりの行ではなく誤りである。計画は失敗し、その行と、それを宣言したファイルを挙げる（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
+モード `insert` のテーブルは、保存された行をキーだけで比べる。そのため、そこで保存された行が誤りになるのは、削除がそのキーの列を設定するときだけであり、ほかの列の変更はまとまりの行になる。
 [kortopi apply](apply.ja.md#削除の安全策) は、削除の上限にこの件数を使う。参照される列の更新には件数を示さない。
 
 ### 値と名前
@@ -640,4 +641,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:1d24321aae77afd481a67be4e140ac677a3e280186de6606c25f81b18aa6dd9a -->
+<!-- i18n-source: plan.md sha256:ca8bd4b7782e2f2512ccda65e9db4d5843f27d6ff7705668c27aff9b3d4e802c -->

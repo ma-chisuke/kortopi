@@ -112,6 +112,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
   kortopi: data/m/plan_feature.csv: declared rows of table m.plan_feature reference rows that the deletions remove, through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: remove these rows from the declaration too, or point them at rows that stay
   ```
 
+- 更新しないモード（モード `insert`）のテーブルは、保存された行をキーだけで比べる。そのため、その保存された行が削除とぶつかるのは、`SET NULL` か `SET DEFAULT` がそのキーの列を設定し、宣言した行をなくすときだけである。ほかの列の変更は、行を宣言どおりに保つので、波及の変わる行として、ほかの行と同じく数えて示す。挿入する行は宣言した値を得るので、どのモードでも削除とぶつかる。カスケードが消す行も、どのモードでも削除とぶつかる。
 - たどる処理は、そうした行から先へは進まない。`NO ACTION` か `RESTRICT` で削除する行を参照する宣言した行は、削除を失敗させ、ほかのテーブルと同じく削除を妨げる行として数える。
 
 `--allow-delete` 付きの apply の順番：
@@ -197,6 +198,7 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
   - `TestApplyEffectAgainAfterTheWrites`：2回目のたどる処理。
   - `TestApplyEffectAfterConcurrentChanges`：2つ目の接続から、別のトランザクションが参照している行を挿入・削除するか別の行を指すように変え、外部キーとパーティションを足す。行を残すトリガー、PostgreSQL が拒むルール、ほかのテーブルの行を消すトリガーも使う。
   - `TestEffectsOnLargeTables`：大きなテーブルでの費用。最新のバージョンだけで測る。
+  - `TestEffectsOfAModeThatDoesNotUpdate`：モード `insert` で、`SET NULL` がキーの外を変える保存された行、`SET DEFAULT` が変えるキー、挿入する行。
   - `TestEffectsLeaveOutKeysNotEnforced`：`CASCADE` と `NO ACTION` の `NOT ENFORCED` のキー。PostgreSQL 18 で確かめる。
   - `TestApplyNeedsTrackCounts`：セッションのオプションとロールの設定で off にした `track_counts`。
   - `TestEffectsOfForeignKeysOfIntervals`：テキストは違うが互いに等しい interval の外部キー。たどる処理がテキストで比べると、このテストは失敗する。
@@ -234,4 +236,4 @@ ADR-0027 は、削除する行のあるテーブルごとに、それを参照�
 - [トランザクションの分離](https://www.postgresql.org/docs/current/transaction-iso.html)：`REPEATABLE READ` と直列化の失敗について
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#削除がほかの行にすること) と [docs/reference/apply.ja.md](../reference/apply.ja.md#削除の安全策)
 
-<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:5863293de8d877bf2cb5fd22f2d4716249572d41640bdf6ef4cf80755c30b0fa -->
+<!-- i18n-source: ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md sha256:fe044d33ca217ff0e111c1e39c09c313a8446c4c8f0733479b606199898ff70f -->

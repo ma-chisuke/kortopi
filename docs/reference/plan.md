@@ -405,6 +405,7 @@ What the deletions do through 6 foreign keys is not known.
 ```
 
 A declared row that the deletions would delete, or whose declared column they would set, is a mistake, not a line of the block: the plan fails, and names the row and the file that declares it ([kortopi apply](apply.md#declared-rows-in-the-way)).
+A table of mode `insert` compares a stored row by its key alone, so there a stored row is a mistake only when the deletions would set a column of its key; a change of another column is a line of the block.
 [kortopi apply](apply.md#the-guards-on-deletions) uses these counts for its limit on deletions, and an update of a referenced column shows no count.
 
 ### Values and names

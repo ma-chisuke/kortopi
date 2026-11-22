@@ -393,6 +393,7 @@ kortopi: nothing was changed
 それらの行も宣言から外すか、残る行を指すようにする。
 計画も同じ誤りを報告し、`--allow-delete` のない apply も報告する。
 `SET NULL` と `SET DEFAULT` では、削除が設定する宣言した列をエラーが挙げる。`so ON DELETE SET NULL would set its declared column "t_code" to NULL` のようになる。
+モード `insert` のテーブルは、保存された行をキーだけで比べる。そのため、そこで保存された行が削除とぶつかるのは、削除がそのキーの列を設定するときだけである。ほかの列の変更は、ほかの変更と同じく数えて示す。挿入する行は、どのモードでも削除とぶつかる。
 
 ### `--allow-delete` のない `--max-delete`
 
@@ -519,4 +520,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:7828d645d0ebcea5812b989ec81330ec3709f0386a73c13f4cc83cadb937149e -->
+<!-- i18n-source: apply.md sha256:2751b175419ece6c35dd2ddef4b19639e25cc82100853b65fe0a2f0ab294e656 -->

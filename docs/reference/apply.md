@@ -391,6 +391,7 @@ The declaration deletes a row that rows of its own still need, so no apply could
 Remove those rows from the declaration too, or point them at a row that stays.
 A plan reports the same mistake, and so does an apply without `--allow-delete`.
 For `SET NULL` and `SET DEFAULT`, the error names the declared columns that the deletion would set, as in `so ON DELETE SET NULL would set its declared column "t_code" to NULL`.
+A table of mode `insert` compares a stored row by its key alone, so there a stored row is in the way only when the deletion would set a column of its key; a change of another column is counted and shown as any other change. A row to insert is in the way in every mode.
 
 ### `--max-delete` without `--allow-delete`
 

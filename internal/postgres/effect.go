@@ -347,7 +347,7 @@ func (w *walk) cascade(ctx context.Context, i int, root *loadedTable, effect *pl
 				return nil, err
 			}
 			for _, c := range r.covers {
-				if err := w.conflict(ctx, r, c, root, i, lv, nil); err != nil {
+				if err := w.conflict(ctx, r, c, root, i, lv, nil, true); err != nil {
 					return nil, err
 				}
 			}
@@ -400,17 +400,26 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 		switch {
 		case changes:
 			// A declared column that the action sets would differ from the
-			// declaration: such declared rows are conflicts, not changes.
+			// declaration: such declared rows are conflicts, not changes. A
+			// table whose mode does not update compares a stored row by its
+			// key alone, so only a key column that the action sets makes its
+			// stored row a conflict; otherwise the row is a changed row. A
+			// row to insert declares the values that it gets, in every mode.
 			conflicting := []string{"false"}
 			for _, c := range r.covers {
 				declared := slices.DeleteFunc(slices.Clone(e.set), func(col string) bool { return !c.lt.declares(col) })
 				if len(declared) == 0 {
 					continue
 				}
-				if err := w.conflict(ctx, r, c, root, i, lv, declared); err != nil {
+				stored := c.lt.updating || slices.ContainsFunc(declared, func(col string) bool {
+					return slices.ContainsFunc(c.lt.c.key, func(k column) bool { return k.name == col })
+				})
+				if err := w.conflict(ctx, r, c, root, i, lv, declared, stored); err != nil {
 					return err
 				}
-				conflicting = append(conflicting, c.matched())
+				if stored {
+					conflicting = append(conflicting, c.matched())
+				}
 			}
 			n, err = w.insert(ctx, r, root, i, lv, kindChanged, "NOT ("+strings.Join(conflicting, " OR ")+")")
 			if err == nil && n > 0 {
@@ -622,8 +631,9 @@ func (w *walk) countInserts(ctx context.Context, r refs, c cover, root *loadedTa
 // reference the rows of level lv through the edge of r: for a cascade, every
 // such row, and for SET NULL or SET DEFAULT, every such row whose declared
 // columns set names. The stored rows count as they will be after the
-// updates of an apply, and the rows to insert with their declared values.
-func (w *walk) conflict(ctx context.Context, r refs, c cover, root *loadedTable, i, lv int, set []string) error {
+// updates of an apply, and only when stored is true; the rows to insert
+// count with their declared values.
+func (w *walk) conflict(ctx context.Context, r refs, c cover, root *loadedTable, i, lv int, set []string, stored bool) error {
 	e := r.e
 	goes := e.referenced
 	if lv == 0 {
@@ -635,14 +645,16 @@ func (w *walk) conflict(ctx context.Context, r refs, c cover, root *loadedTable,
 	identity := texts(storedAlias, columnsOf(goes))
 	limit := " ORDER BY " + c.lt.c.orderBy(c.alias) + " LIMIT " + strconv.Itoa(maxFlaggedRows)
 
-	stored := "SELECT " + texts(c.alias, c.lt.c.key) + ", " + identityColumns(len(goes)) + ", pg_catalog.count(*) OVER () FROM " + r.from() +
-		" CROSS JOIN LATERAL (SELECT " + identity + " " + w.parents(e, root, i, lv) + " AND " + keyMatch(e, r.after()) + " LIMIT 1) AS g (" +
-		identityColumns(len(goes)) + ") WHERE " + c.matched() + limit
 	conflict := plan.Conflict{
 		Table: c.lt.meta.name, Columns: e.columns, Constraint: e.name, References: e.toTable, OnDelete: e.onDelete, Set: set,
 	}
-	if err := w.conflictRows(ctx, stored, c.lt, goes, lv > 0, false, &conflict); err != nil {
-		return err
+	if stored {
+		sql := "SELECT " + texts(c.alias, c.lt.c.key) + ", " + identityColumns(len(goes)) + ", pg_catalog.count(*) OVER () FROM " + r.from() +
+			" CROSS JOIN LATERAL (SELECT " + identity + " " + w.parents(e, root, i, lv) + " AND " + keyMatch(e, r.after()) + " LIMIT 1) AS g (" +
+			identityColumns(len(goes)) + ") WHERE " + c.matched() + limit
+		if err := w.conflictRows(ctx, sql, c.lt, goes, lv > 0, false, &conflict); err != nil {
+			return err
+		}
 	}
 	if c.own(e) && declaresAll(e, c.lt) {
 		values := make([]string, len(e.columns))
