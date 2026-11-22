@@ -96,16 +96,24 @@ func (g *guard) handler(conn *pgconn.PgConn) ctxwatch.Handler {
 	}
 }
 
-// dial wraps the dialer of the driver: it sets the keepalive of each TCP
-// connection as keepAlive says, as far as the system lets it, and refuses
-// the connection of a cancel request during the commit. The driver dials for the session and for each
+// dial returns the dialer of the driver for a session: it dials as the
+// default dialer of the driver does, with timeout, the connect_timeout of
+// the settings, sets the keepalive of each TCP connection as keepAlive says,
+// as far as the system lets it, and refuses the connection of a cancel
+// request during the commit. The driver dials for the session and for each
 // cancel request.
-func (g *guard) dial(dial pgconn.DialFunc) pgconn.DialFunc {
+//
+// The dialer of Go would set its own keepalive, 15 seconds, 15 seconds, and
+// 9 probes, on each socket before kortopi sets its own, and a value that
+// kortopi leaves, as a 0 of the settings of libpq does, would then be the
+// one of Go, not the one of the system: so its own keepalive is off.
+func (g *guard) dial(timeout time.Duration) pgconn.DialFunc {
+	d := &net.Dialer{Timeout: timeout, KeepAlive: -1}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if g.committing.Load() {
 			return nil, errNoCancel
 		}
-		conn, err := dial(ctx, network, addr)
+		conn, err := d.DialContext(ctx, network, addr)
 		if err != nil {
 			return nil, err
 		}
@@ -181,13 +189,17 @@ func (w *watcher) HandleUnwatchAfterCancel() {
 // them from a connection string or a service file, and so does the driver,
 // which does not know them and would pass them to the server as settings of
 // the session, which it refuses. kortopi applies them itself, as libpq
-// does: keepalives 0 turns the keepalive off, and 0 for the others leaves
-// the value of the system.
+// does: keepalives turns the keepalive off when it is 0, and on otherwise,
+// and for the others 0 keeps the value of the system, and so does a negative
+// value, which libpq takes for 0. A value that is not a whole number is an
+// error, as in libpq.
 func keepAliveConfig(params map[string]string) (net.KeepAliveConfig, error) {
 	ka := net.KeepAliveConfig{Enable: true, Idle: keepAliveIdle, Interval: keepAliveInterval, Count: keepAliveCount}
-	// A negative value leaves the option of the system as it is.
+	// A negative field leaves the option of the socket as it is, which is
+	// the value of the system, since kortopi dials with the keepalive of Go
+	// off (guard.dial).
 	seconds := func(n int) time.Duration {
-		if n == 0 {
+		if n <= 0 {
 			return -1
 		}
 		return time.Duration(n) * time.Second
@@ -201,7 +213,7 @@ func keepAliveConfig(params map[string]string) (net.KeepAliveConfig, error) {
 		{"keepalives_interval", func(n int) { ka.Interval = seconds(n) }},
 		{"keepalives_count", func(n int) {
 			ka.Count = n
-			if n == 0 {
+			if n <= 0 {
 				ka.Count = -1
 			}
 		}},
@@ -212,8 +224,8 @@ func keepAliveConfig(params map[string]string) (net.KeepAliveConfig, error) {
 		}
 		delete(params, p.name)
 		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil || n < 0 {
-			return net.KeepAliveConfig{}, fmt.Errorf("read the connection settings: %s is not a whole number from 0: "+
+		if err != nil {
+			return net.KeepAliveConfig{}, fmt.Errorf("read the connection settings: %s is not a whole number: "+
 				"correct %s in the service that PGSERVICE names", p.name, p.name)
 		}
 		p.set(n)

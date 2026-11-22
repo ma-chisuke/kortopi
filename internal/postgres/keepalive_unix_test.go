@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"errors"
+	"maps"
 	"net"
 	"syscall"
 	"testing"
@@ -84,7 +85,7 @@ func TestDialKeepAlive(t *testing.T) {
 			t.Fatal(err)
 		}
 		g := &guard{keepAlive: ka}
-		conn, err := g.dial((&net.Dialer{}).DialContext)(t.Context(), "tcp", ln.Addr().String())
+		conn, err := g.dial(0)(t.Context(), "tcp", ln.Addr().String())
 		return g, conn, err
 	}
 	for _, tt := range []struct {
@@ -113,6 +114,29 @@ func TestDialKeepAlive(t *testing.T) {
 	}
 	_ = conn.Close()
 
+	// 0 keeps the value of the system, as in libpq, and so does a negative
+	// value, which libpq takes for 0: the values of a socket that nobody
+	// tuned.
+	raw, err := (&net.Dialer{KeepAlive: -1}).DialContext(t.Context(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := keepAliveOf(t, raw)
+	_ = raw.Close()
+	for _, params := range []map[string]string{
+		{"keepalives_idle": "0", "keepalives_interval": "0", "keepalives_count": "0"},
+		{"keepalives_idle": "-1", "keepalives_interval": "-30", "keepalives_count": "-2"},
+	} {
+		_, conn, err := dial(t, maps.Clone(params))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := keepAliveOf(t, conn), (keepAlive{on: true, idle: system.idle, interval: system.interval, count: system.count}); got != want {
+			t.Errorf("keepalive with %v = %+v, want it on with the values of the system %+v", params, got, want)
+		}
+		_ = conn.Close()
+	}
+
 	// The system refuses an idle time this long, on Linux and on macOS. The
 	// connection stays, with the keepalive on: the tuning is best effort, as
 	// the dialer of Go does it, and some systems cannot set every value.
@@ -126,7 +150,7 @@ func TestDialKeepAlive(t *testing.T) {
 	_ = conn.Close()
 
 	g.committing.Store(true)
-	if conn, err := g.dial((&net.Dialer{}).DialContext)(t.Context(), "tcp", ln.Addr().String()); !errors.Is(err, errNoCancel) {
+	if conn, err := g.dial(0)(t.Context(), "tcp", ln.Addr().String()); !errors.Is(err, errNoCancel) {
 		t.Errorf("a dial during the commit = %v, %v, want errNoCancel", conn, err)
 	}
 }

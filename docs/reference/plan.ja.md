@@ -132,7 +132,7 @@ kortopi が自分で設定するものは、どれも自分のトランザクシ
 ロールの設定（`ALTER ROLE ... SET`）は、その後にプーラーが開くサーバーとの接続に、ロールのすべてのセッションについて届く。
 
 kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で接続を落とす。そのため、応答しなくなったサーバーには約 30 秒の沈黙のあとに気付く。コミットの応答を待つ間も同じである。
-サービスファイルでは、そのための libpq の設定でこれを変えられる。これらの設定に環境変数はない。`keepalives=0` はプローブを止める。`keepalives_idle`・`keepalives_interval`・`keepalives_count` は、待つ秒数・間隔の秒数・プローブの回数を設定し、0 はシステムの値を保つ。
+サービスファイルでは、そのための libpq の設定でこれを変えられる。これらの設定に環境変数はない。`keepalives=0` はプローブを止める。`keepalives_idle`・`keepalives_interval`・`keepalives_count` は、待つ秒数・間隔の秒数・プローブの回数を設定する。libpq と同じく、0 と負の値はシステムの値を保つ。
 
 ### ロックを待つとき
 
@@ -665,4 +665,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:c297873ec7e253cb6432276496a790a2a1cb58851a2c74a145c01f179c94e176 -->
+<!-- i18n-source: plan.md sha256:d576ebcb906e5954c2564cbc2acdad175fc6eac9834d07aa5db8317db779e55d -->

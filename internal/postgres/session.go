@@ -435,7 +435,9 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	if g.keepAlive, err = keepAliveConfig(cfg.RuntimeParams); err != nil {
 		return nil, err
 	}
-	cfg.DialFunc = g.dial(cfg.DialFunc)
+	// The dialer of the settings is the default one of the driver, with
+	// connect_timeout; guard.dial dials as it does.
+	cfg.DialFunc = g.dial(cfg.ConnectTimeout)
 	cfg.BuildContextWatcherHandler = g.handler
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {

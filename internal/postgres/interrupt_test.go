@@ -41,12 +41,17 @@ func TestKeepAliveConfig(t *testing.T) {
 			want:   net.KeepAliveConfig{Enable: true, Idle: -1, Interval: -1, Count: -1},
 		},
 		{
-			name: "not a number", params: map[string]string{"keepalives_idle": "10s"},
-			wantErr: "read the connection settings: keepalives_idle is not a whole number from 0: correct keepalives_idle in the service that PGSERVICE names",
+			name:   "below 0, which libpq takes for 0",
+			params: map[string]string{"keepalives": "-1", "keepalives_idle": "-1", "keepalives_interval": "-5", "keepalives_count": "-2"},
+			want:   net.KeepAliveConfig{Enable: true, Idle: -1, Interval: -1, Count: -1},
 		},
 		{
-			name: "below 0", params: map[string]string{"keepalives_count": "-1"},
-			wantErr: "read the connection settings: keepalives_count is not a whole number from 0: correct keepalives_count in the service that PGSERVICE names",
+			name: "not a number", params: map[string]string{"keepalives_idle": "10s"},
+			wantErr: "read the connection settings: keepalives_idle is not a whole number: correct keepalives_idle in the service that PGSERVICE names",
+		},
+		{
+			name: "empty", params: map[string]string{"keepalives_count": ""},
+			wantErr: "read the connection settings: keepalives_count is not a whole number: correct keepalives_count in the service that PGSERVICE names",
 		},
 	}
 	for _, tt := range tests {

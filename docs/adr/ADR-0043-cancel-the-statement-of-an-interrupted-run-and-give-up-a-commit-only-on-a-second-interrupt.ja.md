@@ -98,7 +98,7 @@ kortopi は、割り込み（SIGINT や SIGTERM）をコンテキストのキャ
 - プローブに応答するサーバーは、コミットがどれほど長くかかっても待つ。遅い同期スタンバイを待つときがそうである。コミットは進行中であり、2度目の割り込みがそこから抜け出す手段である。
 - プローブの費用は、通信のない接続で5秒おきに数バイトである。30 秒より短い切断では、実行は終わらない。
 - この設定は、Go の接続処理と同じく、できる範囲で行う。システムが拒む値はシステムのままにし、キープアライブは少なくとも有効にし、接続はそのまま使い、何も出力しない。10 バージョン 1709 より前の Windows はプローブの回数の設定を拒み、Linux と macOS は数百万秒の待ち時間を拒む。
-- libpq は、`keepalives`・`keepalives_idle`・`keepalives_interval`・`keepalives_count` の設定を接続文字列かサービスファイルから読み、それらの環境変数は持たない。pgx もサービスファイルからそれらを読むが、意味を知らないので、セッションの設定としてサーバーに渡してしまい、サーバーはそれを拒む。kortopi はそれらを取り出し、libpq と同じように適用する。`keepalives=0` はキープアライブを止め、ほかの設定の 0 はシステムの値を保つ。`tcp_user_timeout` は、ドライバーの扱いのまま、接続のサーバー側についてのサーバーの設定である。
+- libpq は、`keepalives`・`keepalives_idle`・`keepalives_interval`・`keepalives_count` の設定を接続文字列かサービスファイルから読み、それらの環境変数は持たない。pgx もサービスファイルからそれらを読むが、意味を知らないので、セッションの設定としてサーバーに渡してしまい、サーバーはそれを拒む。kortopi はそれらを取り出し、libpq と同じように適用する。`keepalives` は 0 ならキープアライブを止め、それ以外なら有効にする。ほかの設定の 0 はシステムの値を保ち、libpq が 0 とみなす負の値も同じである。整数でない値は誤りである。システムの値は実際に保たれる。kortopi は pgx の既定の接続処理と同じように接続するが、Go のキープアライブは止めておくからである。止めなければ、Go がまずすべてのソケットに 15 秒・15 秒・9 回を設定してしまう。`tcp_user_timeout` は、ドライバーの扱いのまま、接続のサーバー側についてのサーバーの設定である。
 - キープアライブがプローブするのは、確認応答を待つデータのない接続だけである。kortopi が `COMMIT` を送った瞬間、サーバーが確認応答する前に切れたときは、待つのはシステムの再送に委ねられ、Linux では何分も続くことがある。`TCP_USER_TIMEOUT` ならそれも抑えられるが、Go の `net` パッケージはそれを設定せず、Linux にしかない。
 - テストではネットワークを切れないので、手で1度だけ測った。Linux 向けのバイナリをコンテナで動かし、別のコンテナの PostgreSQL 18 と専用の Docker ネットワークでつないだ。apply のコミットは、存在しない同期スタンバイを待つようにした。クライアントを `docker network disconnect` してから、サーバーには待つのをやめさせたので、サーバーはコミットした。kortopi は、切断から 30.0 秒後に、原因 `unexpected EOF` とともに結果の分からないメッセージを出力し、終了コード 1 で終わった。ランタイムのキープアライブの設定なら、同じ実行は約 150 秒待ったはずである。こちらは測っていない。
 
@@ -183,4 +183,4 @@ kortopi は、割り込み（SIGINT や SIGTERM）をコンテキストのキャ
 - `keepalives` などについては [libpq の接続のパラメータ](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS)
 - 利用者向けの説明：[docs/reference/apply.ja.md](../reference/apply.ja.md#apply-に割り込む)
 
-<!-- i18n-source: ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md sha256:dfe8af3c4ae3020505af2f7884c5b908761aa4c3861042992c702757d52b3987 -->
+<!-- i18n-source: ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md sha256:fc38bb7179c7caaa4978e00245b16804a1e362a71d88348cae5a761aca7061e0 -->
