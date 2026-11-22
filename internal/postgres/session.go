@@ -138,8 +138,10 @@ type Session struct {
 	deleted map[declaration.TableName]int
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
-	// temps counts the temporary tables, to name the next one.
-	temps int
+	// temps counts the temporary tables, to name the next one, and
+	// savepoints the savepoints (savepoint).
+	temps      int
+	savepoints int
 	// tempChecked and tempErr remember whether the session can create
 	// temporary tables.
 	tempChecked bool
