@@ -334,13 +334,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   ```
 
 - When deletions were left out, `Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` follows. When those deletions would also delete or change rows through foreign keys, the line says so before the flag: `Through foreign keys, their deletion would also delete 2 rows and change 1 row.`
-- When the only differences are deletions, the apply writes and commits nothing, and the `Not deleted` line stands alone and says so:
+- When the only differences are deletions, the apply writes and commits nothing, and the `Not deleted` line stands alone and says so. The plan can still count stored rows that the declaration lacks, which are no change to write:
 
   ```text
-  Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
+  Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert`, `No changes. There is nothing to apply.` and a line that names such tables ([kortopi plan](plan.md#read-the-output)).
+- When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert`, holds stored rows that the declaration lacks, or could not have them counted, `No changes. There is nothing to apply.` and the lines that name such tables ([kortopi plan](plan.md#read-the-output)).
+- The plan of an apply counts the stored rows that tables of mode `upsert` and `insert` hold and the declaration lacks, as a plan does, and its lines say only that the mode of the table deletes none of them. The writes of the apply can still delete or change such a row: the cascade of a foreign key from a table whose rows the apply deletes, which the plan shows under that table ([What the deletions also do](plan.md#what-the-deletions-also-do)), the action `ON UPDATE` of a foreign key whose referenced key the apply updates, or a trigger ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). A count that PostgreSQL ends with an error leaves that table without a count, and the apply goes on.
 - After a failure, the errors go to standard error, and the last line is `kortopi: nothing was changed`.
 - When the answer of the commit does not arrive, the apply cannot know whether the changes were made, and does not say that nothing was changed:
 

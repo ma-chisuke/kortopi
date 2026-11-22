@@ -48,9 +48,11 @@ type Header struct {
 //   - The INSERT of a table with values of on_insert follows a comment that
 //     names them, and says that PostgreSQL reads them when the script runs.
 //
-// An empty plan gives one comment line, and a second one that names the
-// tables of mode insert, whose values were not compared, when the plan has
-// such tables. The script is written to w only when it is whole, so an error
+// An empty plan gives one comment line, and, as further comment lines, the
+// line that names the tables of mode insert, whose values were not
+// compared, and the lines of the stored rows that the declaration lacks in
+// tables whose modes delete no row, when the plan has such tables
+// (ADR-0046). The script is written to w only when it is whole, so an error
 // leaves nothing half written.
 func Write(ctx context.Context, w io.Writer, p *plan.Plan, db Database, h Header) error {
 	var b bytes.Buffer
@@ -177,8 +179,11 @@ const onInsertNote = "The database reads the values of on_insert when the script
 	"a value such as now is the time of the transaction that runs the script."
 
 // writeHeader writes the header comment: where the plan comes from, its
-// counts, the tables and columns that wait for the schema change, and how
-// to run the script.
+// counts, the line that sums up the stored rows that the declaration lacks
+// in tables whose modes delete no row (ADR-0046), how to run the script, the
+// tables and columns that wait for the schema change, and, after them, the
+// lines of the tables that hold such rows, at most five of them and a line
+// that counts the others.
 func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 	source := "Written by kortopi from the data directory " + text(h.Dir)
 	if h.Database != "" {
@@ -196,6 +201,9 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 	for _, line := range p.EffectSummary() {
 		comment(b, line)
 	}
+	if line := p.UndeclaredSummary(); line != "" {
+		comment(b, line)
+	}
 	comment(b, "Run the statements in one transaction.")
 	for i := range p.Tables {
 		t := &p.Tables[i]
@@ -211,6 +219,11 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 			comment(b, fmt.Sprintf("%s: column %s of on_insert in %s is known after the schema is applied; the statements leave it out.",
 				plan.FormatTable(t.Name), plan.FormatName(c), config.FileName))
 		}
+	}
+	// The stored rows that the declaration lacks come after every line of
+	// the schema change, named for five tables at most (ADR-0046).
+	for _, line := range plan.UndeclaredGroup(p.UndeclaredTables()) {
+		comment(b, line)
 	}
 }
 

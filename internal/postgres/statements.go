@@ -588,3 +588,10 @@ func (c *comparison) deletesSQL() string {
 	return "SELECT " + texts(storedAlias, c.key) + " FROM " + c.stored + " AS " + storedAlias +
 		" WHERE " + c.unmatched() + " ORDER BY " + c.orderBy(storedAlias)
 }
+
+// undeclaredSQL counts the stored rows that no declared row matches: the
+// rows of deletesSQL, for a table whose mode deletes no row (ADR-0046). It
+// reads the key columns of the stored rows alone, and lists no row.
+func (c *comparison) undeclaredSQL() string {
+	return "SELECT pg_catalog.count(*) FROM " + c.stored + " AS " + storedAlias + " WHERE " + c.unmatched()
+}

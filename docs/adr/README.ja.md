@@ -50,6 +50,7 @@
 | [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) | apply のコミットの前に宣言したすべてのテーブルをもう一度比べ、行がすでに宣言した値を持つ更新はその比較で決める | accepted | 2026-11-22 |
 | [ADR-0043](ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md) | 割り込まれた実行の文はサーバーでキャンセルし、コミットの応答を待つのをやめるのは2度目の割り込みか接続が死んだときだけにする | accepted | 2026-11-22 |
 | [ADR-0044](ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) | 実行のロック待ちの上限は `--lock-timeout` で与え、kortopi の各トランザクションのローカルな設定にする | accepted | 2026-11-22 |
+| [ADR-0046](ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) | 行を削除しないモードのテーブルで宣言にない保存された行を数え、それがある間は一致を主張しない | accepted | 2026-11-22 |
 | [ADR-0047](ADR-0047-stop-a-run-that-read-a-table-that-another-session-changed-after-its-snapshot.ja.md) | スナップショットのあとにほかのセッションが書き換え、置き換え、パーティションを変えたテーブルを読んだ実行は止める | accepted | 2026-11-22 |
 
-<!-- i18n-source: README.md sha256:1793f62403a57e1a7dbaf0c92f01619038d4d6d7b3f325c7cfe6451a80df9e2d -->
+<!-- i18n-source: README.md sha256:7592a4c63dedff554613588bfd5e1ef73c5dd4d9b051621867e36aa560037cf8 -->

@@ -1,0 +1,5 @@
+No changes. There is nothing to apply.
+Tables of mode insert are compared by their keys only, not by their values: app.b, app.c.
+app.a: 2 stored rows are not declared, which mode upsert does not delete
+app.b: 1 stored row is not declared, which mode insert does not delete
+Not declared: 3 stored rows in 2 tables, which modes upsert and insert do not delete.

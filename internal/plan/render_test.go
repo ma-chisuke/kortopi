@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -38,6 +39,35 @@ func name(schema, table string) declaration.TableName {
 // unchangedTable returns the plan of a table without changes.
 func unchangedTable(schema, table string) Table {
 	return Table{Name: name(schema, table), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"}}
+}
+
+// withUndeclared returns t holding n stored rows that the declaration
+// lacks.
+func withUndeclared(t Table, n int) Table {
+	t.Diff.Undeclared = n
+	return t
+}
+
+// manyUndeclared returns n tables of schema app in mode upsert without
+// changes, the table number i with i stored rows that the declaration lacks,
+// but the table number uncounted, whose such rows are not counted.
+func manyUndeclared(n, uncounted int) []Table {
+	tables := make([]Table, n)
+	for i := range tables {
+		tables[i] = withUndeclared(unchangedTable("app", fmt.Sprintf("t%02d", i+1)), i+1)
+		if i+1 == uncounted {
+			tables[i] = withUncounted(withUndeclared(tables[i], 0))
+		}
+	}
+	return tables
+}
+
+// withUncounted returns t whose stored rows that the declaration lacks the
+// database could not count, because a statement timeout ended the count.
+func withUncounted(t Table) Table {
+	t.Diff.Uncounted = "PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
+		"statement_timeout of the session, or another session, cancelled it: allow the session more time to count them"
+	return t
 }
 
 // insertTable is a table of schema app in mode insert without rows to
@@ -260,6 +290,93 @@ func TestRender(t *testing.T) {
 			plan: &Plan{Tables: []Table{
 				insertTable("a"), insertTable("b"), insertTable("c"), insertTable("d"),
 				unchangedTable("app", "e"), insertTable("f"), insertTable("g"), insertTable("h"),
+			}},
+		},
+		{
+			// Issue 30: a table of mode upsert holds a stored row that the
+			// declaration lacks, so the empty plan claims no match
+			// (ADR-0046).
+			name: "no_changes_undeclared",
+			plan: &Plan{Tables: []Table{withUndeclared(unchangedTable("geo", "currency"), 1), unchangedTable("geo", "region")}},
+		},
+		{
+			name: "no_changes_insert_undeclared",
+			plan: &Plan{Tables: []Table{
+				withUndeclared(unchangedTable("app", "a"), 2), withUndeclared(insertTable("b"), 1), insertTable("c"),
+			}},
+		},
+		{
+			// A table with a block shows the stored rows that the
+			// declaration lacks after its counts, a table without one on a
+			// line of its own, and the line after Plan: sums them up.
+			name: "undeclared",
+			plan: &Plan{Tables: []Table{
+				withUndeclared(Table{
+					Name: name("app", "countries"), Mode: config.ModeInsert, Key: []string{"code"}, Compare: []string{"name"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("FR"), Values: values("France")}}},
+				}, 1),
+				withUndeclared(unchangedTable("app", "currencies"), 3),
+				withUndeclared(Table{
+					Name: name("app", "plans"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					PendingColumns: []string{"floor"},
+				}, 2),
+				withUndeclared(Table{
+					Name: name("app", "regions"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}},
+				}, 1000),
+				unchangedTable("app", "towns"),
+			}},
+		},
+		{
+			// A count that the database could not make says why, and the
+			// empty plan claims no match (ADR-0046).
+			name: "no_changes_uncounted",
+			plan: &Plan{Tables: []Table{withUncounted(unchangedTable("app", "big")), unchangedTable("app", "small")}},
+		},
+		{
+			// The summary counts the rows of the tables that the database
+			// counted, and the tables that it did not count.
+			name: "uncounted",
+			plan: &Plan{Tables: []Table{
+				withUncounted(Table{
+					Name: name("app", "big"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("1"), Values: values("a")}}},
+				}),
+				withUndeclared(insertTable("codes"), 2),
+				withUncounted(unchangedTable("app", "huge")),
+			}},
+		},
+		{
+			// Tables without a block that hold stored rows that the
+			// declaration lacks are named in one group, five at most, and a
+			// line counts the others (ADR-0046).
+			name: "undeclared_many",
+			plan: &Plan{Tables: append(manyUndeclared(8, 2), Table{
+				Name: name("geo", "zones"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+				Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}, Undeclared: 4},
+			}, unchangedTable("geo", "zz"))},
+		},
+		{
+			name: "no_changes_undeclared_many",
+			plan: &Plan{Tables: manyUndeclared(7, 6)},
+		},
+		{
+			// The deletion of a row of a table of mode sync cascades into a
+			// row of a table of mode upsert that the declaration lacks: the
+			// line of that table says only that its mode deletes none of its
+			// rows, and the effect says what the deletion does to it
+			// (ADR-0039, ADR-0046).
+			name: "undeclared_cascade",
+			plan: &Plan{Tables: []Table{
+				{
+					Name: name("app", "child"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"parent_id", "note"},
+					Diff: TableDiff{Undeclared: 1},
+				},
+				{
+					Name: name("app", "parent"), Mode: config.ModeSync, Key: []string{"id"}, Compare: []string{"name"},
+					Diff:   TableDiff{Deletes: []Row{{Key: values("2")}}},
+					Effect: Effect{Steps: []Step{step(1, name("app", "child"), "child_parent_id_fkey", name("app", "parent"), "CASCADE", 1, "parent_id")}},
+				},
 			}},
 		},
 		{

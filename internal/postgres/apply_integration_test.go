@@ -232,7 +232,9 @@ func sortByReferences(names []declaration.TableName, keys []apply.ForeignKey) ([
 }
 
 // checkEmpty plans reqs in a new session of a plan, and fails unless no
-// table shows a change.
+// table shows a change. The stored rows that a table of mode upsert or insert
+// holds and the declaration lacks are no change, so it does not look at their
+// count; a test that keeps such a row checks the row itself.
 func checkEmpty(t *testing.T, db testDB, dir string, reqs []plan.DiffRequest) {
 	t.Helper()
 	s := db.session(t, dir)
@@ -241,7 +243,7 @@ func checkEmpty(t *testing.T, db testDB, dir string, reqs []plan.DiffRequest) {
 		if err != nil {
 			t.Fatalf("Diff(%s) after the apply: %v", req.Table.Name, err)
 		}
-		if lines := diffLines(got); len(lines) > 0 {
+		if lines := changeLines(got); len(lines) > 0 {
 			t.Errorf("Diff(%s) after the apply:\n  %s", req.Table.Name, strings.Join(lines, "\n  "))
 		}
 	}

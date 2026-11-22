@@ -339,21 +339,22 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 | `~ code=pro  name: Pro -> "Pro Plan"` | A row to update: its key, and each column that changes, as `column: stored -> declared`. Columns that do not change are not shown. |
 | `- code=legacy` | A row to delete: its key. Only a table in mode `sync` deletes rows. |
 | `1 to insert, 1 to update, 1 to delete` | The counts of the table, for the kinds of change that its mode computes. |
+| `2 stored rows are not declared, which mode upsert does not delete` | The stored rows that a table of mode `upsert` or `insert` holds and the declaration lacks, none of which the mode deletes ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)). |
 | `Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.` | The counts of the whole plan, and the number of declared tables in it. |
 
 Tables are sorted by schema and then by name.
 Within a table, the rows to insert come first, then the rows to update, then the rows to delete, each sorted by the match key.
 
 The count line of a table shows only the kinds of change that its mode computes: `insert` shows inserts, `upsert` inserts and updates, and `sync` all three.
-A table in mode `upsert` never prints `0 to delete`, because kortopi never looks for rows to delete in it: rows that the declaration lacks may exist and are left alone.
+A table in mode `upsert` never prints `0 to delete`, because its mode deletes no row: a line counts the stored rows that the declaration lacks instead ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
 
-A table without changes is not shown, and the last line counts such tables:
+A table without changes is not shown, unless it holds stored rows that the declaration lacks, and the last line counts the tables that are not shown:
 
 ```text
 2 tables without changes are not shown.
 ```
 
-When nothing differs and nothing waits for a schema change, the plan is one line:
+When nothing differs, nothing waits for a schema change, no table has mode `insert`, no table holds stored rows that the declaration lacks, and no count of them failed, the plan is one line:
 
 ```text
 No changes. The database matches the declaration.
@@ -369,6 +370,58 @@ When the plan has such a table, the empty plan does not say that the database ma
 No changes. There is nothing to apply.
 A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
 ```
+
+### Stored rows that the declaration lacks
+
+A table of mode `upsert` or `insert` deletes no row, so it can hold stored rows that the declaration lacks: a row that an admin screen added, or a row whose declaration a reverted commit took away.
+A plan counts them, by the match key, as a table of mode `sync` finds its rows to delete, and shows their number, not the rows.
+The mode deletes none of them, so they are no change of the plan.
+
+A table with a block shows the count after its counts.
+The tables without a block that hold such rows are listed in one group after the blocks: the first five of them, in the order of the plan, and one line that counts the others and their rows.
+One line after `Plan:` sums them up:
+
+```text
+geo.regions (upsert, key: code)
+  + code=kanto  name=Kanto
+  1 to insert, 0 to update
+  2 stored rows are not declared, which mode upsert does not delete
+
+geo.currency: 1 stored row is not declared, which mode upsert does not delete
+
+Plan: 1 to insert, 0 to update, 0 to delete in 2 tables.
+Not declared: 3 stored rows in 2 tables, which mode upsert does not delete.
+```
+
+With more than five tables in the group, its last line counts the others, as in `45 more tables hold 45 stored rows that are not declared.`
+
+When nothing else differs, the plan does not say that the database matches the declaration, and gives these lines after its first:
+
+```text
+No changes. There is nothing to apply.
+geo.currency: 1 stored row is not declared, which mode upsert does not delete
+Not declared: 1 stored row in 1 table, which mode upsert does not delete.
+```
+
+- The rows count for no difference: `--exit-code` gives status 0 when they are all that differs ([Exit status and drift](#exit-status-and-drift)). A check that should fail on them can look for the line that starts with `Not declared:`.
+- The lines say only what the mode does. The writes of an apply can still delete or change such a row: the cascade of a foreign key from a table whose rows the apply deletes, as the plan shows under that table ([What the deletions also do](#what-the-deletions-also-do)), the action `ON UPDATE` of a foreign key whose referenced key the apply updates, or a trigger.
+- To list the rows, or to delete them, give the table mode `sync`: a plan then shows each of them as a row to delete, and an apply deletes them only with `--allow-delete`.
+- An apply prints the same lines with its plan.
+
+To count the rows, a plan of a table of mode `upsert` or `insert` now reads the key of every stored row of the table, where it read only the declared keys before, as a plan of mode `sync` reads them to find its rows to delete.
+It needs no privilege beyond those of a plan ([What the session needs](#what-the-session-needs)).
+On one machine, against a table of 200,000 rows, the count took about 6 percent of the time that the comparison of the table took with a declaration of 199,000 of its rows, and 42 to 46 percent with a declaration of 1,000 of them: the comparison of a small declaration of a large table now takes about 1.7 to 1.8 times as long ([ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.md)).
+
+The count runs in a savepoint of its own.
+When PostgreSQL ends it with an error, such as a `statement_timeout` of the role, the plan goes on without it, and the line of the table says so, and why:
+
+```text
+geo.big: the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+Not declared: the rows of 1 table are not counted.
+```
+
+The exit status is what it would be without the count, and an empty plan with such a table does not say that the database matches the declaration.
+An interrupt during the count, or a connection that breaks, stops the plan as before.
 
 ### Tables and columns that wait for a schema change
 
@@ -567,7 +620,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### Read the script
 
-- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan, with the lines that sum up what the deletions also do through foreign keys. After the header come the tables and the columns that wait for a schema change, one comment line each.
+- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan, with the lines that sum up what the deletions also do through foreign keys and the stored rows that the declaration lacks. After the header come the tables and the columns that wait for a schema change, one comment line each, and after them, as comments, the group of the tables that hold stored rows that the declaration lacks, with five tables at most and a line that counts the others ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
 - After a comment, three `SET LOCAL` statements pin, until the end of the transaction, the settings that change how a literal of the script reads ([Values in the script](#values-in-the-script)). When the script holds values of `on_insert`, the comment says that the settings make the values mean what they meant to the plan "but those of on_insert", which the session reads in its own settings.
 - When an apply would defer foreign keys of a cycle, a `SET CONSTRAINTS ... DEFERRED` follows ([kortopi apply](apply.md#foreign-keys-and-cycles)). When another table of the schema has a constraint of the same name that is not deferrable, the plan fails with the error of an apply ([kortopi apply](apply.md#a-constraint-of-the-same-name)).
 - The tables follow in the order of an apply, from referenced tables to referencing ones, each under a comment line with its counts. A table gets one `INSERT` for its rows to insert, each row on a line of its own, and one `UPDATE` for each row to update, which sets only the columns that differ.
@@ -591,11 +644,13 @@ A plan with nothing to do gives one line:
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
-When the plan has a table of mode `insert`, it gives the lines of the empty plan as comments instead:
+When the plan has a table of mode `insert`, or a table that holds stored rows that the declaration lacks, it gives the lines of the empty plan as comments instead:
 
 ```sql
 -- No changes: there is nothing to do.
 -- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+-- geo.currency: 1 stored row is not declared, which mode upsert does not delete
+-- Not declared: 1 stored row in 1 table, which mode upsert does not delete.
 ```
 
 A plan in which only tables and columns wait for a schema change gives the header and this line:
@@ -623,7 +678,8 @@ A tool of versioned migrations usually runs each file in a transaction of its ow
 The `SET LOCAL` statements need the transaction: outside one, they only warn.
 `SET LOCAL client_encoding` applies to the statements that the client sends after it as messages of their own, as `psql` does. A client that sends the whole script as one message has had it read in its own encoding already, so it must connect with `client_encoding` set to UTF8, as database drivers usually do.
 
-After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, the values that a trigger or a rule made other than the declaration says, or nothing.
+After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, and the values that a trigger or a rule made other than the declaration says.
+It also counts again the stored rows that the declaration lacks, which give no status of their own ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
 
 ### Deletions
 
@@ -705,7 +761,7 @@ kortopi checks in this order:
 
 | Status | Meaning |
 |---|---|
-| 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare. |
+| 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare, and for the stored rows that tables of mode `upsert` and `insert` hold beyond the declaration, which a plan counts and their modes do not delete. |
 | 1 | The plan failed: a wrong flag, a mistake in the declaration, a table or a column that the database lacks with `--no-pending`, a table that another session changed during the plan, a database error, or an interrupt. |
 | 2 | Only with `--exit-code`: the plan is not empty. |
 
@@ -714,18 +770,25 @@ Without `--exit-code`, a plan that shows changes exits with 0, so a pull request
 With `--exit-code`, a plan detects drift: any row to insert, update, or delete, and any table or column that waits for a schema change, gives status 2.
 With `--no-pending` too, such a table or column gives status 1 instead.
 It works the same with `--format sql`.
-A scheduled job that compares the database with the declaration of its main branch tells the three outcomes apart:
+The stored rows that a table of mode `upsert` or `insert` holds and the declaration lacks are no drift for the status: their mode deletes none of them, so they are no change of the plan, and the plan counts them on its lines instead ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
+The status is the same when the plan could not count them.
+A scheduled job that compares the database with the declaration of its main branch prints the plan to its log, tells the three outcomes apart, and can look for the line that sums up those rows too:
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
+cat plan.txt
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+if grep -q '^Not declared:' plan.txt; then
+  echo "tables of mode upsert or insert hold stored rows that the declaration lacks"
+fi
 ```
 
-The `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
+The `|| status=$?` keeps a shell with `set -e` from stopping on status 2, and a `grep` that finds no line does not stop it either, because it is the condition of the `if`.
+A plan that fails prints its error on standard error, which the job prints to its log as it comes.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md), and [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), and [ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.md).

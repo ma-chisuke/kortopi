@@ -261,8 +261,10 @@ func TestOnInsertMistakes(t *testing.T) {
 				`  on insert: created_at="now"  created_by="kortopi"  sort_order="0"`,
 				"  + name=annex  capacity=10",
 				"  1 to insert, 0 to update",
+				"  1 stored row is not declared, which mode upsert does not delete",
 				"",
 				"Plan: 1 to insert, 0 to update, 0 to delete in 1 table.",
+				"Not declared: 1 stored row in 1 table, which mode upsert does not delete.",
 				"Known after the schema is applied: 1 column.",
 			))
 			code, stdout, stderr = e.command(t, "plan", "--dir", pending, "--no-pending")
