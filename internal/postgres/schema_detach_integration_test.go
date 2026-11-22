@@ -440,6 +440,73 @@ func TestInterruptDuringTheCheck(t *testing.T) {
 	}
 }
 
+// An interrupt that comes as the second session of the check closes after
+// its read, and a second interrupt that gives up the wait, leave that session
+// for the server to end: the close of the apply names it, as the read-only
+// session of the check, in a line of its own after the line of the session
+// of the apply, which the second interrupt gave up too (ADR-0043, ADR-0048).
+func TestInterruptAsTheCheckClosesItsSession(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, schemaCheckSchema)
+			ctx, interrupt := context.WithCancel(t.Context())
+			defer interrupt()
+			giveUp := make(chan struct{})
+			s, err := ConnectConfig(ctx, db.Config, Options{
+				Dir: writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"}), Apply: true, GiveUp: giveUp,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close(context.Background()) })
+			req := request(t, s, csvTable("m", "plan", "id", "code"), []string{"code"}, config.ModeSync)
+			if _, err := s.Diff(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Effects(ctx, []declaration.TableName{req.Table.Name}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Delete(ctx, req); err != nil {
+				t.Fatal(err)
+			}
+			before := db.Query(t, schemaCheckRows)
+			applyPID := s.pid
+			var checkPID int32
+			s.beforeNewestClose = func(peek *Session) {
+				checkPID = peek.pid
+				interrupt()
+				close(giveUp)
+				// Both sessions notice the second interrupt in the background.
+				for deadline := time.Now().Add(time.Minute); !peek.gaveUp() || !s.gaveUp(); time.Sleep(time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Error("the sessions did not notice the second interrupt")
+						return
+					}
+				}
+			}
+			if err := s.CheckEffect(ctx); err == nil {
+				t.Fatal("the check went on after the interrupt")
+			}
+			err = s.Close(context.Background())
+			check := fmt.Sprintf("kortopi stopped waiting for the server to end the read-only session of the check after the deletions: "+
+				"its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone: "+
+				`find the session in pg_stat_activity, where application_name is "kortopi" and pid is %d, `+
+				"and end it with pg_cancel_backend(%d), or with pg_terminate_backend(%d) if it does not end", checkPID, checkPID, checkPID)
+			var notEnded *dialect.NotEndedError
+			if !errors.As(err, &notEnded) || !strings.HasPrefix(notEnded.Message, "kortopi stopped waiting for the server to end the session of the apply: ") ||
+				!strings.HasSuffix(notEnded.Message, "\n"+check) {
+				t.Errorf("Close = %v\nwant the line of the apply, then\n%s", err, check)
+			}
+			waitGone(t, db, applyPID)
+			waitGone(t, db, checkPID)
+			if got := db.Query(t, schemaCheckRows); !slices.EqualFunc(got, before, slices.Equal) {
+				t.Errorf("rows after the interrupt: %v, want %v", got, before)
+			}
+		})
+	}
+}
+
 // The check after the deletions runs the constraint triggers that the
 // writes deferred to the commit before it compares anything, with the
 // settings of the session, as the commit would run them (ADR-0037,

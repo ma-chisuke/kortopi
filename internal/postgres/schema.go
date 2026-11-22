@@ -393,9 +393,18 @@ func (s *Session) readNewestSchema(ctx context.Context) (schemaReading, error) {
 	}
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
 	defer cancel()
+	if s.beforeNewestClose != nil {
+		s.beforeNewestClose(peek)
+	}
 	// The second session only read the catalogs: what its close says
-	// changes nothing.
-	_ = peek.Close(closeCtx)
+	// changes nothing, but that the server did not confirm its end after an
+	// interrupt, which the close of the session of the apply says after its
+	// own line.
+	var notEnded *dialect.NotEndedError
+	if errors.As(peek.Close(closeCtx), &notEnded) {
+		s.newestNotEnded = notEnded
+		s.waitFromClose = true
+	}
 	now, err := r.now, r.err
 	var pgErr *pgconn.PgError
 	switch {

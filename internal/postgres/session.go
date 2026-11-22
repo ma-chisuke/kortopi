@@ -142,6 +142,10 @@ type Session struct {
 	// beforeNewestRead, when it is not empty, is a statement that the second
 	// session runs before it reads the catalogs, so that a test can hold it.
 	beforeNewestRead string
+	// beforeNewestClose, when it is not nil, runs as the second session is
+	// about to close after a read that ended, so that a test can interrupt
+	// it there.
+	beforeNewestClose func(peek *Session)
 	// deletesChecked is true after the privileges of the deletions were
 	// checked, and writtenBefore holds the counters of the rows that the
 	// transaction had deleted and updated then, by the partitioned table at
