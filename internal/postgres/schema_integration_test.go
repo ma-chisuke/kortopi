@@ -50,14 +50,34 @@ func TestApplyAfterSchemaChanges(t *testing.T) {
 			changed := "another session changed the schema while the apply ran: "
 			after := " after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: " +
 				"run the apply again, and make schema changes before an apply, not while it runs"
+			keep := "CREATE TRIGGER keep AFTER DELETE ON t.orders FOR EACH ROW EXECUTE FUNCTION t.noop();"
+			kept := "CREATE RULE kept AS ON DELETE TO t.orders DO ALSO NOTIFY orders_kept;"
+			trigger := changed + `it changed trigger "keep" of table t.orders, or enabled or disabled it` + after
+			rule := changed + `it changed rule "kept" of table t.orders, or enabled or disabled it` + after
 			for _, tt := range []struct {
 				name string
-				// beforePlan comes after the snapshot and before the plan,
-				// beforeDeletions after the walk and before the deletions.
-				beforePlan, beforeDeletions string
-				wantErr                     string
+				// setUp comes before the session; beforePlan after the
+				// snapshot and before the plan, and beforeDeletions after the
+				// walk and before the deletions.
+				setUp, beforePlan, beforeDeletions string
+				wantErr                            string
 			}{
 				{name: "without a change"},
+				{name: "a trigger and a rule as they were", setUp: keep + kept},
+				{name: "a trigger disabled", setUp: keep, beforeDeletions: "ALTER TABLE t.orders DISABLE TRIGGER keep", wantErr: trigger},
+				{name: "a trigger enabled on a replica", setUp: keep, beforeDeletions: "ALTER TABLE t.orders ENABLE REPLICA TRIGGER keep", wantErr: trigger},
+				{name: "a trigger enabled always", setUp: keep, beforeDeletions: "ALTER TABLE t.orders ENABLE ALWAYS TRIGGER keep", wantErr: trigger},
+				{
+					name: "a disabled trigger enabled", setUp: keep + "ALTER TABLE t.orders DISABLE TRIGGER keep;",
+					beforeDeletions: "ALTER TABLE t.orders ENABLE TRIGGER keep", wantErr: trigger,
+				},
+				{name: "a rule disabled", setUp: kept, beforePlan: "ALTER TABLE t.orders DISABLE RULE kept", wantErr: rule},
+				{name: "a rule enabled on a replica", setUp: kept, beforePlan: "ALTER TABLE t.orders ENABLE REPLICA RULE kept", wantErr: rule},
+				{name: "a rule enabled always", setUp: kept, beforePlan: "ALTER TABLE t.orders ENABLE ALWAYS RULE kept", wantErr: rule},
+				{
+					name: "a disabled rule enabled", setUp: kept + "ALTER TABLE t.orders DISABLE RULE kept;",
+					beforePlan: "ALTER TABLE t.orders ENABLE RULE kept", wantErr: rule,
+				},
 				{
 					name:       "a foreign key SET NULL to the table with rows to delete",
 					beforePlan: "ALTER TABLE t.orders ADD CONSTRAINT orders_next_fkey FOREIGN KEY (next_plan_id) REFERENCES m.plan ON DELETE SET NULL",
@@ -96,7 +116,7 @@ func TestApplyAfterSchemaChanges(t *testing.T) {
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					db := database(t, srv)
-					db.Exec(t, schemaCheckSchema)
+					db.Exec(t, schemaCheckSchema+tt.setUp)
 					s := db.applySession(t, db.Config, writeFiles(t, map[string]string{"m/plan.csv": "id,code\n1,basic\n"}))
 					if tt.beforePlan != "" {
 						db.Exec(t, tt.beforePlan)
@@ -115,6 +135,9 @@ func TestApplyAfterSchemaChanges(t *testing.T) {
 					_, err := s.Delete(t.Context(), req)
 					if err == nil {
 						err = s.CheckEffect(t.Context())
+						// The second session of the check is gone, whatever
+						// the check found.
+						waitNoSecondSession(t, db, s)
 					}
 					if err == nil {
 						err = s.Commit(t.Context())

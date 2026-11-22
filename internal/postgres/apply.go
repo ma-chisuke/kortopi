@@ -441,6 +441,10 @@ func adviceFor(err *pgconn.PgError, verb string, table declaration.TableName) st
 		if verb == "commit" {
 			return "a deferred foreign key failed at the commit: a row refers to a row that does not exist, or a deleted row is still referenced"
 		}
+		if verb == deferredWhat {
+			return "a foreign key deferred to the commit failed when the apply checked it before its commit: " +
+				"a row refers to a row that does not exist, or a deleted row is still referenced"
+		}
 		if verb == "delete from" || (verb == "update" && err.TableName != table.Name) {
 			return "the row is still referenced by other rows: change or remove those rows first, or keep the row in the declaration"
 		}

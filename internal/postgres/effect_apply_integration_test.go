@@ -34,8 +34,8 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 			keptCauses := "another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE " +
 				"that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: " +
 				"run the apply again, and if this happens again, check the triggers and the rules of table t.lines"
-			beyondCauses := ": a trigger or a rule of a table that the deletions reach made them do other than the plan shows, so nothing was written: " +
-				"check the triggers and the rules of table "
+			beyondCauses := ": a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, " +
+				"which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table "
 			schemaChanged := "another session changed the schema while the apply ran: "
 			for _, tt := range []struct {
 				name       string
@@ -90,7 +90,7 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 					setUp: `CREATE FUNCTION t.forget() RETURNS trigger LANGUAGE plpgsql AS $$
 						BEGIN DELETE FROM t.archive WHERE order_id = OLD.id; RETURN OLD; END $$;
 						CREATE TRIGGER forget AFTER DELETE ON t.orders FOR EACH ROW EXECUTE FUNCTION t.forget();`,
-					wantErr: "the deletions deleted 1 row of table t.archive, and the plan counted 0" + beyondCauses + "t.archive",
+					wantErr: "after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0" + beyondCauses + "t.archive",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {

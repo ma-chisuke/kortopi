@@ -80,6 +80,10 @@ type guard struct {
 	// connection, and gaveUp is true after giveUp, whose deadline stays.
 	mu     sync.Mutex
 	gaveUp bool
+	// pinned, when it is not empty, is the address of TCP that every dial
+	// of the connection reaches, whatever host it names: that of the
+	// connection of the apply, for its second session (ADR-0048).
+	pinned string
 }
 
 // giveUp ends every wait of the connection conn for the server, at once and
@@ -108,7 +112,7 @@ func (g *guard) handler(conn *pgconn.PgConn) ctxwatch.Handler {
 // the settings, sets the keepalive of each TCP connection as keepAlive says,
 // as far as the system lets it, and refuses the connection of a cancel
 // request during the commit. The driver dials for the session and for each
-// cancel request.
+// cancel request. With guard.pinned, every dial of TCP reaches that address.
 //
 // The dialer of Go would set its own keepalive, 15 seconds, 15 seconds, and
 // 9 probes, on each socket before kortopi sets its own, and a value that
@@ -119,6 +123,9 @@ func (g *guard) dial(timeout time.Duration) pgconn.DialFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if g.committing.Load() {
 			return nil, errNoCancel
+		}
+		if g.pinned != "" && strings.HasPrefix(network, "tcp") {
+			addr = g.pinned
 		}
 		conn, err := d.DialContext(ctx, network, addr)
 		if err != nil {
@@ -308,9 +315,18 @@ func (s *Session) gaveUp() bool {
 // shows it, by its application_name and, when kortopi read it in the
 // transaction, its process ID.
 func (s *Session) notEnded() error {
-	why := fmt.Sprintf("the server did not confirm within %s that the session of the %s ended", s.guard.wait, s.work())
+	session := "the session of the " + s.work()
+	still := "its statement may still run on the server and hold its locks until the server notices that kortopi has gone, " +
+		"although its transaction can no longer commit"
+	if s.newest {
+		// The second session of an apply only reads the catalogs, in a
+		// transaction of its own.
+		session = "the read-only session of the check after the deletions"
+		still = "its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone"
+	}
+	why := fmt.Sprintf("the server did not confirm within %s that %s ended", s.guard.wait, session)
 	if s.gaveUp() {
-		why = fmt.Sprintf("kortopi stopped waiting for the server to end the session of the %s", s.work())
+		why = fmt.Sprintf("kortopi stopped waiting for the server to end %s", session)
 	}
 	where := fmt.Sprintf("application_name is %q", s.application)
 	end := "pg_cancel_backend(pid), or with pg_terminate_backend(pid) if it does not end"
@@ -318,6 +334,22 @@ func (s *Session) notEnded() error {
 		where += fmt.Sprintf(" and pid is %d", s.pid)
 		end = fmt.Sprintf("pg_cancel_backend(%d), or with pg_terminate_backend(%d) if it does not end", s.pid, s.pid)
 	}
-	return &dialect.NotEndedError{Message: why + ": its statement may still run on the server and hold its locks until the server notices that kortopi has gone, " +
-		"although its transaction can no longer commit: find the session in pg_stat_activity, where " + where + ", and end it with " + end}
+	return &dialect.NotEndedError{Message: why + ": " + still + ": find the session in pg_stat_activity, where " + where + ", and end it with " + end}
+}
+
+// joinNotEnded returns the error of the close of the session of an apply,
+// own, with what the close of its second session, check, says when the
+// server did not confirm the end of that session: the session of the apply,
+// which holds the locks and the written rows, comes first, and the second
+// session in a line of its own. The other errors of the close of the second
+// session change nothing: it only read the catalogs.
+func joinNotEnded(own, check error) error {
+	var ownNotEnded, checkNotEnded *dialect.NotEndedError
+	if !errors.As(check, &checkNotEnded) {
+		return own
+	}
+	if errors.As(own, &ownNotEnded) {
+		return &dialect.NotEndedError{Message: ownNotEnded.Message + "\n" + checkNotEnded.Message}
+	}
+	return errors.Join(own, checkNotEnded)
 }

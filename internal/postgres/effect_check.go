@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
@@ -50,7 +53,11 @@ func (s *Session) writtenRows(ctx context.Context, byTop bool) (map[uint32]writt
 }
 
 // CheckEffect checks, after the deletions of an apply and before its
-// commit, that they did what the last call of Effects counted (ADR-0039):
+// commit, that they did what the last call of Effects counted (ADR-0039).
+// It first runs the constraints deferred to the commit, with SET CONSTRAINTS
+// ALL IMMEDIATE (runDeferred), so that every check of a foreign key and every
+// constraint trigger has run when it compares the schema, and none is left
+// for the commit (ADR-0048). Then it checks:
 //
 //   - the foreign keys, the partitions, the triggers, and the rules of the
 //     tables that the deletions reach are those that the catalogs of the
@@ -88,6 +95,9 @@ func (s *Session) CheckEffect(ctx context.Context) (err error) {
 	if s.effect == "" || !s.deletesChecked {
 		return nil
 	}
+	if err := s.runDeferred(ctx); err != nil {
+		return err
+	}
 	if err := s.checkSchema(ctx); err != nil {
 		return err
 	}
@@ -95,6 +105,28 @@ func (s *Session) CheckEffect(ctx context.Context) (err error) {
 		return err
 	}
 	return s.checkWrittenRows(ctx)
+}
+
+// deferredWhat says what the statement of runDeferred does, in its errors.
+const deferredWhat = "run the constraints deferred to the commit"
+
+// runDeferred runs, after the deletions, the constraints and the constraint
+// triggers that the writes of the apply deferred to the commit, with SET
+// CONSTRAINTS ALL IMMEDIATE, as a write runs: with the settings of the
+// session, as the commit would run them, and the pinned settings again after
+// it (ADR-0037). An apply writes nothing after it, so nothing is left to
+// defer to the commit. A constraint that fails is the error of a write,
+// with its advice, and nothing was changed.
+func (s *Session) runDeferred(ctx context.Context) error {
+	_, _, failed, _, err := s.execWrite(ctx, nil, batchStatement{what: deferredWhat, sql: "SET CONSTRAINTS ALL IMMEDIATE"})
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return fmt.Errorf("%s: %w", failed, err)
+	}
+	return &writeError{statement: failed, err: pgErr, advice: adviceFor(pgErr, deferredWhat, declaration.TableName{})}
 }
 
 // PrepareDeletes returns an error, before the first write of an apply that
@@ -311,8 +343,12 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 		}
 		// A foreign key, a partition, or disabled triggers that another
 		// session added after the snapshot stopped the apply already, in
-		// checkSchema (ADR-0048).
-		return fmt.Errorf("the deletions %s: a trigger or a rule of a table that the deletions reach made them do other than the plan shows, "+
+		// checkSchema (ADR-0048). The counts are those of the transaction
+		// since its first deletion, which hold what the constraint triggers
+		// deferred to the commit did too, of any write of the apply, since
+		// runDeferred ran them first.
+		return fmt.Errorf("after its first deletion, the apply %s: a trigger or a rule of a table that the deletions reach, "+
+			"or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, "+
 			"so nothing was written: check the triggers and the rules of table %s", what, name)
 	}
 	return nil
