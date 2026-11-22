@@ -70,7 +70,13 @@ func TestSequencesCommand(t *testing.T) {
 				t.Errorf("the next insert of the application got %v, want the ID 4 in each table", got)
 			}
 			code, stdout, stderr = e.command(t, "plan", "--dir", dir, "--exit-code")
-			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
+			// The rows that the application inserted are stored rows that
+			// the declaration lacks, which a plan counts (ADR-0046).
+			checkRun(t, code, stdout, stderr, exitOK, lines(
+				"No changes. There is nothing to apply.",
+				"billing.fees: 1 stored row is not declared, which mode upsert does not delete",
+				"billing.tax_rates: 1 stored row is not declared, which mode upsert does not delete",
+				"Not declared: 2 stored rows in 2 tables, which mode upsert does not delete."))
 
 			for _, later := range []bool{false, true} {
 				db := srv.Database(t)
