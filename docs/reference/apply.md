@@ -93,7 +93,8 @@ An apply with `--allow-delete` that has rows to delete also refuses a session wh
 10. It commits, and prints what it wrote.
 
 Each deletion must delete as many rows as the plan shows; otherwise a trigger, a rule created after the plan, or the cascade of a foreign key changed what it did, and the apply stops.
-An insert or an update may write fewer or more rows than the plan shows, when the other writes of the apply did its work already or undid it: the check before the commit decides.
+An insert or an update may write fewer rows than the plan shows, when the other writes of the apply did its work already: the check before the commit decides.
+An insert or an update that writes more rows than the plan shows stops the apply, because an apply writes only the rows that its plan shows: another write of the apply took declared rows of the table away from their declared values after the plan ([An insert or an update that writes more rows than the plan shows](#an-insert-or-an-update-that-writes-more-rows-than-the-plan-shows)).
 A rule that would rewrite the statements of an apply stops the plan before that ([Declaration files](declaration.md#a-table-with-a-rule)).
 Because the plan and the writes come from one snapshot, the printed plan is what the apply writes.
 When another transaction changes the same rows in the meantime, the apply fails and asks you to run it again.
@@ -287,11 +288,7 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   Fewer than planned: 1 row to update of sales.price held its declared values already, after the other writes of the apply.
   ```
 
-  For an insert, the line says that the row was there already. A write can also write more rows than the plan shows, when the other writes had changed declared rows after the plan. A line says so then:
-
-  ```text
-  More than planned: kortopi also updated 1 row of t.b, which the other writes of the apply had taken away from its declared values.
-  ```
+  For an insert, the line says that the row was there already.
 
 - When deletions were left out, `Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` follows. When those deletions would also delete or change rows through foreign keys, the line says so before the flag: `Through foreign keys, their deletion would also delete 2 rows and change 1 row.`
 - When the only differences are deletions, the apply writes and commits nothing, and the `Not deleted` line stands alone and says so:
@@ -370,6 +367,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - Triggers, and the rules of the tables that the deletions reach, act out of sight of the plan. A row that a trigger or a rule inserts during the deletions is not counted, but in a table where a change of the deletions can move a row to another partition: there each insertion must match a row that moves, so such an insertion stops the apply. The apply checks the updates of every table against what the actions of the deletions can update: at least once for each row that the plan shows as changed, and at most once for each row and foreign key whose action can reach it, also of a row that a cascade deletes too, which PostgreSQL may update first. A row that `SET NULL` or `SET DEFAULT` moves to another partition, when the action sets a column of the partition key, counts as one such update; PostgreSQL deletes and inserts it, and each further deletion must come with an insertion. An update by a trigger or a rule beyond that stops the apply. PostgreSQL never updates a row to delete that the same statement deletes, or that an earlier statement of the apply deleted, so such a row leaves no room. Updates within the bounds are not seen, whether a trigger, a rule, or a foreign key `SET NULL` or `SET DEFAULT` or a partition that another transaction adds while the apply runs makes them: there is room only where a row that an action would change is also deleted, by a cascade or by the plan in a later statement, with PostgreSQL's order deciding whether the action runs first, and where two keys set a column in common. The values that an update writes are not seen either. A trigger that empties a table that the deletions do not reach with `TRUNCATE` is not seen either, since PostgreSQL does not count those rows as deleted. A constraint trigger deferred to the commit fires after the check, so what it deletes or changes is not checked. In the declared tables, the check before the commit sees what the counts cannot: the rows that a trigger inserts, and the values that an update writes.
 - The check before the commit compares what the declaration holds, and nothing else: not a column that the declaration does not name, a value of `on_insert`, a table that it does not declare, a value of a table of mode `insert` beyond its key, or a stored row that it does not hold, but the rows to delete of a table of mode `sync`, which it compares by their keys. A constraint trigger deferred to the commit fires after the check, so what it changes is not compared either.
 - The check before the commit reads every declared table a second time, also the tables without changes. It costs less than the comparison of the plan, which loads and checks the declared rows too; [ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md) records a measurement.
+- The count of a write sees only the number of rows. When a write writes as many rows as the plan shows, but one planned row no longer needed the write and one other declared row did, because another write of the apply changed it, kortopi writes that other row back to its declared values, although the plan did not show it. The check before the commit still makes sure that the database is as declared.
 - A deletion must delete as many rows as the plan shows, also when the other writes of the apply did its work: with `--allow-delete`, a trigger of an insert or an update that deletes a row that the plan deletes stops the apply, although the result would be as declared. Delete that row in an apply of its own first.
 - kortopi does not move sequences. After an apply that inserts explicit values into a `serial` or identity column, the next value of its sequence may already be taken.
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
@@ -525,7 +523,7 @@ When a write wrote another number of rows than the plan shows, the last line nam
 
 ```text
 kortopi: data/app/t.csv: after the writes of the apply, table app.t still differs from the declaration in 1 row to insert: + id=2  v=b: declare only rows that the table keeps after the writes, or change what takes them away
-kortopi: the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, the cascade or another action of a foreign key, or a rule created after the plan can do that, and the writes that wrote another number of rows than the plan shows are the place to look first: the insert into table app.t wrote 2 rows, and the plan has 3
+kortopi: the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, the cascade or another action of a foreign key, or a rule created after the plan can do that, and the writes that wrote fewer rows than the plan shows are the place to look first: the insert into table app.t wrote 2 rows, and the plan has 3
 kortopi: nothing was changed
 ```
 
@@ -536,6 +534,17 @@ Without `--allow-delete`, a row to delete that the writes took away gets a line 
 ```text
 kortopi: data/app/t.csv: after the writes of the apply, table app.t no longer holds 1 row that the plan shows to delete, which an apply without --allow-delete leaves in place: - id=9: delete it in an apply of its own with --allow-delete first, or change what deletes it
 ```
+
+### An insert or an update that writes more rows than the plan shows
+
+```text
+kortopi: the update of table b.y updated 2 rows, but the plan has 1 row to update: another write of the apply, through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table b.y when the apply writes another table, or declare the values that it writes
+kortopi: nothing was changed
+```
+
+A trigger of another declared table, which the apply wrote first, set a declared row of `b.y` to other values than the declaration holds, so the update of `b.y` found that row too, besides the row that the plan shows.
+kortopi does not write it back, because no plan showed it. When the plan has no row to update in `b.y`, no update runs, and the check before the commit stops the apply on the same row instead.
+Declare the values that the trigger writes, or change the trigger.
 
 ### A deletion that deletes another number of rows than the plan shows
 

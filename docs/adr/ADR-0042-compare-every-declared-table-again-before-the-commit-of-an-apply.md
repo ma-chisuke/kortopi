@@ -3,7 +3,7 @@ status: accepted
 date: 2026-11-22
 ---
 
-# ADR-0042: Compare every declared table again before the commit of an apply, and let that comparison decide for inserts and updates
+# ADR-0042: Compare every declared table again before the commit of an apply, and let that comparison decide for inserts and updates that write fewer rows than the plan
 
 ## Context and Problem Statement
 
@@ -48,7 +48,7 @@ How does an apply learn, before its commit, that the database holds what the dec
 
 ## Considered Options
 
-- Compare every declared table again before the commit, with the comparison of the plan, and let that comparison decide for inserts and updates
+- Compare every declared table again before the commit, with the comparison of the plan, and let that comparison decide for inserts and updates that write fewer rows than the plan
 - Compare again, and keep the strict count of every write
 - Compare only the rows that the apply wrote
 - Accept an update that writes fewer rows than the plan, without comparing again
@@ -56,7 +56,7 @@ How does an apply learn, before its commit, that the database holds what the dec
 
 ## Decision Outcome
 
-Chosen option: "Compare every declared table again before the commit, with the comparison of the plan, and let that comparison decide for inserts and updates", because it stops a wrong result whatever wrote it, a trigger, a cascade, or a rule, and it lets a correct result commit whichever statement made it, with the code that already decides what a plan shows.
+Chosen option: "Compare every declared table again before the commit, with the comparison of the plan, and let that comparison decide for inserts and updates that write fewer rows than the plan", because it stops a wrong result whatever wrote it, a trigger, a cascade, or a rule, and it lets a correct result commit when the other writes of the apply did part of its work, with the code that already decides what a plan shows.
 It refines ADR-0026, ADR-0029, ADR-0037, ADR-0038, and ADR-0039, sentence by sentence, as the last rule lists them.
 
 The rules are as follows.
@@ -80,7 +80,7 @@ What must be left:
 When a difference is left:
 
 - The apply stops before its commit, and the rollback leaves the database as it was.
-- The error has a line for each table that differs. It names the file and the table, counts what is left of each kind, lists up to five of the rows in the form of a plan, a row to update with each changed column as stored value -> declared value, with the number of the others, and says what to do. A line for each table whose left-out deletions are gone follows. A last line says that the database did something else with the writes of the apply than the declaration says, and what can do that. When a write wrote another number of rows than the plan shows, that line names it, because it is the best hint of where it happened:
+- The error has a line for each table that differs. It names the file and the table, counts what is left of each kind, lists up to five of the rows in the form of a plan, a row to update with each changed column as stored value -> declared value, with the number of the others, and says what to do. A line for each table whose left-out deletions are gone follows. A last line says that the database did something else with the writes of the apply than the declaration says, and what can do that. When a write wrote fewer rows than the plan shows, that line names it, because it is the best hint of where it happened:
 
   ```text
   kortopi: data/o/label.csv: after the writes of the apply, table o.label still differs from the declaration in 1 row to update: ~ code=greeting  label: "hello world" -> "Hello World": declare each value as the table stores it after the writes, or leave its column out of data/o/label.csv, and give the column a value in on_insert of [tables."o.label"] in data/kortopi.toml if new rows need one
@@ -92,16 +92,18 @@ When a difference is left:
 
 The count of a write:
 
-- An insert or an update that writes another number of rows than the plan shows no longer stops the apply. The apply goes on, and the comparison before the commit decides. A write that writes fewer rows found their work done by the other writes of the apply, as by a cascade; a write that writes more found declared rows that the other writes had taken away from their declared values after the plan, which its pick, made when the write comes (ADR-0037), took too.
-- After a commit, `Applied:` gives what the statements of kortopi wrote, as the database reported their counts. When a write wrote another number than the plan, a line follows for the writes that wrote fewer, and one for those that wrote more:
+- An insert or an update that writes fewer rows than the plan shows no longer stops the apply. The apply goes on, and the comparison before the commit decides. Such a write found its work done by the other writes of the apply, as by a cascade, or a trigger skipped a row, which the comparison then finds.
+- An insert or an update that writes more rows than the plan shows stops the apply at once. Its pick, made when the write runs (ADR-0037), found declared rows that the plan did not show: another write of the apply, through a trigger, or a cascade or another action of a foreign key, had taken them away from their declared values after the plan. Writing them back would write rows that no plan showed: a declared row that a trigger deleted would be inserted again, with new values in the columns that the declaration does not name, and a row would be written back over what another write did. Whether that happens would also depend on whether the plan happened to hold a row of that kind for the table, because a write without planned rows does not run. An apply writes only the rows that its plan shows, so both cases end the same way: the apply fails, and nothing is changed.
+
+  ```text
+  kortopi: the update of table b.y updated 2 rows, but the plan has 1 row to update: another write of the apply, through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table b.y when the apply writes another table, or declare the values that it writes
+  ```
+
+- After a commit, `Applied:` gives what the statements of kortopi wrote, as the database reported their counts. When a write wrote fewer rows than the plan, a line follows:
 
   ```text
   Applied: 0 inserted, 1 updated, 0 deleted.
   Fewer than planned: 1 row to update of sales.price held its declared values already, after the other writes of the apply.
-  ```
-
-  ```text
-  More than planned: kortopi also inserted 1 row into t.b, which the other writes of the apply had taken away from its declared values.
   ```
 
   A row to insert that a write did not insert "was there already", a row to update "held its declared values already". The numbers are the difference between the count of each write and its plan.
@@ -120,6 +122,7 @@ The plan as SQL:
 
 Known limits:
 
+- The count sees only the number of rows. When a write writes as many rows as the plan shows, but one planned row no longer needed the write and one other declared row did, kortopi writes that other row back to its declared values, a row that the plan did not show. The comparison still guarantees that the database is as declared.
 - A constraint trigger that is deferred to the commit fires after the comparison: what it changes is not compared. The actions of foreign keys are never deferred in PostgreSQL, only the check of `NO ACTION` is.
 - What the declaration does not hold is not compared: the columns that it does not name, the values of `on_insert`, the tables that it does not declare, the values of the tables of mode `insert` beyond their keys, and the stored rows that it does not hold, but the rows to delete of a table of mode `sync`, which are compared by their keys.
 - The comparison sees the snapshot of the apply and its own writes. A change that another transaction makes to the same rows makes a write fail with the error of a concurrent change (ADR-0026).
@@ -128,12 +131,12 @@ Known limits:
 What this refines:
 
 - These sentences of earlier records no longer hold as written:
-  - ADR-0026, in "The statements": "After each statement, the number of rows that it changed must equal the number that the plan shows for that table and kind. A difference stops the apply, because a trigger, a rule, or a cascade changed what the statement did." This holds for a deletion. For an insert and an update, the comparison before the commit decides.
+  - ADR-0026, in "The statements": "After each statement, the number of rows that it changed must equal the number that the plan shows for that table and kind. A difference stops the apply, because a trigger, a rule, or a cascade changed what the statement did." This holds for a deletion, and for an insert or an update that writes more rows than the plan shows. For one that writes fewer, the comparison before the commit decides.
   - ADR-0026, in "The order of the work": step 8, "It commits", gains the comparison before it.
   - ADR-0026, in its Consequences: "Good, because a trigger or a rule that changes the effect of a statement stops the apply instead of committing a surprise." The count saw only a trigger or a rule that changed the number of rows; the comparison before the commit stops one that changes their values too, and lets a cascade that does the work of a write pass. In its Confirmation, `TestApplyRowCount` now confirms that a write returns the number of rows that its statement changed, and that the comparison again finds the row that a trigger skipped.
   - ADR-0029, in its refinement of ADR-0020: "What an apply does around its statements is not in the script: the lock of ADR-0026, the check that each statement changed as many rows as the plan shows, ...". Nor is the comparison before the commit.
   - ADR-0029, in its Consequences: "Bad, because nothing checks how many rows a statement changed, so a trigger or a rule that changes what a statement does goes unnoticed, where an apply would stop." Nor does anything compare the tables again, so a trigger that rewrites a declared value goes unnoticed, where an apply stops.
-  - ADR-0037, in "How a write runs": "Its conditions are those of the plan, so it picks the rows that the plan shows, and the count of rows that each write changed is still checked against the plan (ADR-0026)." It picks the rows that differ when the write comes, which are those that the plan shows unless the other writes of the apply changed them. The count of a deletion is checked against the plan; the comparison before the commit checks the inserts and updates.
+  - ADR-0037, in "How a write runs": "Its conditions are those of the plan, so it picks the rows that the plan shows, and the count of rows that each write changed is still checked against the plan (ADR-0026)." It picks the rows that differ when the write comes, which are those that the plan shows unless the other writes of the apply changed them. The count of a deletion is checked against the plan, and so is the count of an insert or an update, which must not be higher; the comparison before the commit checks the rest.
   - ADR-0037, in "Row-level security": "or, when the session has not yet seen the change of the role, the write changes fewer rows than the plan shows and the count stops the apply. ... and the count still catches a policy that hides a row from an update or a deletion." For a deletion, the count stops it; for an update, the comparison before the commit finds the row that the policy hid, or fails on the policy itself.
   - ADR-0038: "This refines ADR-0026, whose count of rows stays for triggers, cascades, and rules created after the plan". The comparison before the commit stays for them, with the count of the deletions. "A trigger is the way out because it fires for each row ..., and the count of rows still catches a trigger that skips a row (ADR-0026)." The comparison before the commit catches it. In its Confirmation, `TestWritesThroughRules` now also shows that the comparison again finds the declared row that a rule `DO INSTEAD` kept as it was.
   - ADR-0039, in "The order of an apply with `--allow-delete`": step 7, "Nothing runs between the check and the commit." The comparison before the commit runs between them; nothing that changes rows does.
@@ -143,31 +146,33 @@ What this refines:
 
 - Good, because an apply whose database does something else with its writes than the declaration says changes nothing, whatever did it: a trigger that rewrites a value, skips a row, or writes the rows of another declared table, a cascade or another action of a foreign key, or a rule created after the plan. The error shows the rows that differ as a plan shows them.
 - Good, because two declared tables linked by `ON UPDATE CASCADE` change together in one apply, in one schema or in two, and the output says that the update of the referencing table found its rows as declared already.
+- Good, because an apply still writes only the rows that its plan shows, but for the one case that the count cannot see, above: a write that would write more stops it, whether or not the plan had rows of that kind for the table.
 - Good, because a row that a trigger of a deletion inserts into a declared table of mode `sync`, which the check after the deletions does not see, now stops the apply.
 - Good, because the plan and the check decide with one comparison, the code that decides what a plan shows.
 - Bad, because this is a breaking change: an apply to a table whose trigger rewrites a declared value, and that committed before, now fails until the declaration holds the value as the table stores it, or leaves the column out. So does an apply whose trigger skips a declared row, or writes a declared row of another table to other values than the declaration holds. The pull request of this change marks it as breaking in its title, with `!` after the type. GitHub generates the notes of a release from the titles of its pull requests, and the maintainer adds this text to them:
 
   ```text
-  An apply now compares every declared table again before its commit, and fails without changing anything when the database holds other values than the declaration after the writes, as a trigger that rewrites a declared value makes it hold. Declare the value as the table stores it, or leave the column out of the declaration. An insert or an update that writes fewer rows than the plan shows, because a cascade did its work, no longer stops the apply.
+  An apply now compares every declared table again before its commit, and fails without changing anything when the database holds other values than the declaration after the writes, as a trigger that rewrites a declared value makes it hold. Declare the value as the table stores it, or leave the column out of the declaration. An insert or an update that writes fewer rows than the plan shows, because a cascade did its work, no longer stops the apply; one that writes more still does.
   ```
 
 - Bad, because every declared table is compared twice, which reads each of them once more on the database that serves the application, also the tables without changes.
 - Bad, because a constraint trigger deferred to the commit, the columns and tables that the declaration does not name, the values of `on_insert`, and the values of a table of mode `insert` stay out of sight.
 - Bad, because a deletion keeps its strict count: a trigger of an insert or an update that deletes a row that the plan deletes, and a cascade between declared tables whose deletions no order can serve (ADR-0039), stop an apply whose result would be as declared.
 - Bad, because the plan as SQL commits what a trigger makes of its values, and only a plan after it shows the difference.
-- Bad, because the lines `Fewer than planned` and `More than planned` give the difference between the count of a write and its plan: a write that found some of its rows done and as many others undone writes the planned number, and gets no line.
+- Bad, because an apply in which one write takes declared rows of another table away from their declared values fails, also when the write of that other table would bring them back: the declaration has to hold what the trigger or the foreign key writes, or the trigger has to change.
+- Bad, because the count of a write can hide what happened: a write that found some of its planned rows done and as many other declared rows changed writes the planned number, gets no line `Fewer than planned`, and writes those other rows back, as the known limits say.
 
 ### Confirmation
 
 - Unit tests in `internal/apply` confirm the order and the rules:
-  - `TestRun`, `TestRunPlanned`, `TestRunEffectAgain`, and `TestRunDeletesReachedTablesFirst`: the comparison of every table after the check of the deletions and before the commit, an insert and an update that write other numbers of rows than the plan and commit, and a deletion that deletes fewer or more rows and stops;
+  - `TestRun`, `TestRunPlanned`, `TestRunEffectAgain`, and `TestRunDeletesReachedTablesFirst`: the comparison of every table after the check of the deletions and before the commit, an insert and an update that write fewer rows than the plan and commit, an insert and an update that write more and stop, and a deletion that deletes fewer or more rows and stops;
   - `TestRunChecksTheResult`: each kind of difference that is left, in two tables, the rows to delete that the run left out, one that the writes add and one that they take away, the limit of five rows, and the writes whose counts differed in the error;
   - `TestRunWithoutWritesComparesNothingAgain`: an empty plan and a plan of left-out deletions alone;
   - `TestRunInterruptedDuringTheComparison` and `TestRunInterrupted`: an interrupt during the comparison, and an error of it, roll back, and an interrupt during the writes stops before it;
-  - `TestRenderSummary`: the lines `Fewer than planned` and `More than planned`, and a commit whose statements wrote no row (`internal/apply/testdata/*.golden`).
-- Unit tests in `cmd/kortopi` (`TestRunApply`) confirm the output of a write that wrote fewer rows, the error of a difference that is left, and a commit whose statements wrote no row before a connection that fails to close.
+  - `TestRenderSummary`: the line `Fewer than planned`, and a commit whose statements wrote no row (`internal/apply/testdata/*.golden`).
+- Unit tests in `cmd/kortopi` (`TestRunApply`) confirm the output of a write that wrote fewer rows, the error of one that wrote more, the error of a difference that is left, and a commit whose statements wrote no row before a connection that fails to close.
 - Integration tests against PostgreSQL 15 to 18 in `make check-all`, in `internal/postgres`:
-  - `TestApplyChecksTheResult` applies with `apply.Run`, and reads the tables through a plain connection after each apply: the trigger of issue 27, which stops the apply and changes nothing; the two tables of issue 26, in one schema and in two, which commit as declared; a trigger `BEFORE INSERT` that returns `NULL`; a trigger of one declared table that writes a declared row of another, to its declared values and to other values; tables of mode `insert`; mode `sync` without `--allow-delete`, as declared, with a row that a trigger adds and with a left-out deletion that a trigger takes away; mode `sync` with `--allow-delete`, as declared and with a row that a trigger of the deletion adds; an interval that a trigger turns into another of the same length; and a role with `SELECT` on the declared columns alone.
+  - `TestApplyChecksTheResult` applies with `apply.Run`, and reads the tables through a plain connection after each apply: the trigger of issue 27, which stops the apply and changes nothing; the two tables of issue 26, in one schema and in two, which commit as declared; a trigger `BEFORE INSERT` that returns `NULL`; a trigger of one declared table that writes a declared row of another, to its declared values, which commits, and to other values, which stops the apply both when the plan updates no row of that table and when it updates another one; tables of mode `insert`; mode `sync` without `--allow-delete`, as declared, with a row that a trigger adds and with a left-out deletion that a trigger takes away; mode `sync` with `--allow-delete`, as declared and with a row that a trigger of the deletion adds; an interval that a trigger turns into another of the same length; and a role with `SELECT` on the declared columns alone.
   - `TestApplyRowCount`: the count that a write returns, the comparison again, and `DiffAgain` on a session of a plan.
   - `TestWritesThroughRules` and `TestApplyWhenRowLevelSecurityComesToApply`, as above. The helper of the apply that the other tests of the package use compares every table again before its commit too.
   - `TestComparisonAgainOnALargeTable`: the cost, on the newest version alone.
@@ -175,16 +180,16 @@ What this refines:
 
 ## Pros and Cons of the Options
 
-### Compare every declared table again before the commit, with the comparison of the plan, and let that comparison decide for inserts and updates
+### Compare every declared table again before the commit, with the comparison of the plan, and let that comparison decide for inserts and updates that write fewer rows than the plan
 
 - Good, because it checks the result, not the statements, so it covers every cause at once, also those that no record names yet.
-- Good, because a write whose work another write did, or undid, commits when the result is right.
+- Good, because a write whose work another write did commits when the result is right.
 - Bad, because the comparison runs twice, and what the declaration does not hold is still not checked.
 
 ### Compare again, and keep the strict count of every write
 
 - Good, because a count that differs would still name the statement where something happened.
-- Bad, because the change of issue 26, whose result is right, would still fail, and so would every write whose work a cascade or a trigger of another table did.
+- Bad, because the change of issue 26, whose result is right, would still fail, and so would every write whose work a cascade or a trigger of another table did. The chosen option keeps the count strict only where it is higher than the plan, the one case that means rows that no plan showed.
 
 ### Compare only the rows that the apply wrote
 

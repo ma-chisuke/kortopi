@@ -47,6 +47,6 @@
 | [ADR-0039](ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) | 外部キーを通じた削除の波及を計画ですべて求め、行から離して示し、安全策でそのすべてを数える | accepted | 2026-11-21 |
 | [ADR-0040](ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) | 期間は月数・日数・時間で比べる | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.ja.md) | issue は、必須の欄を持つフォームで書く | accepted | 2026-11-21 |
-| [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) | apply のコミットの前に宣言したすべてのテーブルをもう一度比べ、挿入と更新はその比較で決める | accepted | 2026-11-22 |
+| [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) | apply のコミットの前に宣言したすべてのテーブルをもう一度比べ、計画より少ない行を書いた挿入と更新はその比較で決める | accepted | 2026-11-22 |
 
-<!-- i18n-source: README.md sha256:af7a78a7f3a883eb4a88a06682c1c1848aa910d8644dc6f94f0a2b91d0c06ea6 -->
+<!-- i18n-source: README.md sha256:6206da2caf184f94a1db8d765e24aaf432e9a613d10ce8009bc5c2259e868be3 -->
