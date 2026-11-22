@@ -65,24 +65,28 @@ kortopi plan --dir data --exit-code
 
 ## 定期的なずれの検出
 
-ジョブがデータベースを main ブランチの宣言と比べ、3つの結果を終了コードで見分ける。
+ジョブがデータベースを main ブランチの宣言と比べ、計画をログに出して、3つの結果を終了コードで見分ける。
 
 ```sh
 status=0
 kortopi plan --dir data --exit-code > plan.txt || status=$?
+cat plan.txt
 case "$status" in
   0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
-grep '^Not declared:' plan.txt || true
+if grep -q '^Not declared:' plan.txt; then
+  echo "tables of mode upsert or insert hold stored rows that the declaration lacks"
+fi
 ```
 
-- 終了コード 2 になるのは、挿入・更新・削除する行か、スキーマの変更を待つテーブルや列が1つでもあるときである。
+- 終了コード 2 になるのは、挿入・更新・削除する行か、スキーマの変更を待つテーブルや列が1つでもあるときである。つまり、計画が空でないときである。
 - モード `insert` のテーブルはキーだけで比べるので、その行の値が変わっても、ずれにはならない。
-- モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行も、ずれにはならない。モードはその行をそのままにするからである。計画は、各テーブルの行と、`Not declared:` から始まる行によってそれを数える。ジョブは上のようにその行を探せる（[kortopi plan](plan.ja.md#宣言にない保存された行)）。そうした行で検査を失敗させたいときは、テーブルにモード `sync` を与える。その削除する行は終了コード 2 になる。
+- モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行も、ずれにはならない。そのモードはその行をどれも削除しないので、それは計画の変更ではないからである。計画は、各テーブルの行と、`Not declared:` から始まる行によってそれを数える。ジョブは上のようにその行を探す（[kortopi plan](plan.ja.md#宣言にない保存された行)）。そうした行で検査を失敗させたいときは、テーブルにモード `sync` を与える。その削除する行は終了コード 2 になる。
 - ロールには、プライマリで、[計画のセッションに要るもの](plan.ja.md#セッションに要るもの)が要る。
-- `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`|| true` は、`grep` が行を見つけないときも止まらないようにする。
+- `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`grep` が行を見つけないときも、シェルは止まらない。その `grep` は `if` の条件だからである。
+- 失敗した計画はエラーを標準エラー出力へ出す。ジョブのログは、そのエラーもそのまま含む。
 
 ## レビューしたスクリプトのための SQL としての計画
 
@@ -96,6 +100,6 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - スクリプトは、1つのデータベースの、ある時点での差分である。計画が読んだデータベースに対して、計画のすぐあとに実行する（[kortopi plan](plan.ja.md#計画を-sql-として出力する)）。
 - 削除はコメントであり、誰かがコメントの印を外したときだけ実行される。
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
-- スクリプトは、apply のようにコミットの前にテーブルをもう一度比べることはしない。そのため、宣言した値をトリガーが書き換えれば、その書いたものがコミットされる。スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、そうした値を示すか、何も示さない。
+- スクリプトは、apply のようにコミットの前にテーブルをもう一度比べることはしない。そのため、宣言した値をトリガーが書き換えれば、その書いたものがコミットされる。スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、そうした値を示す。宣言にない保存された行も数え直すが、それ自体は終了コードに表れない。
 
-<!-- i18n-source: automation.md sha256:b629bc198ce943e98723bee7d52891251791aa5c51618a068806e6debc33c089 -->
+<!-- i18n-source: automation.md sha256:d564c6ebd2a231b1feccba1b91aec5698fd28e1026c82674af95765e9c044df4 -->

@@ -30,7 +30,7 @@ data/
 - **Apply** the plan in one transaction, in the order of the foreign keys.
 - **Print the plan as SQL** for a team that changes its database only through versioned migrations: the statements of an apply, to review and to paste into a migration.
 - **Export** the rows of named tables of an existing database as a declaration, a file for each table, which a plan then finds equal to the database.
-- **Detect drift**: `kortopi plan --exit-code` exits with 2 when an apply would change the database, for CI or a scheduled job, and the plan counts the stored rows that a table which deletes no row holds beyond the declaration.
+- **Detect drift**: `kortopi plan --exit-code` exits with 2 when the plan is not empty, for CI or a scheduled job, and the plan counts the stored rows that a table which deletes no row holds beyond the declaration.
 
 ## Install
 
