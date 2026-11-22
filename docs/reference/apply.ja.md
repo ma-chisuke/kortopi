@@ -248,7 +248,7 @@ Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
     sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
   ```
 
-- 値を取れるロールが 100,000 個を超えて進める必要に出会うと、`UPDATE` を付与するか、許されたロールが `setval` を実行するよう助言を受ける。計画が値を順に取ると示したのに、apply の書き込みがそうした進め方を求めたときは、進める文が `UPDATE` の不足でセーブポイントの中で失敗する。行はコミットされ、行がそう伝える。
+- 値を取れるロールが 100,000 個を超えて進める必要に出会うと、`UPDATE` を付与するか、許されたロールが `setval` を実行するよう助言を受ける。計画が値を順に取ると示したのに、apply の書き込みがそうした進め方を求めたときは、進める文が `UPDATE` の不足でセーブポイントの中で失敗する。書き込んだ行はコミットされ、コミットのあとの出力がそう伝える。
 - 助言は、シーケンスとそのスキーマを SQL の識別子で挙げ、必要なところは引用符で囲む。助言の文は、進めるのと同じ数の値を取り、シーケンスを決して戻さない。100,000 個を超えて進めるときは `setval` になり、ほかに値を取るものがない間に実行する。
 
 コミットのあと、apply が列の値より手前に残したシーケンスと、読めなかったシーケンスごとに、標準エラー出力にも注記を出す。注記は、apply が書き込みのあとに読んだ位置から、すべきことを伝える。
