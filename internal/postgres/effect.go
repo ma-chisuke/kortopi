@@ -112,15 +112,23 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 	})
 	// The walk read referencing tables that the declaration does not hold,
 	// each for the first time, perhaps: a rewrite of one after the snapshot
-	// would make the effect look smaller than it is (ADR-0047). A read that
-	// failed may have failed because of such a change too.
-	if err == nil || ctx.Err() == nil {
-		var changed *storageError
-		if serr := s.checkStorage(ctx, w.readTables()); serr != nil && (err == nil || errors.As(serr, &changed)) {
-			err = serr
+	// would make the effect look smaller than it is. It read the declared
+	// tables with rows to delete again too, with a partition that another
+	// session attached after their check, which ATTACH PARTITION does not
+	// wait for (ADR-0047). A read that failed may have failed because of such
+	// a change too, and the error then says both.
+	tables := make([]readTable, 0, len(roots)+len(w.read))
+	for _, lt := range roots {
+		if lt.deletes > 0 {
+			tables = append(tables, readTable{oid: lt.meta.oid, name: lt.meta.name})
 		}
 	}
-	if err != nil {
+	for _, t := range w.readTables() {
+		if !slices.ContainsFunc(tables, func(r readTable) bool { return r.oid == t.oid }) {
+			tables = append(tables, t)
+		}
+	}
+	if err = s.checkAfter(ctx, err, tables); err != nil {
 		return plan.Effects{}, fmt.Errorf("follow the foreign keys that reference the rows to delete: %w", err)
 	}
 	return out, nil
@@ -993,12 +1001,22 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 		var partitioned, toPartitioned bool
 		var action string
 		var schemas, ops, collSchemas, collNames []string
+		// The functions of the privileges read the newest catalogs, and give
+		// NULL for a table of the snapshot that is gone.
+		var schemaUsage, tableSelect, refColumns, refTable *bool
 		if err := rows.Scan(&e.name, &e.fromOID, &e.table.Schema, &e.table.Name, &partitioned,
 			&e.toOID, &e.toTable.Schema, &e.toTable.Name, &toPartitioned, &action, &e.self, &e.inTree,
 			&e.columns, &e.referenced, &schemas, &ops, &collSchemas, &collNames, &e.set,
-			&e.schemaUsage, &e.tableSelect, &e.rowSecurity, &e.refColumns, &e.refTable, &e.top, &e.triggersDisabled); err != nil {
+			&schemaUsage, &tableSelect, &e.rowSecurity, &refColumns, &refTable, &e.top, &e.triggersDisabled); err != nil {
 			return nil, fmt.Errorf("read the foreign keys that reference the rows to delete: %w", err)
 		}
+		switch {
+		case schemaUsage == nil || tableSelect == nil:
+			return nil, w.s.droppedError(e.table)
+		case refColumns == nil || refTable == nil:
+			return nil, w.s.droppedError(e.toTable)
+		}
+		e.schemaUsage, e.tableSelect, e.refColumns, e.refTable = *schemaUsage, *tableSelect, *refColumns, *refTable
 		e.readable = e.schemaUsage && e.tableSelect && !e.rowSecurity
 		e.from = quoteTable(e.table)
 		if !partitioned {

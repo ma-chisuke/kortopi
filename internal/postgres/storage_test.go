@@ -1,7 +1,11 @@
 package postgres
 
 import (
+	"errors"
+	"fmt"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
@@ -102,5 +106,57 @@ func TestStorageError(t *testing.T) {
 				t.Errorf("error:\n%s\nwant:\n%s", got, tt.want)
 			}
 		})
+	}
+}
+
+// A step that failed keeps its error first, and the change follows it, as
+// what the failure may come from; a table that the catalogs of the snapshot
+// name and the newest catalogs do not is found as the run reads them
+// (ADR-0047).
+func TestStorageErrorOfAFailedStep(t *testing.T) {
+	step := &pgconn.PgError{Severity: "ERROR", Code: "42P01", Message: `relation "geo.postal_codes" does not exist`}
+	failed := &storageError{cause: "dropped, renamed, or replaced table geo.postal_codes", work: "plan", failed: fmt.Errorf("read the table: %w", step)}
+	want := `read the table: ERROR: relation "geo.postal_codes" does not exist (SQLSTATE 42P01), ` +
+		"and another session dropped, renamed, or replaced table geo.postal_codes after the plan began, so the failure may come from that change: " +
+		"nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one"
+	if got := failed.Error(); got != want {
+		t.Errorf("error:\n%s\nwant:\n%s", got, want)
+	}
+	if !errors.Is(failed, step) {
+		t.Error("the error of the step is lost")
+	}
+
+	catalogs := &storageError{cause: "dropped or replaced table geo.postal_codes", work: "apply", apply: true, catalogs: true}
+	want = "another session dropped or replaced table geo.postal_codes while the apply read the catalogs: " +
+		"run the apply again, and make schema changes before a run of kortopi, not during one"
+	if got := catalogs.Error(); got != want {
+		t.Errorf("error:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A write that a foreign key refused after another session changed the
+// referenced table names the change first, and the error of PostgreSQL
+// after it, without the advice to declare the referenced row (ADR-0047).
+func TestReferenceError(t *testing.T) {
+	pgErr := &pgconn.PgError{
+		Code: "23503", Message: `insert or update on table "city" violates foreign key constraint "city_country_fkey"`,
+		Detail: `Key (country)=(FR) is not present in table "country".`, ConstraintName: "city_country_fkey",
+	}
+	write := &writeError{statement: "insert into table m.city", err: pgErr, advice: adviceFor(pgErr, "insert into", declaration.TableName{Schema: "m", Name: "city"})}
+	err := &referenceError{
+		cause: "rewrote or truncated table m.country", key: "city_country_fkey",
+		table: declaration.TableName{Schema: "m", Name: "city"}, referenced: declaration.TableName{Schema: "m", Name: "country"}, err: write,
+	}
+	want := "another session rewrote or truncated table m.country after the apply began, " +
+		`and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: ` +
+		"run the apply again, and make schema changes before a run of kortopi, not during one: " +
+		`insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" ` +
+		`(detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)`
+	if got := err.Error(); got != want {
+		t.Errorf("error:\n%s\nwant:\n%s", got, want)
+	}
+	var got *pgconn.PgError
+	if !errors.As(err, &got) || got != pgErr {
+		t.Error("the error of PostgreSQL is lost")
 	}
 }

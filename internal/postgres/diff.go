@@ -100,17 +100,12 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes)
 		return err
 	})
-	// The first read of the table took a lock that keeps a rewrite out until
-	// the transaction ends, so the table is now what it stays (ADR-0047). A
-	// read that failed may have failed because of such a change too, such as
-	// a type that a rewrite changed, and the change is the better error.
-	if err == nil || ctx.Err() == nil {
-		var changed *storageError
-		if serr := s.checkStorage(ctx, []readTable{{oid: meta.oid, name: table.Name}}); serr != nil && (err == nil || errors.As(serr, &changed)) {
-			return plan.TableDiff{}, serr
-		}
-	}
-	if err != nil {
+	// The first read of the rows of the table took a lock that keeps out a
+	// change that gives it new storage or replaces it until the transaction
+	// ends, so the check sees every such change (ADR-0047). A read that
+	// failed may have failed because of such a change too, such as a type
+	// that a rewrite changed, and the error then says both.
+	if err := s.checkAfter(ctx, err, []readTable{{oid: meta.oid, name: table.Name}}); err != nil {
 		return plan.TableDiff{}, err
 	}
 	lt := &loadedTable{

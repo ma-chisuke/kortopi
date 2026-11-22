@@ -104,3 +104,53 @@ func TestTableRewrittenDuringARunCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestReferencedTableRewrittenDuringAnApplyCommand runs an apply whose
+// insert references a table that the apply does not declare, while another
+// session rewrites that table: the session takes its lock first, the apply
+// takes its snapshot and waits at the check of the foreign key of its
+// insert, and the session then rewrites the table and commits. The check
+// reads the table in the snapshot, which sees none of its rows, and refuses
+// the insert; the error names the rewrite before the error of PostgreSQL,
+// and does not tell to declare the referenced row, which the table holds.
+// Nothing changes, and the apply passes when it runs again (ADR-0047).
+func TestReferencedTableRewrittenDuringAnApplyCommand(t *testing.T) {
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := srv.Database(t)
+			db.Exec(t, `
+				CREATE SCHEMA m;
+				CREATE TABLE m.country (code text PRIMARY KEY, name text);
+				INSERT INTO m.country VALUES ('JP', 'Japan'), ('FR', 'France');
+				CREATE TABLE m.city (id int PRIMARY KEY, country text NOT NULL REFERENCES m.country);
+				INSERT INTO m.city VALUES (1, 'JP');
+			`)
+			e := connect(t, db)
+			dir := writeFiles(t, map[string]string{"m/city.csv": "id,country\n1,JP\n2,FR\n"})
+			holder := lockHolder(t, db, "LOCK TABLE m.country IN ACCESS EXCLUSIVE MODE")
+			r, _ := e.start(t, nil, "apply", "--dir", dir)
+			waitForKortopi(t, db, "wait_event_type = 'Lock'")
+			if _, err := holder.Exec(t.Context(), "ALTER TABLE m.country ALTER COLUMN name TYPE varchar(100)"); err != nil {
+				t.Fatal(err)
+			}
+			if err := holder.Commit(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			want := "kortopi: another session rewrote or truncated table m.country after the apply began, " +
+				`and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: ` +
+				"run the apply again, and make schema changes before a run of kortopi, not during one: " +
+				`insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" ` +
+				`(detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)` + "\nkortopi: nothing was changed\n"
+			if code := r.wait(t); code != exitError || r.stderr.String() != want {
+				t.Errorf("kortopi apply = %d, stderr\n%s\nwant %d, stderr\n%s", code, r.stderr.String(), exitError, want)
+			}
+			if got := db.Query(t, "SELECT count(*) FROM m.city"); got[0][0] != "1" {
+				t.Errorf("rows after the apply: %v, want 1", got)
+			}
+			code, _, stderr := e.command(t, "apply", "--dir", dir)
+			if code != exitOK {
+				t.Errorf("kortopi apply again = %d, stderr\n%s", code, stderr)
+			}
+		})
+	}
+}

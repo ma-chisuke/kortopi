@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -127,27 +128,33 @@ func (s *Session) Write(ctx context.Context, w io.Writer, req export.Request) (_
 		order = " ORDER BY " + strings.Join(parts, ", ")
 	}
 
-	var n int
-	switch req.Format {
-	case declaration.CSV:
-		sql := "COPY (SELECT " + quoteColumns("", req.Columns) + " FROM " + from + order + ") TO STDOUT WITH (FORMAT csv, HEADER)"
-		tag, err := s.tx.Conn().PgConn().CopyTo(ctx, w, sql)
-		if err != nil {
-			return 0, readError(req.Table, err)
-		}
-		n = int(tag.RowsAffected())
-	case declaration.SQL:
-		if n, err = s.writeInserts(ctx, w, meta, req, from, order); err != nil {
-			return 0, err
-		}
-	default:
+	if req.Format != declaration.CSV && req.Format != declaration.SQL {
 		return 0, fmt.Errorf("table %s: unknown format %d", req.Table, req.Format)
 	}
-	// The read took a lock that keeps a rewrite out until the transaction
-	// ends, so the table is now what it stays (ADR-0047). The rows are in a
-	// temporary file, which the export puts in place only when every table
-	// was written.
-	if err := s.checkStorage(ctx, []readTable{{oid: meta.oid, name: req.Table}}); err != nil {
+	// The read runs in a savepoint, so that the check below can run after a
+	// read that failed too.
+	var n int
+	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
+		if req.Format == declaration.SQL {
+			var err error
+			n, err = s.writeInserts(ctx, w, meta, req, from, order)
+			return err
+		}
+		sql := "COPY (SELECT " + quoteColumns("", req.Columns) + " FROM " + from + order + ") TO STDOUT WITH (FORMAT csv, HEADER)"
+		tag, err := tx.Conn().PgConn().CopyTo(ctx, w, sql)
+		if err != nil {
+			return readError(req.Table, err)
+		}
+		n = int(tag.RowsAffected())
+		return nil
+	})
+	// The read took a lock that keeps out a change that gives the table new
+	// storage or replaces it until the transaction ends, so the check sees
+	// every such change (ADR-0047). A read that failed may have failed
+	// because of such a change too, and the error then says both. The rows are
+	// in a temporary file, which the export puts in place only when every
+	// table was written.
+	if err := s.checkAfter(ctx, err, []readTable{{oid: meta.oid, name: req.Table}}); err != nil {
 		return 0, err
 	}
 	return n, nil
