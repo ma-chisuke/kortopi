@@ -136,6 +136,12 @@ type Session struct {
 	effectGone  []goneFirst
 	// deleted holds the order of the tables whose rows Delete deleted.
 	deleted map[declaration.TableName]int
+	// references holds the table that each foreign key of the loaded tables
+	// references, and referenced how the snapshot stores each such table, by
+	// its OID, which readReferences reads before the first write, for the
+	// error of a write that a foreign key refuses (ADR-0047).
+	references map[constraintKey]readTable
+	referenced map[uint32]map[uint32]storedRelation
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one, and
@@ -177,6 +183,10 @@ type Session struct {
 	pid         int32
 	// commitSent is true once the commit has gone to the server.
 	commitSent bool
+	// beforeCount, when it is not nil, runs in the savepoint of the count of
+	// the stored rows that the declaration lacks, before the count, so that
+	// a test can make PostgreSQL end the count (countUndeclared).
+	beforeCount func(ctx context.Context, tx pgx.Tx) error
 	// deferredChecked is true once the apply has run the constraints that
 	// wait for the commit, before its first move of a sequence
 	// (checkDeferred).

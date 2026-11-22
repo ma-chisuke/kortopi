@@ -138,6 +138,7 @@ kortopi は、通信のない接続に 10 秒後からプローブを送り、5 
 ### ロックを待つとき
 
 計画・apply・書き出しは、読み書きするテーブルのロックをほかのセッションが持っている間は待つ。`ALTER TABLE` を実行するスキーマの変更がその例であり、apply が更新か削除をする行のロックでも待つ。
+待っていたスキーマの変更は、そのあとに読むテーブルを変えていることがある。変えていれば、実行は止まる（[実行中のスキーマの変更](#実行中のスキーマの変更)）。
 ロック待ちの上限がなければ、際限なく、何も言わずに待つ。
 `--lock-timeout` は、実行にその上限を与える。値は `10s`・`500ms`・`1m30s` のような時間の長さで、`1ms` から `24h` までである。
 
@@ -157,6 +158,69 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 セッションが設定した上限のときは `as long as lock_timeout of the session allows` となる。そして `or allow the wait more time with --lock-timeout` が足される。
 セッションの `statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、ロックを待つ文も終わらせる。そのときのエラーは、`statement_timeout` かほかのセッションが文をキャンセルしたと伝え、フラグを挙げない。kortopi にはそのためのフラグがない。
 デプロイのときの実行には、毎回ロック待ちの上限を与える。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
+
+### 実行中のスキーマの変更
+
+計画・apply・書き出しは、トランザクションの最初の文でスナップショットを取り、すべてのテーブルをそのスナップショットで読む。
+宣言したテーブルのロックは、それを読むまで取らない。読むのは、カタログを読んだあとである。
+その間にほかのセッションがコミットしたスキーマの変更は、テーブルの読み取りには見え、スナップショットには見えない。
+テーブルに新しいストレージを与える変更は、それより前のスナップショットを持つトランザクションにはテーブルを空に見せる。`ALTER COLUMN ... TYPE` のようにテーブルを書き換える `ALTER TABLE` の形と、`TRUNCATE` がその例である。PostgreSQL は、これらのコマンドを MVCC に対して安全でないと説明している。
+
+そこで kortopi は、テーブルの行を初めて読んだ直後に、それがスナップショットのテーブルであることを確かめる。スナップショットのあとにほかのセッションが次のどれかをしていれば、止まる。
+
+- テーブルか、そのパーティションを書き換えたか、空にした。
+- テーブルを削除したか、名前を変えたか、同じ名前の別のテーブルに置き換えた。
+- テーブルのパーティションをアタッチしたか、デタッチしたか、作ったか、削除した。
+
+```text
+kortopi: another session rewrote or truncated table geo.postal_codes after the plan began, so what the plan read from the table may not be what it holds: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+実行は、`--exit-code` があっても終了コード 1 で終わる。スキーマの変更が実行に対して空に見せたテーブルは、ずれではないからである。計画は計画を出さず、apply は何も書き込まず、書き出しはファイルを書かない。
+スキーマの変更がコミットしてから、もう一度実行する。
+
+kortopi が確かめるのは、実行の宣言したテーブルと、外部キーを通して削除が着くテーブルであり、どれもその最初の読み取りの直後に確かめる。後者は、削除がほかの行にすることを数えるために計画が読む（[削除がほかの行にすること](#削除がほかの行にすること)）。
+削除する行を持つ宣言したテーブルは、外部キーをたどったあとにもう一度確かめる。たどる処理がそれらをもう一度読むからである。
+`on_insert` の値の確認はそれより前に来る。この確認は、宣言したテーブルを文の中で挙げるが、その行は1つも読まない。しかも、その文はロールバックするセーブポイントの中で動くので、文のロックはそこで手放される。確認があとに続くのは、行の最初の読み取りである。
+
+実行はテーブルを一度読むと、終わるまでそのロックを持つ。
+テーブルに新しいストレージや別の実体を与える変更は、このロックを待つ。テーブルを書き換える `ALTER TABLE` の形・`TRUNCATE`・`VACUUM FULL`・`CLUSTER` がそうである。`DROP TABLE`・`ALTER TABLE ... RENAME`・`CONCURRENTLY` のない `DETACH PARTITION` も同じである。そのため、確認はそうした変更をすべて見る。
+`ATTACH PARTITION` と `DETACH PARTITION ... CONCURRENTLY` は、このロックを待たない。
+アタッチより前に動いた文は、そのパーティションの行を読んでいない。最後の確認のあとのアタッチは、その確認には見えない。
+apply は、書き込みとコミット前の比較でテーブルをもう一度読み、そうしたパーティションの行を、計画が示さなかった行として見つける（[kortopi apply](apply.ja.md#コミット前の比較)）。
+
+失敗した読み取りのあとも確かめる。ほかのセッションが型を変えた列や、ほかのセッションが削除したテーブルは、読み取りを失敗させうるからである。
+テーブルが変わっていれば、エラーはまず読み取りのエラーを示し、次に、失敗の原因でありうるものとしてその変更を示す。エラーは読み取りのエラーで始まり、次のように続く。
+
+```text
+, and another session rewrote or truncated table geo.postal_codes after the plan began, so the failure may come from that change
+```
+
+apply は、書き込みを外部キーが拒んだとき、そのキーが参照するテーブルも確かめる。コミットまで遅らせたキーがコミットで拒んだときも同じである。
+apply はそのテーブルを自分では読まない。しかし、キーの検査はそれをスナップショットで読む。そのため、スナップショットのあとにほかのセッションが書き換えたテーブルは、キーの検査には空に見え、キーはテーブルが持つ行への参照を拒む。
+そのときエラーは、PostgreSQL のエラーの前にその変更を挙げ、参照される行を宣言するようにという助言は付けない。
+
+```text
+kortopi: another session rewrote or truncated table m.country after the apply began, and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" (detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)
+kortopi: nothing was changed
+```
+
+スナップショットのあと、実行がカタログを読む前にほかのセッションが削除したテーブルは、カタログを読む時点で実行を止める。外部キーを通して削除が着くテーブルも同じである。
+
+```text
+kortopi: another session dropped or replaced table geo.postal_codes while the plan read the catalogs: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+`VACUUM FULL`・`CLUSTER`・`ALTER TABLE ... SET TABLESPACE` も、テーブルに新しいストレージを与えるが、行は保つ。実行が読んだのは、テーブルが持つとおりの行である。
+kortopi はこれらをカタログの上で書き換えと区別できないので、これらのあとでも止まる。
+
+テーブルのストレージを変えない変更は、kortopi は確かめない。
+
+- スナップショットのあとに削除された列は、PostgreSQL のエラー、たとえば `column s.lat does not exist` で読み取りを失敗させる。
+- スナップショットのあとに追加された、宣言した列は、スナップショットのテーブルのとおりに、スキーマの適用後に決まるものとして示される（[スキーマの変更を待つテーブルと列](#スキーマの変更を待つテーブルと列)）。`--exit-code` では終了コード 2 になる。
+
+スキーマの変更は kortopi の実行の前にし、実行の間にはしない。
+デプロイでは、スキーマを先に、行をあとに、順に適用する（[kortopi apply](apply.ja.md#デプロイでの使い方)）。スキーマの変更に出会った定期的なずれの検出は、終了コード 1 で失敗し、次の実行では通る（[スクリプトから kortopi を実行する](automation.ja.md#定期的なずれの検出)）。
 
 ## セッションに要るもの
 
@@ -277,6 +341,7 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 | `~ code=pro  name: Pro -> "Pro Plan"` | 更新する行。キーと、変わる列のそれぞれを `column: stored -> declared` の形で示す。変わらない列は示さない。 |
 | `- code=legacy` | 削除する行。キーを示す。行を削除するのは、モード `sync` のテーブルだけである。 |
 | `1 to insert, 1 to update, 1 to delete` | テーブルの件数。そのモードが求める変更の種類だけを示す。 |
+| `2 stored rows are not declared, which mode upsert does not delete` | モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行。モードはそれをどれも削除しない（[宣言にない保存された行](#宣言にない保存された行)）。 |
 | `sequence catalog.plans_id_seq of column id: next value 3 -> 4` | 行が値を書く列のシーケンスと、apply がそれをどこまで進めるか（[シーケンス](#シーケンス)）。 |
 | `Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.` | 計画全体の件数と、計画に含まれる宣言したテーブルの数。 |
 
@@ -284,15 +349,15 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 テーブルの中では、挿入する行、更新する行、削除する行の順に並べ、それぞれを照合キーで並べる。
 
 テーブルの件数の行は、そのモードが求める変更の種類だけを示す。`insert` なら挿入、`upsert` なら挿入と更新、`sync` なら3つすべてである。
-モード `upsert` のテーブルに `0 to delete` が出ることはない。kortopi はそのテーブルで削除する行を探さないからである。宣言にない行があっても、そのまま残る。
+モード `upsert` のテーブルに `0 to delete` が出ることはない。そのモードは行を削除しないからである。代わりに、宣言にない保存された行を数える行が出る（[宣言にない保存された行](#宣言にない保存された行)）。
 
-変更のないテーブルは示さず、最後の行がその数を示す。
+変更のないテーブルは、宣言にない保存された行を持たない限り示さない。最後の行は、示さないテーブルの数を示す。
 
 ```text
 2 tables without changes are not shown.
 ```
 
-違うものも、スキーマの変更を待つものもないときは、計画は1行になる。
+計画が1行になるのは、違うものもスキーマの変更を待つものもなく、モード `insert` のテーブルも宣言にない保存された行を持つテーブルもないときである。そうした行を数えるのに失敗したテーブルもあってはならない。
 
 ```text
 No changes. The database matches the declaration.
@@ -308,6 +373,58 @@ No changes. The database matches the declaration.
 No changes. There is nothing to apply.
 A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
 ```
+
+### 宣言にない保存された行
+
+モード `upsert` と `insert` のテーブルは行を削除しないので、宣言にない保存された行を持ちうる。管理画面が足した行や、取り消したコミットが宣言から外した行である。
+計画は、モード `sync` のテーブルが削除する行を見つけるのと同じく、照合キーでそうした行を数え、行ではなく数を示す。
+モードはその行をどれも削除しないので、それは計画の変更ではない。
+
+まとまりを持つテーブルは、件数の行のあとにその数を示す。
+まとまりのないテーブルのうちそうした行を持つものは、まとまりのあとに1つのグループとして挙げる。計画の順に最初の5つを挙げ、残りのテーブルとその行を1行で数える。
+`Plan:` のあとの1行が、それをまとめる。
+
+```text
+geo.regions (upsert, key: code)
+  + code=kanto  name=Kanto
+  1 to insert, 0 to update
+  2 stored rows are not declared, which mode upsert does not delete
+
+geo.currency: 1 stored row is not declared, which mode upsert does not delete
+
+Plan: 1 to insert, 0 to update, 0 to delete in 2 tables.
+Not declared: 3 stored rows in 2 tables, which mode upsert does not delete.
+```
+
+グループのテーブルが5つを超えると、その最後の行が残りを数える。`45 more tables hold 45 stored rows that are not declared.` のような行である。
+
+ほかに違うものがなければ、計画はデータベースが宣言と一致しているとは言わず、最初の行のあとにこれらの行を置く。
+
+```text
+No changes. There is nothing to apply.
+geo.currency: 1 stored row is not declared, which mode upsert does not delete
+Not declared: 1 stored row in 1 table, which mode upsert does not delete.
+```
+
+- これらの行は違いとして数えない。違うものがこれらの行だけなら、`--exit-code` での終了コードは 0 である（[終了コードとずれ](#終了コードとずれ)）。これらの行で失敗させたい検査は、`Not declared:` で始まる行を探せばよい。
+- これらの行が伝えるのは、モードがすることだけである。apply の書き込みは、それでもそうした行を削除したり変えたりしうる。apply が行を削除するテーブルからの外部キーのカスケードはその例で、計画はそれをそのテーブルの下に示す（[削除がほかの行にすること](#削除がほかの行にすること)）。apply が参照されるキーを更新する外部キーの `ON UPDATE` の動作や、トリガーもその例である。
+- 行を挙げたいときや削除したいときは、テーブルにモード `sync` を与える。そうすると、計画はそれぞれを削除する行として示し、apply は `--allow-delete` のときだけそれを削除する。
+- apply は、計画と一緒に同じ行を出す。
+
+行を数えるため、モード `upsert` か `insert` のテーブルの計画は、テーブルのすべての保存された行のキーを読むようになった。以前は、宣言したキーだけを読んでいた。モード `sync` の計画も、削除する行を見つけるために同じ行を読む。
+権限は、計画に要るもので足りる（[セッションに要るもの](#セッションに要るもの)）。
+ある1台のマシンで 200,000 行のテーブルに対して測ると、数える時間は、199,000 行を宣言したときにテーブルの比較の約6パーセントだった。1,000 行を宣言したときには 42〜46 パーセントだった。大きなテーブルの小さな宣言では、比較に以前の約 1.7〜1.8 倍の時間がかかる（[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)）。
+
+数える問い合わせは、それ専用のセーブポイントの中で実行する。
+ロールの `statement_timeout` などで PostgreSQL がそれをエラーで終えると、計画は数えずに先へ進む。そのテーブルの行は、数えていないことと、その理由を伝える。
+
+```text
+geo.big: the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+Not declared: the rows of 1 table are not counted.
+```
+
+終了コードは、数えないときと同じである。そうしたテーブルを持つ空の計画は、データベースが宣言と一致しているとは言わない。
+数える間の割り込みや切れた接続は、これまでどおり計画を止める。
 
 ### スキーマの変更を待つテーブルと列
 
@@ -544,7 +661,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### スクリプトの読み方
 
-- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行も添える。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。
+- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行と、宣言にない保存された行をまとめた行も添える。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。そのあとに、宣言にない保存された行を持つテーブルのグループをコメントで示す。挙げるテーブルは多くとも5つで、残りは1行で数える（[宣言にない保存された行](#宣言にない保存された行)）。
 - コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。スクリプトが `on_insert` の値を持つときは、コメントが「but those of on_insert」と添えて、それらの値を設定が固定しないことを示す。セッションは、それらの値を自分の設定で読む。
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
@@ -570,11 +687,13 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
-計画にモード `insert` のテーブルがあれば、代わりに空の計画の行をコメントとして書く。
+計画にモード `insert` のテーブルか、宣言にない保存された行を持つテーブルがあれば、代わりに空の計画の行をコメントとして書く。
 
 ```sql
 -- No changes: there is nothing to do.
 -- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+-- geo.currency: 1 stored row is not declared, which mode upsert does not delete
+-- Not declared: 1 stored row in 1 table, which mode upsert does not delete.
 ```
 
 スキーマの変更を待つテーブルと列しかない計画は、冒頭のコメントと次の行になる。
@@ -602,7 +721,8 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 `SET LOCAL` の文には、そのトランザクションが要る。トランザクションの外では、警告を出すだけである。
 `SET LOCAL client_encoding` が効くのは、クライアントがそのあとに別のメッセージとして送る文である。`psql` はそう送る。スクリプト全体を1つのメッセージで送るクライアントでは、スクリプトはすでにそのクライアントの符号化方式で読まれている。そのため、そうしたクライアントは `client_encoding` を UTF8 にして接続する必要がある。データベースのドライバーは、ふつうそうする。
 
-スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、トリガーやルールが宣言と違うものにした値を示すか、何も示さない。
+スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、トリガーやルールが宣言と違うものにした値を示す。
+宣言にない保存された行も数え直すが、それ自体は終了コードに表れない（[宣言にない保存された行](#宣言にない保存された行)）。
 
 ### 削除
 
@@ -673,7 +793,7 @@ kortopi は、次の順に検査する。
 
 1. `kortopi.toml` と宣言のファイルを読み、`--schema` で計画を絞る。ここでの誤りは、データベースへ接続する前に報告し、最初の誤りで計画を止める。
 2. 接続してカタログを読み、テーブルごとに照合キー・宣言した列・モードを検査する。パーティションをその上にあるパーティションテーブルと一緒に宣言していないこと、宣言した名前がデータベースの名前と空白か大小だけで違っていないこと、apply の文を書き換えるルールをどのテーブルも持たないこと（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）も検査する。`--no-pending` があれば、宣言したテーブルと列がすべてデータベースにあることも検査する。`on_insert` の列も検査し、その値を PostgreSQL に読ませる。すべてのテーブルのすべての誤りを、まとめて報告する。一意キーがあっても、そのインデックスが列とは違う照合順序や演算子クラスを使うために行を照合できないときは、エラーがそのキーと理由を示す（[宣言のファイル](declaration.ja.md#行を照合できないキー)）。
-3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語と、データベースのほかのエラーも同じである。
+3. テーブルを1つずつ読み込んで比べる。最初のエラーで計画を止める。権限の不足・行単位セキュリティ・列の受け付けない値・2つの行が持つキー・キーや NOT NULL の列の NULL がこれにあたる。日付や時刻の列の現在の時刻を表す語、計画が始まったあとにほかのセッションが変えたテーブル（[実行中のスキーマの変更](#実行中のスキーマの変更)）、データベースのほかのエラーも同じである。
 4. 各テーブルの挿入する行が、`NOT NULL` で既定値のないどの列にも値を得られることを検査する。宣言も `on_insert` も挙げないそうした列は誤りである。すべてのテーブルの誤りをまとめて報告し、手順 3 のエラーで計画が止まったときは、そのエラーより前に置く。
 5. 削除する行があるときは、それを参照する外部キーをたどる。削除が消す宣言した行や、削除が宣言した列を NULL か既定値にする宣言した行は誤りであり、手順 4 の誤りと一緒に報告する（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
 6. `--format sql` のときは、外部キーを読んでスクリプトを書く。ここでのエラーは `write the plan as SQL:` で始まる。
@@ -684,8 +804,8 @@ kortopi は、次の順に検査する。
 
 | 終了コード | 意味 |
 |---|---|
-| 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。 |
-| 1 | 計画が失敗した。フラグの誤り、宣言の誤り、`--no-pending` があるときのデータベースにないテーブルや列、データベースのエラー、割り込みを含む。 |
+| 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。モード `upsert` と `insert` のテーブルが宣言を超えて持つ保存された行も除く。計画はそれを数え、そのモードはそれを削除しない。 |
+| 1 | 計画が失敗した。フラグの誤り、宣言の誤り、`--no-pending` があるときのデータベースにないテーブルや列、計画の間にほかのセッションが変えたテーブル、データベースのエラー、割り込みを含む。 |
 | 2 | `--exit-code` のときだけ使う。計画が空でない。 |
 
 `--exit-code` がなければ、変更を示した計画も 0 で終わる。そのため、マスタデータを変えるプルリクエストが、自分の計画で失敗することはない。
@@ -693,20 +813,27 @@ kortopi は、次の順に検査する。
 `--exit-code` があれば、計画でずれを検出できる。挿入・更新・削除する行が1つでもあるか、スキーマの変更を待つテーブルや列があれば、終了コードは 2 になる。
 `--no-pending` もあれば、そうしたテーブルや列での終了コードは、代わりに 1 である。
 `--format sql` でも同じである。
-データベースを main ブランチの宣言と比べる定期実行は、3つの結果を次のように見分けられる。
+モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行は、終了コードの上ではずれではない。そのモードはその行をどれも削除しないので、それは計画の変更ではない。代わりに、計画がそれを行で数える（[宣言にない保存された行](#宣言にない保存された行)）。
+計画がその行を数えられなかったときも、終了コードは同じである。
+データベースを main ブランチの宣言と比べる定期実行は、次のように計画をログに出して3つの結果を見分ける。その行をまとめる行も探せる。
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
+cat plan.txt
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+if grep -q '^Not declared:' plan.txt; then
+  echo "tables of mode upsert or insert hold stored rows that the declaration lacks"
+fi
 ```
 
-`|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
+`|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`grep` が行を見つけないときも、シェルは止まらない。その `grep` は `if` の条件だからである。
+失敗した計画はエラーを標準エラー出力へ出す。定期実行のログは、そのエラーもそのまま含む。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:67a062dc445488df67d2b14ef4bab20b467f6c05ae81f57bc0106d413763887d -->
+<!-- i18n-source: plan.md sha256:d668c9d259635161f361ceb3cbd393466738e9bbbd5e55a0cf91b68d311e1576 -->

@@ -119,6 +119,12 @@ func TestRenderSummary(t *testing.T) {
 		{name: "deletions_left_out", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{plansTable, regionsTable}}, Inserted: 1, Updated: 1, SkippedDeletes: 3}},
 		{name: "only_one_deletion_left_out", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{onlyLegacy}}, SkippedDeletes: 1}},
 		{name: "only_deletions_left_out", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{regionsTable, unchanged}}, SkippedDeletes: 2}},
+		// Next to a table that holds stored rows that the declaration lacks,
+		// the deletions left out are not the only difference, but the plan
+		// holds nothing else to write (ADR-0046).
+		{name: "only_one_deletion_left_out_and_undeclared_rows", result: &Result{Plan: &plan.Plan{Tables: []plan.Table{
+			onlyLegacy, {Name: tn("geo.towns"), Mode: config.ModeUpsert, Key: []string{"code"}, Diff: plan.TableDiff{Undeclared: 3}},
+		}}, SkippedDeletes: 1}},
 		// The writes of other tables had done the work of an update, as a
 		// cascade ON UPDATE does (ADR-0042).
 		{name: "fewer_than_planned", result: &Result{

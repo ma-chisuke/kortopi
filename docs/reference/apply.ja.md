@@ -448,13 +448,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   ```
 
 - 削除を見送ったときは、`Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` が続く。見送った削除が外部キーを通じて行を消すか変えるはずなら、その行はフラグの前でそれを伝える。`Through foreign keys, their deletion would also delete 2 rows and change 1 row.` のようになる。
-- 違いが削除だけなら、apply は何も書き込まずコミットもしない。そのときは `Not deleted` の行だけを出し、そのことを伝える。
+- 違いが削除だけなら、apply は何も書き込まずコミットもしない。そのときは `Not deleted` の行だけを出し、そのことを伝える。計画は、それでも宣言にない保存された行を数えうるが、それは書き込む変更ではない。
 
   ```text
-  Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
+  Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- 違いがなければ、apply は空の計画の行だけを出す。その行は、`No changes. The database matches the declaration.` である。モード `insert` のテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行になる（[kortopi plan](plan.ja.md#出力の読み方)）。
+- 違いがなければ、apply は空の計画の行だけを出す。その行は、`No changes. The database matches the declaration.` である。次のどれかのテーブルがあるときは、`No changes. There is nothing to apply.` と、そうしたテーブルを挙げる行になる（[kortopi plan](plan.ja.md#出力の読み方)）。モード `insert` のテーブル、宣言にない保存された行を持つテーブル、その行を数えられなかったテーブルである。
+- apply の計画は、計画と同じく、モード `upsert` と `insert` のテーブルが持ち宣言にない保存された行を数える。その行が伝えるのは、テーブルのモードがその行をどれも削除しないことだけである。apply の書き込みは、それでもそうした行を削除したり変えたりしうる（[kortopi plan](plan.ja.md#宣言にない保存された行)）。apply が行を削除するテーブルからの外部キーのカスケードはその例で、計画はそれをそのテーブルの下に示す（[削除がほかの行にすること](plan.ja.md#削除がほかの行にすること)）。apply が参照されるキーを更新する外部キーの `ON UPDATE` の動作や、トリガーもその例である。PostgreSQL が数えるのをエラーで終えたテーブルは数を持たず、apply は先へ進む。
 - 失敗したときは、エラーを標準エラー出力に出し、最後の行は `kortopi: nothing was changed` になる。apply がシーケンスを進めたあとでコミットが失敗したときは、その行に `but the sequences that the apply had moved before its commit, ...` が続く。そこに進めたシーケンスを挙げ、割り込みが進める作業を止めたシーケンスは、前に進んだかもしれないものとして挙げる。
 - コミットの答えが届かないときは、変更がなされたかどうかを apply は知ることができず、何も変えなかったとは言わない。
 
@@ -555,6 +556,7 @@ the wait for the lock of kortopi, which the other apply held, was cancelled, by 
 スキーマの変更を先に、スキーマを変える道具で適用し、行をそのあとに適用する。
 
 - 宣言が挙げ、データベースにないテーブルや列は、apply のエラーになる。そのため、apply がスキーマの変更より先に動くことはない。
+- apply は、スキーマの変更がコミットしてから始め、変更の実行中には始めない。apply が始まったあとに宣言したテーブルや削除が着くテーブルを書き換えるか置き換える変更があれば、apply は何も書き込む前に止まり、エラーがそう伝える。宣言したテーブルの外部キーが参照するテーブルを書き換えると、キーはその行を参照する書き込みを拒み、そのときもエラーはその書き換えを挙げる。どちらでも apply は何も変えない（[実行中のスキーマの変更](plan.ja.md#実行中のスキーマの変更)）。
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
@@ -879,4 +881,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:089ee8ec30f81b71bec5b11e4c8c8cc618649a07424ff39a0fca1fe9f78ae25f -->
+<!-- i18n-source: apply.md sha256:43d2f102b4b013c66f0ceb2b5af085d0e407ebaf1f1bf236131442be3ab1d1c7 -->

@@ -445,13 +445,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   ```
 
 - When deletions were left out, `Not deleted: <n> rows of <n> tables. Run apply with --allow-delete to delete them.` follows. When those deletions would also delete or change rows through foreign keys, the line says so before the flag: `Through foreign keys, their deletion would also delete 2 rows and change 1 row.`
-- When the only differences are deletions, the apply writes and commits nothing, and the `Not deleted` line stands alone and says so:
+- When the only differences are deletions, the apply writes and commits nothing, and the `Not deleted` line stands alone and says so. The plan can still count stored rows that the declaration lacks, which are no change to write:
 
   ```text
-  Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
+  Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert`, `No changes. There is nothing to apply.` and a line that names such tables ([kortopi plan](plan.md#read-the-output)).
+- When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert`, holds stored rows that the declaration lacks, or could not have them counted, `No changes. There is nothing to apply.` and the lines that name such tables ([kortopi plan](plan.md#read-the-output)).
+- The plan of an apply counts the stored rows that tables of mode `upsert` and `insert` hold and the declaration lacks, as a plan does, and its lines say only that the mode of the table deletes none of them. The writes of the apply can still delete or change such a row: the cascade of a foreign key from a table whose rows the apply deletes, which the plan shows under that table ([What the deletions also do](plan.md#what-the-deletions-also-do)), the action `ON UPDATE` of a foreign key whose referenced key the apply updates, or a trigger ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). A count that PostgreSQL ends with an error leaves that table without a count, and the apply goes on.
 - After a failure, the errors go to standard error, and the last line is `kortopi: nothing was changed`. When the apply had moved sequences before its commit failed, the line goes on with `but the sequences that the apply had moved before its commit, ...`, and names them, with a sequence whose move an interrupt stopped as one that may have moved forward.
 - When the answer of the commit does not arrive, the apply cannot know whether the changes were made, and does not say that nothing was changed:
 
@@ -552,6 +553,7 @@ the wait for the lock of kortopi, which the other apply held, was cancelled, by 
 Apply the schema first, with the tool that changes your schema, and the rows second.
 
 - A table or a column that the declaration names and the database lacks is an error of an apply, so an apply never runs ahead of its schema change.
+- Start the apply once the schema change has committed, not while it runs. A change that rewrites or replaces a declared table, or a table that the deletions reach, after the apply began, stops the apply before it writes anything, with an error that says so. A rewrite of a table that a foreign key of a declared table references makes the key refuse the writes that reference its rows, and the error then names the rewrite too. Either way, the apply changes nothing ([A schema change during a run](plan.md#a-schema-change-during-a-run)).
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.

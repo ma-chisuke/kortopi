@@ -17,9 +17,11 @@ import (
 const noChanges = "No changes. The database matches the declaration.\n"
 
 // noChangesInsert is the first line of a plan that is empty when a table of
-// the plan has mode insert. Such a table gets only its missing rows, so the
-// values of its other rows were not compared, and the plan cannot say that
-// the database matches the declaration (ADR-0031).
+// the plan has mode insert, or holds stored rows that the declaration lacks.
+// A table of mode insert gets only its missing rows, so the values of its
+// other rows were not compared (ADR-0031), and the stored rows that a mode
+// leaves as they are differ from the declaration (ADR-0046): the plan
+// cannot say that the database matches the declaration.
 const noChangesInsert = "No changes. There is nothing to apply.\n"
 
 // maxNamed is the number of tables that a line names before it counts the
@@ -27,9 +29,11 @@ const noChangesInsert = "No changes. There is nothing to apply.\n"
 const maxNamed = 5
 
 // EmptyLines returns the lines of a plan that is empty, without their line
-// breaks: the sentence that says so, and, when tables of the plan have mode
-// insert, a line that names them, because their values were not compared.
-// The plan as SQL writes the same lines as comments.
+// breaks: the sentence that says so; when tables of the plan have mode
+// insert, a line that names them, because their values were not compared;
+// and when tables hold stored rows that the declaration lacks, the line of
+// each such table and the line that sums them up (ADR-0046). The plan as
+// SQL writes the same lines as comments.
 func (p *Plan) EmptyLines() []string {
 	var insert []string
 	if p != nil {
@@ -39,17 +43,25 @@ func (p *Plan) EmptyLines() []string {
 			}
 		}
 	}
-	if len(insert) == 0 {
+	undeclared := UndeclaredGroup(p.UndeclaredTables())
+	if len(insert) == 0 && len(undeclared) == 0 {
 		return []string{strings.TrimSuffix(noChanges, "\n")}
 	}
-	note := "A table of mode insert is compared by its key only, not by its values: "
-	if len(insert) > 1 {
-		note = "Tables of mode insert are compared by their keys only, not by their values: "
+	lines := []string{strings.TrimSuffix(noChangesInsert, "\n")}
+	if len(insert) > 0 {
+		note := "A table of mode insert is compared by its key only, not by its values: "
+		if len(insert) > 1 {
+			note = "Tables of mode insert are compared by their keys only, not by their values: "
+		}
+		if len(insert) > maxNamed {
+			insert = append(insert[:maxNamed], fmt.Sprintf("and %d more", len(insert)-maxNamed))
+		}
+		lines = append(lines, note+strings.Join(insert, ", ")+".")
 	}
-	if len(insert) > maxNamed {
-		insert = append(insert[:maxNamed], fmt.Sprintf("and %d more", len(insert)-maxNamed))
+	if len(undeclared) > 0 {
+		lines = append(append(lines, undeclared...), p.UndeclaredSummary())
 	}
-	return []string{strings.TrimSuffix(noChangesInsert, "\n"), note + strings.Join(insert, ", ") + "."}
+	return lines
 }
 
 // pendingMark follows a table or a column that the database does not have yet
@@ -89,10 +101,14 @@ func (d *TableDiff) changes() bool {
 // (+), update (~), and delete (-), the counts of the table, and, after them,
 // the lines of SequenceLines, the sequences that an apply would move beyond
 // the values that it writes, and the lines of EffectLines: what the
-// deletions of the table also do through foreign keys. A table that the
-// database does not have yet gets one line.
-// Tables without changes get no block, and the summary at the end counts
-// them, with the lines of EffectSummary. An empty plan prints the lines of
+// deletions of the table also do through foreign keys. A table whose mode
+// deletes no row gets the line of UndeclaredLine after its counts, when it
+// holds stored rows that the declaration lacks (ADR-0046). A table that the
+// database does not have yet gets one line. The tables without changes that
+// hold such rows get no block: the lines of UndeclaredGroup name at most five
+// of them after the blocks, and count the others. Other tables without
+// changes get no line, and the summary at the end counts them, with the lines
+// of EffectSummary and UndeclaredSummary. An empty plan prints the lines of
 // EmptyLines.
 //
 // A value prints as the database prints it, and NULL as NULL. A value that
@@ -117,6 +133,10 @@ func Render(w io.Writer, p *Plan) error {
 		deletes += len(t.Diff.Deletes)
 		pendingColumns += len(t.PendingColumns) + len(t.PendingOnInsert)
 		switch {
+		case t.unchanged() && t.counts():
+			// A table without a block still shows the stored rows that the
+			// declaration lacks, in the group after the blocks (ADR-0046).
+			continue
 		case t.unchanged():
 			unchanged++
 			continue
@@ -128,10 +148,16 @@ func Render(w io.Writer, p *Plan) error {
 		}
 		b.WriteString("\n")
 	}
+	if group := UndeclaredGroup(p.undeclaredTables(true)); len(group) > 0 {
+		b.WriteString(strings.Join(group, "\n") + "\n\n")
+	}
 
 	fmt.Fprintf(&b, "Plan: %d to insert, %d to update, %d to delete in %s.\n",
 		inserts, updates, deletes, count(len(p.Tables), "table", "tables"))
 	for _, line := range p.EffectSummary() {
+		b.WriteString(line + "\n")
+	}
+	if line := p.UndeclaredSummary(); line != "" {
 		b.WriteString(line + "\n")
 	}
 	if pendingTables > 0 || pendingColumns > 0 {
@@ -195,6 +221,9 @@ func writeTable(b *strings.Builder, t *Table) error {
 
 	if !t.Diff.changes() {
 		b.WriteString("  no changes\n")
+		if line := UndeclaredLine(t); line != "" {
+			b.WriteString("  " + line + "\n")
+		}
 		return nil
 	}
 	counts := []string{fmt.Sprintf("%d to insert", len(t.Diff.Inserts))}
@@ -205,6 +234,9 @@ func writeTable(b *strings.Builder, t *Table) error {
 		counts = append(counts, fmt.Sprintf("%d to delete", len(t.Diff.Deletes)))
 	}
 	fmt.Fprintf(b, "  %s\n", strings.Join(counts, ", "))
+	if line := UndeclaredLine(t); line != "" {
+		b.WriteString("  " + line + "\n")
+	}
 	for _, line := range SequenceLines(t) {
 		b.WriteString("  " + line + "\n")
 	}

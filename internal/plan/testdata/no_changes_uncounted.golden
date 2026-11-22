@@ -1,0 +1,3 @@
+No changes. There is nothing to apply.
+app.big: the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+Not declared: the rows of 1 table are not counted.

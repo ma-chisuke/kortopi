@@ -298,7 +298,10 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 	for rows.Next() {
 		var schema, table, kind string
 		var oid uint32
-		var rowSecurity, schemaUsage, selectable, insertable, updatable, deletable, hasRules bool
+		var rowSecurity, hasRules bool
+		// The functions of the privileges read the newest catalogs, and give
+		// NULL for a table of the snapshot that is gone.
+		var schemaUsage, selectable, insertable, updatable, deletable *bool
 		var column *string
 		var notNull, generated, identityAlways, hasDefault *bool
 		var typeName []string
@@ -311,6 +314,9 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
+		if schemaUsage == nil || selectable == nil || insertable == nil || updatable == nil || deletable == nil {
+			return nil, s.droppedError(m.name)
+		}
 		if kind != "r" && kind != "p" {
 			what, ok := relationKinds[kind]
 			if !ok {
@@ -326,8 +332,8 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.exists = true
 		m.partitioned = kind == "p"
 		m.rowSecurity = rowSecurity
-		m.schemaUsage = schemaUsage
-		m.deletable = deletable
+		m.schemaUsage = *schemaUsage
+		m.deletable = *deletable
 		m.hasRules = hasRules
 		m.oid = oid
 		m.partitionOf, m.partitions = tableNames(partitionOf), tableNames(partitions)
@@ -336,7 +342,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 			col := columnMeta{
 				name: *column, notNull: *notNull, generated: *generated, identityAlways: *identityAlways, typ: *typ,
 				hasDefault: *hasDefault, collatable: *collatable,
-				selectable: selectable, insertable: insertable, updatable: updatable,
+				selectable: *selectable, insertable: *insertable, updatable: *updatable,
 			}
 			if len(typeName) == 2 {
 				col.typeName = quoteIdent(typeName[0]) + "." + quoteIdent(typeName[1])

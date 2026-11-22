@@ -34,6 +34,10 @@ const maxFlaggedRows = 5
 // delete, each sorted by the match key in the order of the key's types.
 // Values are text as PostgreSQL prints them.
 //
+// After the first read of the table, Diff checks that the table is the one
+// that the snapshot shows (ADR-0047): another session can have rewritten or
+// truncated it after the snapshot, which would make it look empty.
+//
 // The work of one table runs inside a savepoint, so that an error leaves the
 // session usable. The savepoint is released, and the declared rows stay
 // loaded until the session ends: Effects reads them for every table, and in
@@ -93,10 +97,18 @@ func (s *Session) Diff(ctx context.Context, req plan.DiffRequest) (_ plan.TableD
 		if err := s.checkNotNull(ctx, tx, table, c, req.Updates); err != nil {
 			return err
 		}
-		diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes)
+		if diff, err = compareRows(ctx, tx, table.Name, c, req.Updates, req.Deletes); err != nil || req.Deletes {
+			return err
+		}
+		diff.Undeclared, diff.Uncounted, err = s.countUndeclared(ctx, tx, table.Name, c)
 		return err
 	})
-	if err != nil {
+	// The first read of the rows of the table took a lock that keeps out a
+	// change that gives it new storage or replaces it until the transaction
+	// ends, so the check sees every such change (ADR-0047). A read that
+	// failed may have failed because of such a change too, such as a type
+	// that a rewrite changed, and the error then says both.
+	if err := s.checkAfter(ctx, err, []readTable{{oid: meta.oid, name: table.Name}}); err != nil {
 		return plan.TableDiff{}, err
 	}
 	lt := &loadedTable{
@@ -134,6 +146,61 @@ func compareRows(ctx context.Context, tx pgx.Tx, table declaration.TableName, c 
 		}
 	}
 	return diff, nil
+}
+
+// countUndeclared counts, for a table whose mode deletes no row, the stored
+// rows of table that no declared row matches (ADR-0046), in a savepoint of
+// its own. The count reads the key of every stored row, so it can take
+// longer than the rest of the comparison, and it must not turn a plan that
+// would succeed into a failure: when PostgreSQL ends it with an error, such
+// as a statement_timeout, countUndeclared rolls back to the savepoint and
+// returns why it did not count, and the plan goes on. err is an interrupt,
+// a connection that broke, or an error that ended the session, which stop
+// the run as before. The comparison before the commit of an apply does not
+// count (ADR-0042).
+func (s *Session) countUndeclared(ctx context.Context, tx pgx.Tx, table declaration.TableName, c *comparison) (n int, uncounted string, err error) {
+	what := "count the stored rows of table " + table.String() + " that the declaration lacks"
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s: %w", what, err)
+	}
+	var count int64
+	err = func() error {
+		if s.beforeCount != nil {
+			if err := s.beforeCount(ctx, sp); err != nil {
+				return err
+			}
+		}
+		return sp.QueryRow(ctx, c.undeclaredSQL()).Scan(&count)
+	}()
+	if err == nil {
+		if err := sp.Commit(ctx); err != nil {
+			return 0, "", fmt.Errorf("%s: %w", what, err)
+		}
+		return int(count), "", nil
+	}
+	var pgErr *pgconn.PgError
+	if ctx.Err() != nil || !errors.As(err, &pgErr) || pgErr.SeverityUnlocalized == "FATAL" || pgErr.SeverityUnlocalized == "PANIC" {
+		return 0, "", fmt.Errorf("%s: %w", what, err)
+	}
+	if rbErr := sp.Rollback(ctx); rbErr != nil {
+		return 0, "", fmt.Errorf("%s: %w", what, errors.Join(err, rbErr))
+	}
+	return 0, s.uncounted(pgErr), nil
+}
+
+// uncounted says why PostgreSQL ended the count of countUndeclared, with
+// what the user can do for a statement that took too long or waited too
+// long for a lock.
+func (s *Session) uncounted(err *pgconn.PgError) string {
+	why := "PostgreSQL ended the count: " + err.Error()
+	switch err.Code {
+	case queryCanceled:
+		why += ": statement_timeout of the session, or another session, cancelled it: allow the session more time to count them"
+	case lockNotAvailable:
+		why += ": another session held a lock that the count needed longer than " + s.lockLimit() + " allows: plan again once the lock is gone" + s.moreTime()
+	}
+	return why
 }
 
 // DiffAgain compares the declared rows that Diff loaded for the table of req
