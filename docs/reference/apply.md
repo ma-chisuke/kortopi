@@ -245,7 +245,7 @@ What stops an apply with `--allow-delete`, and what to do:
 After its inserts and updates, just before the first deletion, the apply follows the foreign keys again and compares what they reach with the plan, step by step.
 A row that it wrote and that the plan could not see, because a default of a column, a value of `on_insert`, a trigger, or a rule created after the plan gave it a reference, stops it then ([The deletions reach other rows after the inserts and updates](#the-deletions-reach-other-rows-after-the-inserts-and-updates)).
 After the deletions and before the commit, it first runs the constraints and the constraint triggers that its writes deferred to the commit, with the settings of the session, as the commit would run them, so that every check of a foreign key has run.
-It then compares the schema that decides what the deletions do, as its snapshot saw it, with what it is now, which a second connection reads: the foreign keys that reference or that are held by the tables with rows to delete and the tables that the deletions reach, the partitions of these tables, and whether a detach of one has begun, their triggers, and their rules.
+It then compares the schema that decides what the deletions do, as its snapshot saw it, with what it is now, which a second connection reads: the foreign keys that reference or that are held by the tables with rows to delete and the tables that the deletions reach, the partitions of these tables, and whether a detach of one has begun, their triggers, their rules, and their unique keys, primary keys, and exclusion constraints that are deferrable.
 A foreign key, a trigger, a rule, or a partition that another session added, dropped, or changed after the apply began, a partition that it began to detach with `DETACH PARTITION ... CONCURRENTLY`, which the checks of foreign keys leave out at once, or the triggers of a foreign key that it enabled or disabled, stops the apply, with an error that names it ([The schema changed while the apply ran](#the-schema-changed-while-the-apply-ran)).
 From then on, no check of a foreign key and no write of the apply is left, so a schema change that commits after the comparison cannot act on what the deletions did.
 Apply schema changes before kortopi, not while an apply runs ([In a deployment](#in-a-deployment)).
@@ -385,13 +385,15 @@ A second interrupt ends the wait at once, and the line then starts with `kortopi
 
 An interrupt that comes while the second connection of the check after the deletions reads the catalogs ([The guards on deletions](#the-guards-on-deletions)) asks the server to cancel that read, and ends the session of the apply first, which holds the locks and the deleted rows.
 The second session ends after it, once its read has ended, each with a wait of its own of up to 5 seconds, so kortopi exits within 10 seconds when the server answers neither.
-The session of the apply is named first when the server did not confirm its end, and the second session in a line of its own after it:
+The session of the apply is named first when the server did not confirm its end, and the second session in a line of its own after it, also when the interrupt comes as the second session closes after its read:
 
 ```text
 kortopi: interrupted: the apply was stopped
 kortopi: the server did not confirm within 5s that the read-only session of the check after the deletions ended: its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 391, and end it with pg_cancel_backend(391), or with pg_terminate_backend(391) if it does not end
 kortopi: nothing was changed
 ```
+
+An interrupt while the second connection connects, or begins its transaction, ends that connection first, with a wait of its own when the server started a session for it, and the session of the apply after it; the lines still name the session of the apply first.
 
 It does not keep the cancel request from going out: kortopi waits up to 1 second for the driver to send it before it exits.
 The same holds while an apply waits for another apply.
@@ -733,13 +735,15 @@ kortopi: after the inserts and updates, the deletion of rows of z.parent reaches
 ### The schema changed while the apply ran
 
 ```text
-kortopi: another session changed the schema while the apply ran: it added foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+kortopi: another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
 kortopi: nothing was changed
 ```
 
 Another session added the foreign key after the snapshot of the apply, and before its deletions, so the plan did not show what it does, while PostgreSQL ran it with the deletions.
-The error names the first change that the apply found among the foreign keys, the partitions, the triggers, and the rules of the tables that the deletions reach, and counts the others.
-An attach or a detach of a partition comes before the objects that the partition brings or takes away, which are counted, not named.
+The error names the first change that the apply found among the foreign keys, the partitions, the triggers, the rules, and the deferrable unique keys, primary keys, and exclusion constraints of the tables that the deletions reach, and counts the others.
+An attach or a detach of a partition comes before the objects that the partition brings or takes away, its own partitions among them, which are counted, not named.
+The apply compares these objects by their names, so one that another session renamed shows as one that it dropped and one that it added: the error says `added or renamed`, `created or renamed`, or `dropped or renamed`.
+A deferrable unique key, primary key, or exclusion constraint is named as a constraint, by its own name, not by the triggers that check it.
 Run the apply again once the schema change has committed: the next apply plans with the new schema.
 
 A partition that `DETACH PARTITION ... CONCURRENTLY` began to detach stops the apply as well, since the checks of foreign keys leave it out at once, and a deletion that its rows should make fail succeeds:
@@ -748,12 +752,14 @@ A partition that `DETACH PARTITION ... CONCURRENTLY` began to detach stops the a
 kortopi: another session changed the schema while the apply ran: it began to detach partition app.orders_1 of table app.orders after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
 ```
 
-A constraint deferred to the commit that fails when the apply runs it, after its deletions, stops the apply as a write that fails does:
+A constraint deferred to the commit that fails when the apply runs it, after its deletions, stops the apply as a write that fails does, with advice that holds once every write of the apply has run, its deletions among them:
 
 ```text
-kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it before its commit: a row refers to a row that does not exist, or a deleted row is still referenced
+kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: a row refers to a row that does not exist, or a row that the apply deleted is still referenced: declare the referenced row, or keep in the declaration a row that other rows reference
 kortopi: nothing was changed
 ```
+
+A unique key or a primary key says `two rows hold the same value of the key: change the declared value, or the row of the database that holds it`, an exclusion constraint `two rows conflict on it: change the declared values, or the row of the database that conflicts with them`, and a constraint trigger, which can raise any error, `check the constraint triggers of the tables that the apply writes, and what their functions read and write`.
 
 The comparison reads the schema as it is now through a second connection, with the settings of the apply, to the address that its own connection reached. When that connection cannot be made, when its query fails, when a wait of it reaches its bound, or when it reaches another server or database than the apply, as a proxy or a connection pooler can send it, the apply stops too, before its commit, with an error that says so:
 
@@ -771,16 +777,18 @@ kortopi: nothing was changed
 The read of the second connection waits 5 seconds at most, or as long as `--lock-timeout` allows when that is shorter, and its connection 10 seconds at most, or as long as `connect_timeout` allows when that is shorter: a session that waits for a lock on a system catalog behind the apply itself, which holds its locks until it ends, would otherwise make both wait for each other without end, which PostgreSQL cannot see, since the cycle goes through kortopi.
 A connection that the bound ends says `could not open its second connection within 10s, the most that the check waits`, and that the server, or a connection pooler whose pool is full, did not accept a new connection in time.
 Another server or database says to connect kortopi to the server itself, with one host rather than a list of hosts, and not through a proxy or a connection pooler that may send a new connection to another server, or to apply without deleting rows.
+These errors are those of the second connection, so they do not advise `--lock-timeout`, as an error of a wait of the apply itself does: the flag can only make the bound of the second connection shorter.
 
 ### Rows that the deletions did not delete, or other rows that they deleted
 
 ```text
 kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table t.archive
-kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table t.events
+kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
+kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.events
 ```
 
 The counts are those of the transaction since its first deletion, so they hold what the constraint triggers deferred to the commit did too, also those that an insert or an update of the apply deferred: the apply runs them before these checks.
+The trigger or the rule that changed a table can belong to another table, such as a constraint trigger of a table that the apply wrote, so the advice says where to look for it.
 
 A cause that another transaction made goes away when the apply runs again; a trigger or a rule comes back every time.
 A foreign key, a partition, or disabled triggers of a foreign key that another session added after the apply began stop the apply before these checks ([The schema changed while the apply ran](#the-schema-changed-while-the-apply-ran)).

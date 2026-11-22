@@ -246,7 +246,7 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 挿入と更新のあと、最初の削除の直前に、apply は外部キーをもう一度たどり、着いたものを計画とステップごとに比べる。
 apply の書いた行に、計画から見えない参照があれば、そこで止まる。列の既定値・`on_insert` の値・トリガー・計画のあとに作られたルールが与えた参照である（[挿入と更新のあとで削除がほかの行に着く](#挿入と更新のあとで削除がほかの行に着く)）。
 削除のあとコミットの前に、apply はまず、書き込みがコミットまで遅らせた制約と制約トリガーを動かす。コミットと同じくセッションの設定で動かすので、外部キーの検査はこれですべて済む。
-次に、削除のすることを決めるスキーマを、スナップショットが見たものと今のものとで比べる。今のものは2つ目の接続が読む。比べるのは、削除する行を持つテーブルと削除が着くテーブルを参照する外部キーとそれらのテーブルが持つ外部キー、それらのテーブルのパーティションとそのデタッチが始まったか、トリガー、ルールである。
+次に、削除のすることを決めるスキーマを、スナップショットが見たものと今のものとで比べる。今のものは2つ目の接続が読む。比べるのは、削除する行を持つテーブルと削除が着くテーブルを参照する外部キーとそれらのテーブルが持つ外部キー、それらのテーブルのパーティションとそのデタッチが始まったか、トリガー、ルール、遅らせられる一意キー・主キー・排他制約である。
 apply が始まったあとにほかのセッションが外部キー・トリガー・ルール・パーティションを足すか削除するか変えていれば、apply は止まり、エラーがそれを挙げる。外部キーのトリガーを有効や無効にした場合も同じである。`DETACH PARTITION ... CONCURRENTLY` がデタッチを始めたパーティションも同じであり、外部キーの検査はそれをすぐに外す（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
 そこから先には、外部キーの検査も apply の書き込みも残らない。そのため、比較のあとにコミットしたスキーマの変更は、削除がしたことに働けない。
 スキーマの変更は kortopi の前にし、apply の間にはしない（[デプロイでの使い方](#デプロイでの使い方)）。
@@ -387,13 +387,15 @@ kortopi: nothing was changed
 
 削除のあとの検査の2つ目の接続がカタログを読んでいる間に割り込みが来ると（[削除の安全策](#削除の安全策)）、その読み取りのキャンセルをサーバーに求め、まず apply のセッションを終える。ロックと削除した行を持つのはこのセッションである。
 2つ目のセッションは、読み取りが終わってからそのあとに終える。それぞれが最大 5 秒の自分の待ちを持つので、サーバーがどちらにも答えなければ、kortopi は 10 秒以内に終わる。
-サーバーがその終わりを確かめなかったとき、apply のセッションは最初に挙げる。2つ目のセッションは、そのあとの自分の行で挙げる。
+サーバーがその終わりを確かめなかったとき、apply のセッションは最初に挙げる。2つ目のセッションは、そのあとの自分の行で挙げる。読み取りのあと、2つ目のセッションが閉じるところに割り込みが来たときも同じである。
 
 ```text
 kortopi: interrupted: the apply was stopped
 kortopi: the server did not confirm within 5s that the read-only session of the check after the deletions ended: its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 391, and end it with pg_cancel_backend(391), or with pg_terminate_backend(391) if it does not end
 kortopi: nothing was changed
 ```
+
+2つ目の接続がつなぐ最中や、そのトランザクションを始める最中の割り込みは、まずその接続を終わらせる。サーバーがそのためのセッションを始めていれば、それは自分の待ちを持つ。apply のセッションはそのあとに終える。それでも、行は apply のセッションを先に挙げる。
 
 この割り込みがあっても、キャンセル要求は送られる。kortopi は終了する前に、ドライバーがそれを送るのを最長1秒待つ。
 apply が別の apply を待っている間も同じである。
@@ -735,13 +737,15 @@ kortopi: after the inserts and updates, the deletion of rows of z.parent reaches
 ### apply の実行中にスキーマが変わったとき
 
 ```text
-kortopi: another session changed the schema while the apply ran: it added foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+kortopi: another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
 kortopi: nothing was changed
 ```
 
 ほかのセッションが、apply のスナップショットのあと、削除の前に外部キーを足した。そのため、計画はそのキーがすることを示さなかったが、PostgreSQL は削除とともにそれを動かした。
-エラーは、削除が着くテーブルの外部キー・パーティション・トリガー・ルールのうち、apply が見つけた最初の変更を挙げ、ほかの変更の数を数える。
-パーティションのアタッチやデタッチは、そのパーティションがもたらすか持ち去るオブジェクトより前に来る。そうしたオブジェクトは数えるだけで、挙げない。
+エラーは、apply が見つけた最初の変更を挙げ、ほかの変更の数を数える。対象は、削除が着くテーブルの外部キー・パーティション・トリガー・ルールと、遅らせられる一意キー・主キー・排他制約である。
+パーティションのアタッチやデタッチは、そのパーティションがもたらすか持ち去るオブジェクトより前に来る。その中のパーティションも含め、そうしたオブジェクトは数えるだけで、挙げない。
+apply はこれらのオブジェクトを名前で比べる。そのため、ほかのセッションが名前を変えたものは、1つを削除して1つを足したものに見え、エラーは `added or renamed`、`created or renamed`、`dropped or renamed` と言う。
+遅らせられる一意キー・主キー・排他制約は、それを検査するトリガーではなく、制約として自分の名前で挙げる。
 スキーマの変更がコミットしてから、apply をもう一度実行する。次の apply は、新しいスキーマで計画する。
 
 `DETACH PARTITION ... CONCURRENTLY` がデタッチを始めたパーティションも、apply を止める。外部キーの検査はそのパーティションをすぐに外すので、その行が失敗させるはずの削除が成功してしまうからである。
@@ -750,12 +754,18 @@ kortopi: nothing was changed
 kortopi: another session changed the schema while the apply ran: it began to detach partition app.orders_1 of table app.orders after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
 ```
 
-コミットまで遅らせた制約は、削除のあとで apply が動かす。そこで失敗すると、書き込みが失敗したときと同じく apply を止める。
+コミットまで遅らせた制約は、削除のあとで apply が動かす。そこで失敗すると、書き込みが失敗したときと同じく apply を止める。助言は、削除も含めて apply のすべての書き込みが済んだ時点で成り立つものである。
 
 ```text
-kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it before its commit: a row refers to a row that does not exist, or a deleted row is still referenced
+kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: a row refers to a row that does not exist, or a row that the apply deleted is still referenced: declare the referenced row, or keep in the declaration a row that other rows reference
 kortopi: nothing was changed
 ```
+
+ほかの種類の制約の助言は、次のとおりである。
+
+- 一意キーか主キー。`two rows hold the same value of the key: change the declared value, or the row of the database that holds it` である。
+- 排他制約。`two rows conflict on it: change the declared values, or the row of the database that conflicts with them` である。
+- どんなエラーも出しうる制約トリガー。`check the constraint triggers of the tables that the apply writes, and what their functions read and write` である。
 
 比較は、今のスキーマを、apply と同じ設定の2つ目の接続で読む。その接続は、apply の接続が届いたアドレスへつなぐ。次のときも、apply はコミットの前に止まり、エラーがそう伝える。その接続ができないとき、その問い合わせが失敗したとき、その待ちが上限に達したとき、プロキシやコネクションプーラーが送り先を変えて apply と別のサーバーやデータベースに届いたときである。
 
@@ -775,16 +785,18 @@ kortopi: nothing was changed
 上限が接続を終わらせたときは、`could not open its second connection within 10s, the most that the check waits` と伝える。
 サーバーか、プールのふさがったコネクションプーラーが、新しい接続を間に合うように受け付けなかったことも伝える。
 別のサーバーやデータベースに届いたときは、kortopi をサーバーそのものにつなぐよう伝える。ホストの一覧ではなく1つのホストを与え、新しい接続を別のサーバーに送りうるプロキシやコネクションプーラーを通さない。さもなければ、行を削除せずに apply する。
+これらは2つ目の接続のエラーなので、apply 自身の待ちのエラーと違い、`--lock-timeout` を勧めない。このフラグは、2つ目の接続の上限を短くするだけである。
 
 ### 削除が消さなかった行と、削除が消したほかの行
 
 ```text
 kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table t.archive
-kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of table t.events
+kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
+kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.events
 ```
 
 数は最初の削除からのトランザクションのものである。そのため、コミットまで遅らせた制約トリガーがしたことも含む。apply の挿入や更新が遅らせたものも同じである。apply はそれらをこれらの検査の前に動かすからである。
+テーブルを変えたトリガーやルールは、apply が書いたテーブルの制約トリガーのように、別のテーブルのものでありうる。そのため、助言はそれを探す場所を伝える。
 
 別のトランザクションが起こした原因は、apply をもう一度実行すれば消える。トリガーやルールは、毎回同じことをする。
 apply が始まったあとにほかのセッションが足した外部キー・パーティションや、無効にした外部キーのトリガーは、これらの検査より前に apply を止める（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
@@ -816,4 +828,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:42e3ffa0e4891966d2d56dce0bad5826f743ce054b539a982d0ba56faa6b7a04 -->
+<!-- i18n-source: apply.md sha256:596b596bf23d28bef654a5a6bf44797dae9b833985f0fea4e2081b6f829753b9 -->
