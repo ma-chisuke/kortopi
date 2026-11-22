@@ -154,7 +154,7 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 ```
 
 A limit that the session set says `as long as lock_timeout of the session allows`, and adds `or allow the wait more time with --lock-timeout`.
-`statement_timeout` of the session ends a statement that runs too long, for whatever reason, with an error of the same kind; kortopi has no flag for it.
+`statement_timeout` of the session ends a statement that runs too long, for whatever reason, a wait for a lock among them. The error then says that the statement was cancelled, by `statement_timeout` or by another session, and names no flag: kortopi has no flag for it.
 Give every run at deploy time a lock timeout, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
 
 ## What the session needs

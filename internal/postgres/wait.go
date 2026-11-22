@@ -87,14 +87,21 @@ func (s *Session) explainWait(ctx context.Context, err *error) {
 // and that the server has not ended yet.
 func (s *Session) waitForLockError(database string, err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && (pgErr.Code == lockNotAvailable || pgErr.Code == queryCanceled) {
-		limit := "lock_timeout or statement_timeout of the session"
-		if s.lockTimeout > 0 {
-			limit = "--lock-timeout " + s.lockTimeout.String()
-		}
-		return fmt.Errorf("wait for another apply on database %q: %w: the other apply held the lock of kortopi longer than %s allows: "+
-			"run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, "+
-			"as an apply that was stopped may leave it, and end it with pg_terminate_backend", database, err, limit)
+	if !errors.As(err, &pgErr) {
+		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
 	}
-	return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+	// What ended the wait: a lock timeout, which is the flag's when the run
+	// has one, or a cancel, which the flag never makes.
+	var what string
+	switch pgErr.Code {
+	case lockNotAvailable:
+		what = fmt.Sprintf("the other apply held the lock of kortopi longer than %s allows", s.lockLimit())
+	case queryCanceled:
+		what = "the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session"
+	default:
+		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+	}
+	return fmt.Errorf("wait for another apply on database %q: %w: %s: "+
+		"run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, "+
+		"as an apply that was stopped may leave it, and end it with pg_terminate_backend", database, err, what)
 }

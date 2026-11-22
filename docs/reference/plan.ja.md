@@ -154,7 +154,7 @@ kortopi: create the temporary table of table facility.room_types: ERROR: canceli
 ```
 
 セッションが設定した上限のときは `as long as lock_timeout of the session allows` となる。そして `or allow the wait more time with --lock-timeout` が足される。
-セッションの `statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、同じ種類のエラーを出す。kortopi にはそのためのフラグはない。
+セッションの `statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、ロックを待つ文も終わらせる。そのときのエラーは、`statement_timeout` かほかのセッションが文をキャンセルしたと伝え、フラグを挙げない。kortopi にはそのためのフラグがない。
 デプロイのときの実行には、毎回ロック待ちの上限を与える。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
 
 ## セッションに要るもの
@@ -665,4 +665,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:70b1919c61ce96ce8232e756a89615834e51db9b1c5e5e258a742a86c4156a4f -->
+<!-- i18n-source: plan.md sha256:c297873ec7e253cb6432276496a790a2a1cb58851a2c74a145c01f179c94e176 -->

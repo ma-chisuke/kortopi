@@ -452,6 +452,22 @@ func TestLockTimeoutInEachPhase(t *testing.T) {
 				lockError(t, err, start, "(SQLSTATE 55P03): the other apply held the lock of kortopi longer than")
 			})
 
+			// statement_timeout of the session ends the wait before the flag
+			// does, and the error names it, not the flag.
+			t.Run("the wait for another apply that statement_timeout ends", func(t *testing.T) {
+				db, cfg, dir := setup(t, statusSchema)
+				cfg.RuntimeParams["options"] = "-c statement_timeout=300ms"
+				holder(t, db, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", int64(lockKey)))
+				_, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true, LockTimeout: 10 * time.Second})
+				if err == nil {
+					t.Fatal("no error, want the end of the wait for another apply")
+				}
+				wantError(t, err, "(SQLSTATE 57014): the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session")
+				if strings.Contains(err.Error(), "--lock-timeout") {
+					t.Errorf("the error names --lock-timeout, which did not end the wait: %v", err)
+				}
+			})
+
 			for _, apply := range []bool{false, true} {
 				t.Run(fmt.Sprintf("the reads of apply %v", apply), func(t *testing.T) {
 					db, cfg, dir := setup(t, statusSchema)

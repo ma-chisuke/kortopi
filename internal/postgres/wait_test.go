@@ -80,18 +80,24 @@ func TestExplainWait(t *testing.T) {
 
 	stopped := "run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, " +
 		"as an apply that was stopped may leave it, and end it with pg_terminate_backend"
+	// The error names the limit that ended the wait: a lock timeout, of the
+	// flag or of the session, or a cancel, by statement_timeout or by another
+	// session, which the flag does not set.
+	cancelled := "the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session: "
 	for _, tt := range []struct {
-		s     *Session
-		limit string
+		s    *Session
+		err  *pgconn.PgError
+		what string
 	}{
-		{&Session{apply: true}, "lock_timeout or statement_timeout of the session"},
-		{&Session{apply: true, lockTimeout: 3 * time.Second}, "--lock-timeout 3s"},
+		{&Session{apply: true}, lock, "the other apply held the lock of kortopi longer than lock_timeout of the session allows: "},
+		{&Session{apply: true, lockTimeout: 3 * time.Second}, lock, "the other apply held the lock of kortopi longer than --lock-timeout 3s allows: "},
+		{&Session{apply: true}, cancel, cancelled},
+		{&Session{apply: true, lockTimeout: 10 * time.Second}, cancel, cancelled},
 	} {
-		err := tt.s.waitForLockError("app", lock)
-		want := `wait for another apply on database "app": ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): ` +
-			"the other apply held the lock of kortopi longer than " + tt.limit + " allows: " + stopped
-		if err.Error() != want || !errors.Is(err, lock) {
-			t.Errorf("waitForLockError =\n%s\nwant\n%s", err, want)
+		err := tt.s.waitForLockError("app", tt.err)
+		want := `wait for another apply on database "app": ` + tt.err.Error() + ": " + tt.what + stopped
+		if err.Error() != want || !errors.Is(err, tt.err) {
+			t.Errorf("waitForLockError with --lock-timeout %v =\n%s\nwant\n%s", tt.s.lockTimeout, err, want)
 		}
 	}
 	if err := (&Session{apply: true}).waitForLockError("app", other); err.Error() != `wait for another apply on database "app": `+other.Error() {

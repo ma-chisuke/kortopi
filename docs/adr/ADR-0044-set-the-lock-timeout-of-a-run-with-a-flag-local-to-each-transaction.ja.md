@@ -51,7 +51,7 @@ kortopi の実行は、そのすべての待ちに効くロック待ちの上限
   kortopi: update table m.status: canceling statement due to lock timeout: another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as --lock-timeout 10s allows: run the apply again once that session has released the lock
   ```
 
-  フラグがなければ `lock_timeout of the session` を挙げ、`or allow the wait more time with --lock-timeout` を足す。別の apply を待つときのエラーは、フラグか `lock_timeout or statement_timeout of the session` を挙げる。そして、止められた apply のセッションがロックを持ったままかもしれないこと、それは `pg_stat_activity` に表れ `pg_terminate_backend` で終わらせられることを足す（ADR-0043）。
+  フラグがなければ `lock_timeout of the session` を挙げ、`or allow the wait more time with --lock-timeout` を足す。別の apply を待つときのエラーも、ロック待ちの上限が待ちを終わらせたときは、同じようにその上限を挙げる。セッションの `statement_timeout` かほかのセッションが待ちをキャンセルしたときは、そう伝え、フラグを挙げない。フラグは `statement_timeout` を設定しないからである。そして、止められた apply のセッションがロックを持ったままかもしれないこと、それは `pg_stat_activity` に表れ `pg_terminate_backend` で終わらせられることを足す（ADR-0043）。
 - リファレンスは、ロック待ちの上限に `PGOPTIONS` を勧めるのをやめる。フラグを勧め、トランザクションモードのコネクションプーラーの後ろではサーバーに届かないものを伝える。`PGOPTIONS` のような起動パラメータと、セッションの設定全般である。
 
 kortopi 自身の文の時間の上限は、この決定に含めない。長すぎる文は今もセッションの `statement_timeout` が終わらせ、それにはプーラーの後ろで同じ問題がある。同じ種類のフラグは、後の記録で与えられる。
@@ -112,4 +112,4 @@ kortopi 自身の文の時間の上限は、この決定に含めない。長す
 - [`lock_timeout`](https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-LOCK-TIMEOUT) と [`SET LOCAL`](https://www.postgresql.org/docs/current/sql-set.html)
 - 利用者向けの説明：[docs/reference/plan.ja.md](../reference/plan.ja.md#接続の設定)、[docs/reference/apply.ja.md](../reference/apply.ja.md#デプロイでの使い方)、[docs/reference/automation.ja.md](../reference/automation.ja.md#デプロイのとき)
 
-<!-- i18n-source: ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md sha256:2325cc590362281742b451832584baf3e3cc8ca547212fa51ca4e7bb5a47e661 -->
+<!-- i18n-source: ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md sha256:7ec03d0d11b4c50b62eed3e1e8744ce047f419a946bd261aece63c9cb9238dbd -->

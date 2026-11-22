@@ -349,6 +349,12 @@ kortopi: wait for another apply on database "app": ERROR: canceling statement du
 kortopi: nothing was changed
 ```
 
+セッションの `statement_timeout` かほかのセッションが待ちをキャンセルしたときは、エラーはそのことを次のように伝え、フラグを挙げない。
+
+```text
+the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session
+```
+
 ## デプロイでの使い方
 
 スキーマの変更を先に、スキーマを変える道具で適用し、行をそのあとに適用する。
@@ -570,4 +576,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:54ce7acdda6f93729aa428c163d7a5eeeba87a6cccb5ddabeed981d3eb7a7e80 -->
+<!-- i18n-source: apply.md sha256:84aeeb50265aa486d96f077620e7622ee45d84fc573e0537a1409d07e4749cdd -->

@@ -347,6 +347,12 @@ kortopi: wait for another apply on database "app": ERROR: canceling statement du
 kortopi: nothing was changed
 ```
 
+When `statement_timeout` of the session, or another session, cancels the wait instead, the error says so, and names no flag:
+
+```text
+the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session
+```
+
 ## In a deployment
 
 Apply the schema first, with the tool that changes your schema, and the rows second.

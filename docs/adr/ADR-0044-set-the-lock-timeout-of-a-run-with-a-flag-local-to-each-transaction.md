@@ -51,7 +51,7 @@ The rules are as follows.
   kortopi: update table m.status: canceling statement due to lock timeout: another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as --lock-timeout 10s allows: run the apply again once that session has released the lock
   ```
 
-  Without the flag, it names `lock_timeout of the session`, and adds `or allow the wait more time with --lock-timeout`. The wait for another apply names the flag, or `lock_timeout or statement_timeout of the session`, and adds that the session of an apply that was stopped may still hold the lock, which `pg_stat_activity` shows and `pg_terminate_backend` ends (ADR-0043).
+  Without the flag, it names `lock_timeout of the session`, and adds `or allow the wait more time with --lock-timeout`. The wait for another apply names the limit that ended it in the same way when a lock timeout ended it; when `statement_timeout` of the session, or another session, cancelled it, it says so and names no flag, because the flag sets no `statement_timeout`. It adds that the session of an apply that was stopped may still hold the lock, which `pg_stat_activity` shows and `pg_terminate_backend` ends (ADR-0043).
 - The reference no longer recommends `PGOPTIONS` for the lock timeout. It recommends the flag, and says what does not reach the server behind a connection pooler in transaction mode: the start-up parameters, such as `PGOPTIONS`, and the settings of a session in general.
 
 A statement timeout of kortopi's own is not part of this decision. `statement_timeout` of the session still ends a statement that runs too long, and has the same problem behind a pooler; a later record can give it a flag of the same kind.
