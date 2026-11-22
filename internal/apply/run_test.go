@@ -680,23 +680,55 @@ func TestRun(t *testing.T) {
 			wantErr: "the update of table z.parent updated 0 rows, but its pick took 1 row: a trigger BEFORE UPDATE that returns NULL, ",
 		},
 		{
-			name:     "a deletion deletes fewer rows than the plan shows",
+			// Another write of the apply deleted a row to delete first.
+			name:     "a deletion whose pick takes fewer rows than the plan shows",
 			settings: sync,
 			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete a.child": 1}},
 			opts:     all,
 			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child"),
-			wantErr: "the deletion from table a.child deleted 1 row, but the plan has 2 rows to delete: " +
-				"a trigger, a rule created after the plan, or the cascade of a foreign key changed what the statement did, " +
-				"and an apply deletes exactly the rows that its plan shows, so it stops",
+			wantErr: "the deletion from table a.child found 1 row to delete, but the plan has 2: " +
+				"another write of the apply had deleted rows that the plan deletes before the deletion, through a trigger, a rule, or the action of a foreign key, " +
+				"and an apply deletes exactly the rows that its plan shows, so it stops: " +
+				"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, " +
+				"or change the trigger, the rule, or the foreign key that deletes them while the apply writes",
 		},
 		{
-			name:     "a deletion deletes more rows than the plan shows",
+			// Another write of the apply added a row that the declaration
+			// lacks.
+			name:     "a deletion whose pick takes more rows than the plan shows",
 			settings: sync,
 			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete z.parent": 2}},
 			opts:     all,
 			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child",
 				"Delete a.child", "Delete z.parent"),
-			wantErr: "the deletion from table z.parent deleted 2 rows, but the plan has 1 row to delete: ",
+			wantErr: "the deletion from table z.parent found 2 rows to delete, but the plan has 1: " +
+				"another write of the apply added rows that the declaration lacks to the table after the plan, through a trigger, a rule, or the action of a foreign key, " +
+				"and an apply deletes only the rows that its plan shows, so it stops: " +
+				"declare the rows that those writes add, or change the trigger, the rule, or the foreign key that adds them",
+		},
+		{
+			// A trigger BEFORE DELETE that returns NULL keeps a row.
+			name:     "a deletion that deletes fewer rows than its pick took",
+			settings: sync,
+			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete a.child": 1},
+				picked: map[string]int{"Delete a.child": 2}},
+			opts: all,
+			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child"),
+			wantErr: "the deletion from table a.child deleted 1 row, but its pick took 2 rows: a trigger BEFORE DELETE that returns NULL, " +
+				"a policy of row-level security, or a rule created after the plan changed what the statement did, " +
+				"and an apply writes exactly the rows that it picks, so it stops: change the trigger, the policy, or the rule of table a.child, " +
+				"or leave the table out of the declaration",
+		},
+		{
+			// The pick and the statement both took more rows than the plan
+			// shows: the pick is held to the plan first.
+			name:     "a deletion that deletes as many rows as its pick took, more than the plan shows",
+			settings: sync,
+			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Delete a.child": 3},
+				picked: map[string]int{"Delete a.child": 3}},
+			opts:    all,
+			want:    append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child"),
+			wantErr: "the deletion from table a.child found 3 rows to delete, but the plan has 2: ",
 		},
 		{
 			name:     "the commit fails",

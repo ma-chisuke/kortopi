@@ -27,15 +27,12 @@ const (
 // shows, so every other count stops it. planned is the number of rows of the
 // kind that the plan shows for the table.
 func CheckCount(table declaration.TableName, kind string, planned int, c Count) error {
-	if kind == KindDelete {
-		if c.Wrote != planned {
-			return deletedOtherRows(table, c.Wrote, planned)
-		}
-		return nil
-	}
 	what, verb, when := "the update of table "+table.String(), "updated", "UPDATE"
-	if kind == KindInsert {
+	switch kind {
+	case KindInsert:
 		what, verb, when = "the insert into table "+table.String(), "inserted", "INSERT"
+	case KindDelete:
+		what, verb, when = "the deletion from table "+table.String(), "deleted", "DELETE"
 	}
 	switch {
 	case c.Wrote != c.Picked:
@@ -43,6 +40,17 @@ func CheckCount(table declaration.TableName, kind string, planned int, c Count) 
 			"or a rule created after the plan changed what the statement did, and an apply writes exactly the rows that it picks, so it stops: "+
 			"change the trigger, the policy, or the rule of table %s, or leave the table out of the declaration",
 			what, verb, rows(c.Wrote), rows(c.Picked), when, table)
+	case c.Picked > planned && kind == KindDelete:
+		return fmt.Errorf("%s found %s to delete, but the plan has %d: another write of the apply added rows that the declaration lacks to the table after the plan, "+
+			"through a trigger, a rule, or the action of a foreign key, and an apply deletes only the rows that its plan shows, so it stops: "+
+			"declare the rows that those writes add, or change the trigger, the rule, or the foreign key that adds them",
+			what, rows(c.Picked), planned)
+	case c.Picked < planned && kind == KindDelete:
+		return fmt.Errorf("%s found %s to delete, but the plan has %d: another write of the apply had deleted rows that the plan deletes before the deletion, "+
+			"through a trigger, a rule, or the action of a foreign key, and an apply deletes exactly the rows that its plan shows, so it stops: "+
+			"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, "+
+			"or change the trigger, the rule, or the foreign key that deletes them while the apply writes",
+			what, rows(c.Picked), planned)
 	case c.Picked > planned && kind == KindInsert:
 		return fmt.Errorf("%s found %s to insert, but the plan has %d: another write of the apply deleted declared rows of the table after the plan, "+
 			"through a trigger or a rule, and an apply writes only the rows that its plan shows, so it stops: "+
@@ -62,13 +70,4 @@ func CheckCount(table declaration.TableName, kind string, planned int, c Count) 
 			what, rows(c.Picked), planned, table)
 	}
 	return nil
-}
-
-// deletedOtherRows is the error of a deletion that deleted another number of
-// rows than the plan shows. A deletion keeps its strict count (ADR-0042):
-// the check after the deletions counts on it (ADR-0039).
-func deletedOtherRows(table declaration.TableName, got, want int) error {
-	return fmt.Errorf("the deletion from table %s deleted %s, but the plan has %s: "+
-		"a trigger, a rule created after the plan, or the cascade of a foreign key changed what the statement did, "+
-		"and an apply deletes exactly the rows that its plan shows, so it stops", table, rows(got), rowsTo(want, KindDelete))
 }

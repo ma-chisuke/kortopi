@@ -325,9 +325,11 @@ func TestApplyChecksTheResult(t *testing.T) {
 					modes:  map[declaration.TableName]config.Mode{{Schema: "app", Name: "t"}: config.ModeSync},
 					delete: true,
 					rows:   "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
-					wantErr: "the deletion from table app.t deleted 0 rows, but the plan has 1 row to delete: " +
-						"a trigger, a rule created after the plan, or the cascade of a foreign key changed what the statement did, " +
-						"and an apply deletes exactly the rows that its plan shows, so it stops",
+					wantErr: "the deletion from table app.t found 0 rows to delete, but the plan has 1: " +
+						"another write of the apply had deleted rows that the plan deletes before the deletion, through a trigger, a rule, or the action of a foreign key, " +
+						"and an apply deletes exactly the rows that its plan shows, so it stops: " +
+						"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, " +
+						"or change the trigger, the rule, or the foreign key that deletes them while the apply writes",
 				},
 				{
 					name: "a trigger that writes a declared row of another table to its declared values",
