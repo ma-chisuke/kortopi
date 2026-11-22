@@ -169,8 +169,6 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |
 | partition, attach and detach (a partition) | パーティション、アタッチする、デタッチする |
-| storage (of a table), rewrite (a table, by a schema change that gives it new storage) | ストレージ、書き換える |
-| MVCC-safe (a command of PostgreSQL) | MVCC に対して安全 |
 | inherit (from a table) | 継承する |
 | text form (of a value) | テキスト表現 |
 | byte order mark | バイトオーダーマーク |
