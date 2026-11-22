@@ -1,0 +1,17 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 1 to insert, 0 to update, 0 to delete in 8 tables.
+-- Not declared: 21 stored rows in 6 tables, which modes upsert and insert do not delete; the rows of 1 more table are not counted.
+-- Run the statements in one transaction.
+-- app.c: known after the schema is applied (2 declared rows); the script has no statement for it.
+-- app.a: 1 stored row is not declared, which mode upsert does not delete
+-- app.b: 2 stored rows are not declared, which mode upsert does not delete
+-- app.d: 3 stored rows are not declared, which mode upsert does not delete
+-- app.e: 4 stored rows are not declared, which mode upsert does not delete
+-- app.f: 5 stored rows are not declared, which mode insert does not delete
+-- 2 more tables hold 6 stored rows that are not declared, and the rows of 1 of them are not counted.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- app.f: 1 to insert
+INSERT INTO app.f (1, n1);

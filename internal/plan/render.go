@@ -43,7 +43,7 @@ func (p *Plan) EmptyLines() []string {
 			}
 		}
 	}
-	undeclared := p.undeclaredLines()
+	undeclared := UndeclaredGroup(p.UndeclaredTables())
 	if len(insert) == 0 && len(undeclared) == 0 {
 		return []string{strings.TrimSuffix(noChanges, "\n")}
 	}
@@ -103,10 +103,11 @@ func (d *TableDiff) changes() bool {
 // foreign keys. A table whose mode deletes no row gets the line of
 // UndeclaredLine after its counts, when it holds stored rows that the
 // declaration lacks (ADR-0046). A table that the database does not have yet
-// gets one line, and so does a table without changes that holds such rows.
-// Other tables without changes get no block, and the summary at the end
-// counts them, with the lines of EffectSummary and UndeclaredSummary. An
-// empty plan prints the lines of EmptyLines.
+// gets one line. The tables without changes that hold such rows get no
+// block: the lines of UndeclaredGroup name at most five of them after the
+// blocks, and count the others. Other tables without changes get no line,
+// and the summary at the end counts them, with the lines of EffectSummary
+// and UndeclaredSummary. An empty plan prints the lines of EmptyLines.
 //
 // A value prints as the database prints it, and NULL as NULL. A value that
 // could be misread prints in double quotes with the escapes of Go: an empty
@@ -132,8 +133,7 @@ func Render(w io.Writer, p *Plan) error {
 		switch {
 		case t.unchanged() && t.counts():
 			// A table without a block still shows the stored rows that the
-			// declaration lacks, on a line of its own (ADR-0046).
-			b.WriteString(FormatTable(t.Name) + ": " + UndeclaredLine(t) + "\n\n")
+			// declaration lacks, in the group after the blocks (ADR-0046).
 			continue
 		case t.unchanged():
 			unchanged++
@@ -145,6 +145,9 @@ func Render(w io.Writer, p *Plan) error {
 			return err
 		}
 		b.WriteString("\n")
+	}
+	if group := UndeclaredGroup(p.undeclaredTables(true)); len(group) > 0 {
+		b.WriteString(strings.Join(group, "\n") + "\n\n")
 	}
 
 	fmt.Fprintf(&b, "Plan: %d to insert, %d to update, %d to delete in %s.\n",

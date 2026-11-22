@@ -1,0 +1,15 @@
+geo.zones (upsert, key: id)
+  ~ id=1  name: a -> b
+  0 to insert, 1 to update
+  4 stored rows are not declared, which mode upsert does not delete
+
+app.t01: 1 stored row is not declared, which mode upsert does not delete
+app.t02: the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+app.t03: 3 stored rows are not declared, which mode upsert does not delete
+app.t04: 4 stored rows are not declared, which mode upsert does not delete
+app.t05: 5 stored rows are not declared, which mode upsert does not delete
+3 more tables hold 21 stored rows that are not declared.
+
+Plan: 0 to insert, 1 to update, 0 to delete in 10 tables.
+Not declared: 38 stored rows in 8 tables, which mode upsert does not delete; the rows of 1 more table are not counted.
+1 table without changes is not shown.

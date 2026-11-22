@@ -1,0 +1,8 @@
+No changes. There is nothing to apply.
+app.t01: 1 stored row is not declared, which mode upsert does not delete
+app.t02: 2 stored rows are not declared, which mode upsert does not delete
+app.t03: 3 stored rows are not declared, which mode upsert does not delete
+app.t04: 4 stored rows are not declared, which mode upsert does not delete
+app.t05: 5 stored rows are not declared, which mode upsert does not delete
+2 more tables hold 7 stored rows that are not declared, and the rows of 1 of them are not counted.
+Not declared: 22 stored rows in 6 tables, which mode upsert does not delete; the rows of 1 more table are not counted.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -45,6 +46,20 @@ func unchangedTable(schema, table string) Table {
 func withUndeclared(t Table, n int) Table {
 	t.Diff.Undeclared = n
 	return t
+}
+
+// manyUndeclared returns n tables of schema app in mode upsert without
+// changes, the table number i with i stored rows that the declaration lacks,
+// but the table number uncounted, whose such rows are not counted.
+func manyUndeclared(n, uncounted int) []Table {
+	tables := make([]Table, n)
+	for i := range tables {
+		tables[i] = withUndeclared(unchangedTable("app", fmt.Sprintf("t%02d", i+1)), i+1)
+		if i+1 == uncounted {
+			tables[i] = withUncounted(withUndeclared(tables[i], 0))
+		}
+	}
+	return tables
 }
 
 // withUncounted returns t whose stored rows that the declaration lacks the
@@ -330,6 +345,20 @@ func TestRender(t *testing.T) {
 				withUndeclared(insertTable("codes"), 2),
 				withUncounted(unchangedTable("app", "huge")),
 			}},
+		},
+		{
+			// Tables without a block that hold stored rows that the
+			// declaration lacks are named in one group, five at most, and a
+			// line counts the others (ADR-0046).
+			name: "undeclared_many",
+			plan: &Plan{Tables: append(manyUndeclared(8, 2), Table{
+				Name: name("geo", "zones"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+				Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}, Undeclared: 4},
+			}, unchangedTable("geo", "zz"))},
+		},
+		{
+			name: "no_changes_undeclared_many",
+			plan: &Plan{Tables: manyUndeclared(7, 6)},
 		},
 		{
 			// The deletion of a row of a table of mode sync cascades into a

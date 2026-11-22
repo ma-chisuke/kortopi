@@ -179,9 +179,11 @@ const onInsertNote = "The database reads the values of on_insert when the script
 	"a value such as now is the time of the transaction that runs the script."
 
 // writeHeader writes the header comment: where the plan comes from, its
-// counts, the stored rows that the declaration lacks in tables whose modes
-// delete no row (ADR-0046), the tables and columns that wait for the schema
-// change, and how to run the script.
+// counts, the line that sums up the stored rows that the declaration lacks
+// in tables whose modes delete no row (ADR-0046), how to run the script, the
+// tables and columns that wait for the schema change, and, after them, the
+// lines of the tables that hold such rows, at most five of them and a line
+// that counts the others.
 func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 	source := "Written by kortopi from the data directory " + text(h.Dir)
 	if h.Database != "" {
@@ -217,9 +219,11 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 			comment(b, fmt.Sprintf("%s: column %s of on_insert in %s is known after the schema is applied; the statements leave it out.",
 				plan.FormatTable(t.Name), plan.FormatName(c), config.FileName))
 		}
-		if line := plan.UndeclaredLine(t); line != "" {
-			comment(b, plan.FormatTable(t.Name)+": "+line)
-		}
+	}
+	// The stored rows that the declaration lacks come after every line of
+	// the schema change, named for five tables at most (ADR-0046).
+	for _, line := range plan.UndeclaredGroup(p.UndeclaredTables()) {
+		comment(b, line)
 	}
 }
 

@@ -69,3 +69,51 @@ func TestUndeclaredRowsCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestUndeclaredRowsThatADeletionReaches runs, against each version, a
+// table of mode sync whose deletion cascades into a row of a table of mode
+// upsert that the declaration lacks. The line of that table says only that
+// its mode deletes none of its rows, the effect of the deletion says that it
+// deletes the row, and an apply with --allow-delete does (ADR-0039,
+// ADR-0046). It sets the environment, so it does not run in parallel with
+// other tests.
+func TestUndeclaredRowsThatADeletionReaches(t *testing.T) {
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := srv.Database(t)
+			db.Exec(t, `CREATE SCHEMA app;
+				CREATE TABLE app.parent (id int PRIMARY KEY, name text NOT NULL);
+				CREATE TABLE app.child (id int PRIMARY KEY, parent_id int NOT NULL REFERENCES app.parent ON DELETE CASCADE, note text);
+				INSERT INTO app.parent VALUES (1, 'a'), (2, 'b');
+				INSERT INTO app.child VALUES (10, 1, 'x'), (20, 2, 'y');`)
+			e := connect(t, db)
+			dir := writeFiles(t, map[string]string{
+				"app/parent.csv": "id,name\n1,a\n",
+				"app/child.csv":  "id,parent_id,note\n10,1,x\n",
+				"kortopi.toml":   "[tables.\"app.parent\"]\nmode = \"sync\"\n",
+			})
+			want := lines(
+				"app.parent (sync, key: id)",
+				"  - id=2",
+				"  0 to insert, 0 to update, 1 to delete",
+				"  Through foreign keys, the deletion of this row also reaches other rows:",
+				"    1 row of app.child (parent_id) references it through child_parent_id_fkey, ON DELETE CASCADE, so the deletion deletes this row too.",
+				"",
+				"app.child: 1 stored row is not declared, which mode upsert does not delete",
+				"",
+				"Plan: 0 to insert, 0 to update, 1 to delete in 2 tables.",
+				"Through foreign keys, the deletion also deletes 1 row.",
+				"Not declared: 1 stored row in 1 table, which mode upsert does not delete.")
+			code, stdout, stderr := e.command(t, "plan", "--dir", dir, "--exit-code")
+			checkRun(t, code, stdout, stderr, exitChanges, want)
+
+			code, stdout, stderr = e.command(t, "apply", "--dir", dir, "--allow-delete")
+			checkRun(t, code, stdout, stderr, exitOK, want+lines("",
+				"Applied: 0 inserted, 0 updated, 1 deleted.",
+				"Through foreign keys, the deletion also deleted 1 row."))
+			if got := db.Query(t, "SELECT string_agg(id::text, ' ' ORDER BY id) FROM app.child"); fmt.Sprint(got) != "[[10]]" {
+				t.Errorf("rows of app.child after the apply: %v, want the declared row alone", got)
+			}
+		})
+	}
+}

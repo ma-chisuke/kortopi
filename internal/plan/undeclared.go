@@ -2,6 +2,7 @@ package plan
 
 import (
 	"slices"
+	"strconv"
 
 	"github.com/ma-chisuke/kortopi/internal/config"
 )
@@ -78,18 +79,67 @@ func (p *Plan) UndeclaredSummary() string {
 	return line + "."
 }
 
-// undeclaredLines returns the line of each table of the plan that holds
-// stored rows that the declaration lacks, or whose such rows are not
-// counted, after the name of the table, in the order of the tables.
-func (p *Plan) undeclaredLines() []string {
+// UndeclaredGroup returns the lines of the stored rows that the declaration
+// lacks for the tables of tables that hold such rows, or whose such rows are
+// not counted (ADR-0046): a line for each of the first maxNamed of them, in
+// the order of tables, which is that of the plan, as in "geo.currency: 1
+// stored row is not declared, which mode upsert does not delete", and a line
+// that counts the others and their rows, as in "45 more tables hold 45
+// stored rows that are not declared." So the group never grows beyond
+// maxNamed+1 lines, as the line that names the tables of mode insert never
+// names more than maxNamed of them (ADR-0031). A plan prints the group of the
+// tables without a block after the blocks, and an empty plan the group of
+// all such tables after its first lines; the plan as SQL writes the group of
+// all such tables as comments.
+func UndeclaredGroup(tables []*Table) []string {
+	var lines []string
+	var rest, restRows, restUncounted int
+	for _, t := range tables {
+		switch {
+		case !t.counts():
+		case len(lines) < maxNamed:
+			lines = append(lines, FormatTable(t.Name)+": "+UndeclaredLine(t))
+		default:
+			rest++
+			restRows += t.Diff.Undeclared
+			if t.Diff.Uncounted != "" {
+				restUncounted++
+			}
+		}
+	}
+	switch {
+	case rest == 0:
+		return lines
+	case restUncounted == rest:
+		return append(lines, "The stored rows that are not declared are not counted in "+count(rest, "more table", "more tables")+".")
+	}
+	more := count(rest, "more table holds", "more tables hold") + " " + count(restRows, "stored row that is", "stored rows that are") + " not declared"
+	if restUncounted > 0 {
+		more += ", and the rows of " + strconv.Itoa(restUncounted) + " of them are not counted"
+	}
+	return append(lines, more+".")
+}
+
+// undeclaredTables returns the tables of the plan that have a line of the
+// stored rows that the declaration lacks, in the order of the plan, and,
+// with blockless, only those that have no block, because nothing else of
+// them shows.
+func (p *Plan) undeclaredTables(blockless bool) []*Table {
 	if p == nil {
 		return nil
 	}
-	var lines []string
+	var tables []*Table
 	for i := range p.Tables {
-		if line := UndeclaredLine(&p.Tables[i]); line != "" {
-			lines = append(lines, FormatTable(p.Tables[i].Name)+": "+line)
+		if t := &p.Tables[i]; t.counts() && (!blockless || t.unchanged()) {
+			tables = append(tables, t)
 		}
 	}
-	return lines
+	return tables
+}
+
+// UndeclaredTables returns the tables of the plan that have a line of the
+// stored rows that the declaration lacks, in the order of the plan, for
+// UndeclaredGroup.
+func (p *Plan) UndeclaredTables() []*Table {
+	return p.undeclaredTables(false)
 }
