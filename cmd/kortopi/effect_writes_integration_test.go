@@ -79,12 +79,12 @@ func TestApplyAfterItsWrites(t *testing.T) {
 					wantErr: "kortopi: {dir}/m/item.csv: after the inserts and updates of the apply, the declared row of table m.item references a row that the deletions remove, " +
 						`through foreign key "item_bucket_id_fkey" (bucket_id) to table t.bucket, so ON DELETE CASCADE would delete it too, which the plan did not count: ` +
 						"id=1 references id=7 (a row that ON DELETE CASCADE deletes): the apply wrote the reference through a default of a column, " +
-						"a value of on_insert, a trigger, or a rule, which the plan cannot see: declare the columns of the foreign key with a row that stays, " +
+						"a value of on_insert, a trigger, or a rule created after the plan, which the plan cannot see: declare the columns of the foreign key with a row that stays, " +
 						"or delete the rows in a run of their own\n" +
 						"kortopi: {dir}/m/part.csv: after the inserts and updates of the apply, the declared row of table m.part references a row that the deletions remove, " +
 						`through foreign key "part_bucket_id_fkey" (bucket_id) to table t.bucket, so ON DELETE CASCADE would delete it too, which the plan did not count: ` +
 						"id=1 references id=7 (a row that ON DELETE CASCADE deletes): the apply wrote the reference through a default of a column, " +
-						"a value of on_insert, a trigger, or a rule, which the plan cannot see: declare the columns of the foreign key with a row that stays, " +
+						"a value of on_insert, a trigger, or a rule created after the plan, which the plan cannot see: declare the columns of the foreign key with a row that stays, " +
 						"or delete the rows in a run of their own\n" +
 						"kortopi: nothing was changed\n",
 					wantRows: []string{"plan basic legacy", "bucket 7 8", "item 0", "part 0"},

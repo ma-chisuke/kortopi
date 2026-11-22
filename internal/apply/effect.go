@@ -15,8 +15,8 @@ import (
 // an error when it differs from the effect of the plan (ADR-0039). The plan
 // takes a declared row as the apply leaves it; a value that the apply wrote
 // and that the declaration does not show, through a default of a column, a
-// value of on_insert, a trigger, or a rule, can make the deletions reach
-// other rows than the plan counted.
+// value of on_insert, a trigger, or a rule created after the plan
+// (ADR-0038), can make the deletions reach other rows than the plan counted.
 func checkEffectAgain(ctx context.Context, decl *declaration.Declaration, db Database, p *plan.Plan, names []declaration.TableName) error {
 	again, err := db.Effects(ctx, names)
 	if err != nil {

@@ -54,11 +54,14 @@ func (s *Session) writtenRows(ctx context.Context) (map[uint32]written, error) {
 //     deletion, by the partitioned table at the top of each relation.
 //
 // The first finds a row that another transaction deleted, or pointed at
-// another row, after the snapshot, or that a trigger BEFORE DELETE, a rule,
-// or disabled triggers kept. The second finds rows that a foreign key or a
-// partition that another transaction added after the snapshot, which a
-// query of the catalogs in the snapshot cannot see, a trigger, or a rule
-// made the deletions delete or change.
+// another row, after the snapshot, or that a trigger BEFORE DELETE, a rule of
+// a table that the deletions reach, or disabled triggers kept. The second
+// finds rows that a foreign key or a partition that another transaction
+// added after the snapshot, which a query of the catalogs in the snapshot
+// cannot see, a trigger, or a rule of a table that the deletions reach made
+// the deletions delete or change. A plan stops on the rules of the declared
+// tables that its apply would fire (ADR-0038), but not on those of the other
+// tables that a cascade reaches.
 func (s *Session) CheckEffect(ctx context.Context) (err error) {
 	defer s.explainWait(ctx, &err)
 	if !s.apply {
@@ -121,7 +124,7 @@ func (s *Session) checkReachedRows(ctx context.Context) error {
 		if left > 0 {
 			return fmt.Errorf("the deletions did not delete or change %d %s of table %s that the plan counted: "+
 				"another transaction deleted %s or pointed %s at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE "+
-				"that returns NULL, a rule, or disabled triggers of a foreign key kept %s, so nothing was written: "+
+				"that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept %s, so nothing was written: "+
 				"run the apply again, and if this happens again, check the triggers and the rules of table %s",
 				left, plural(left, "row", "rows"), t.name, plural(left, "it", "them"), plural(left, "it", "them"), plural(left, "it", "them"), t.name)
 		}
@@ -204,7 +207,7 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			what = fmt.Sprintf("changed %d %s of table %s, which the plan did not count", got.updated, plural(got.updated, "row", "rows"), name)
 		}
 		return fmt.Errorf("the deletions %s: a foreign key or a partition that another transaction added while the apply ran, "+
-			"a trigger, a rule, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: "+
+			"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: "+
 			"run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table %s", what, name)
 	}
 	return nil

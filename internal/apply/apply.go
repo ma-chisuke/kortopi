@@ -57,8 +57,9 @@ type Database interface {
 	// counted as deleted or changed through a foreign key is gone or changed,
 	// and no table lost or changed other rows, as a foreign key or a
 	// partition that another transaction added during the apply, a trigger,
-	// or a rule could make them do. An error stops the apply, which then
-	// rolls back.
+	// or a rule of a table that the deletions reach could make them do. An
+	// error stops the apply, which then rolls back. Nothing that changes rows
+	// runs between it and Commit.
 	CheckEffect(ctx context.Context) error
 
 	// Commit makes the changes lasting. Without it, closing the session

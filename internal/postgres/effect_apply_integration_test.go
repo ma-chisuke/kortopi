@@ -30,10 +30,10 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 		t.Run(srv.Name, func(t *testing.T) {
 			t.Parallel()
 			keptCauses := "another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE " +
-				"that returns NULL, a rule, or disabled triggers of a foreign key kept it, so nothing was written: " +
+				"that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept it, so nothing was written: " +
 				"run the apply again, and if this happens again, check the triggers and the rules of table t.lines"
 			beyondCauses := ": a foreign key or a partition that another transaction added while the apply ran, " +
-				"a trigger, a rule, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: " +
+				"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: " +
 				"run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table "
 			for _, tt := range []struct {
 				name       string

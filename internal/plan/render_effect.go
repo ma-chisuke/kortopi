@@ -250,8 +250,8 @@ func ConflictError(file string, key []string, c Conflict) error {
 // ConflictAfterWrites returns the mistake of a conflict that the walk finds
 // again after the inserts and updates of an apply, and that the plan did not
 // find: a row that the apply wrote got its reference from a default of a
-// column, a value of on_insert, a trigger, or a rule, which the plan could
-// not see.
+// column, a value of on_insert, a trigger, or a rule created after the plan
+// (ADR-0038), which the plan could not see.
 func ConflictAfterWrites(file string, key []string, c Conflict) error {
 	return conflictError(file, key, c, true)
 }
@@ -319,7 +319,7 @@ func conflictError(file string, key []string, c Conflict, afterWrites bool) erro
 // WriterCauses lists what can write a row, or a value of a row, that a
 // declaration does not show, for the messages that name them: one list,
 // everywhere.
-const WriterCauses = "a default of a column, a value of on_insert, a trigger, or a rule"
+const WriterCauses = "a default of a column, a value of on_insert, a trigger, or a rule created after the plan"
 
 // conflictRow says which declared row references which row that goes, as
 // in "id=2 references code=legacy".

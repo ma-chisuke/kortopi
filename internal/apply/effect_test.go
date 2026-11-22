@@ -52,7 +52,7 @@ func TestRunEffectAgain(t *testing.T) {
 			want:  before,
 			wantErr: `after the inserts and updates, the deletion of rows of z.parent reaches 3 rows of b.orders through foreign key "orders_parent", ` +
 				"ON DELETE CASCADE, at level 1, and the plan counted 2: a row that this apply wrote through a default of a column, a value of on_insert, " +
-				"a trigger, or a rule is now reached, or another transaction changed the rows: declare the rows so that the deletions do not reach them, " +
+				"a trigger, or a rule created after the plan is now reached, or another transaction changed the rows: declare the rows so that the deletions do not reach them, " +
 				"or delete the rows in a run of their own, and apply again",
 		},
 		{
@@ -81,7 +81,7 @@ func TestRunEffectAgain(t *testing.T) {
 			wantErr: `a/child.csv: after the inserts and updates of the apply, the declared row of table a.child references a row that the deletions remove, ` +
 				`through foreign key "child_bucket" (bucket_id) to table b.buckets, so ON DELETE CASCADE would delete it too, which the plan did not count: ` +
 				"id=7 references id=3 (a row that ON DELETE CASCADE deletes): the apply wrote the reference through a default of a column, " +
-				"a value of on_insert, a trigger, or a rule, which the plan cannot see: declare the columns of the foreign key with a row that stays, " +
+				"a value of on_insert, a trigger, or a rule created after the plan, which the plan cannot see: declare the columns of the foreign key with a row that stays, " +
 				"or delete the rows in a run of their own",
 		},
 	}
