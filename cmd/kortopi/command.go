@@ -52,10 +52,11 @@ const connectionHelp = "The connection comes from the environment variables of l
 	"override them. There is no flag for the password.\n"
 
 // closeTimeout bounds the rollback and the close of the session, which run
-// also after an interrupt.
+// also after an interrupt. After an interrupt, the session waits less
+// (dialect.Options.GiveUp).
 const closeTimeout = 10 * time.Second
 
-// common are the flags that plan and apply share.
+// common are the flags that plan, apply, and export share.
 type common struct {
 	dir     string
 	schemas []string
@@ -73,10 +74,11 @@ type connection struct {
 	dbname string
 }
 
-// open opens a session of d on the database that c names, for what opts
-// say.
-func (c connection) open(ctx context.Context, d dialect.Dialect, opts dialect.Options) (dialect.Session, error) {
-	opts.Host, opts.Port, opts.User, opts.Database = c.host, c.port, c.user, c.dbname
+// open opens a session of d on the database that the flags of c name, for
+// what opts say, with the second interrupt of e.
+func (c common) open(ctx context.Context, d dialect.Dialect, opts dialect.Options, e env) (dialect.Session, error) {
+	opts.Host, opts.Port, opts.User, opts.Database = c.conn.host, c.conn.port, c.conn.user, c.conn.dbname
+	opts.GiveUp = e.again
 	return d.Open(ctx, opts)
 }
 
@@ -167,10 +169,26 @@ func closeSession(ctx context.Context, s dialect.Session) error {
 
 // interrupted returns instead when ctx was cancelled by an interrupt, and
 // err otherwise: after an interrupt, the error of the database only says that
-// a statement was cancelled.
+// a statement was cancelled. When the database did not confirm that the
+// session ended, the error that says so follows instead (ADR-0043).
 func interrupted(ctx context.Context, err, instead error) error {
-	if ctx.Err() != nil {
-		return instead
+	if ctx.Err() == nil {
+		return err
+	}
+	var notEnded *dialect.NotEndedError
+	if errors.As(err, &notEnded) {
+		return errors.Join(instead, notEnded)
+	}
+	return instead
+}
+
+// withNotEnded returns err, and the error of closeErr that says that the
+// database did not confirm the end of the session after an interrupt, if it
+// holds one: the other errors of a close after a failure add nothing.
+func withNotEnded(err, closeErr error) error {
+	var notEnded *dialect.NotEndedError
+	if errors.As(closeErr, &notEnded) {
+		return errors.Join(err, notEnded)
 	}
 	return err
 }

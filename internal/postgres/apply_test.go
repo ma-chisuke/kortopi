@@ -333,6 +333,29 @@ func (tx commitTx) Commit(context.Context) error {
 	return tx.err
 }
 
+// After the second interrupt, a commit without an answer is one whose answer
+// kortopi stopped waiting for, and its error says so; an answer that came is
+// still the answer (ADR-0043).
+func TestCommitGivenUp(t *testing.T) {
+	s := &Session{apply: true, tx: commitTx{err: io.ErrUnexpectedEOF}, guard: &guard{}}
+	s.interrupt.gaveUp = true
+	err := s.Commit(t.Context())
+	want := "commit the apply: " + apply.ErrUnknownOutcome.Error() + " (cause: a second interrupt gave up the wait for the answer)"
+	if err == nil || err.Error() != want || !errors.Is(err, apply.ErrUnknownOutcome) {
+		t.Errorf("Commit after the second interrupt = %v, want %s", err, want)
+	}
+	if !s.guard.committing.Load() || !s.guard.noCancel.Load() || !s.commitSent {
+		t.Error("Commit did not mark the commit as started, so a cancel request could stop it")
+	}
+
+	rejected := &pgconn.PgError{Severity: "ERROR", SeverityUnlocalized: "ERROR", Code: "23503", Message: "m"}
+	s = &Session{apply: true, tx: commitTx{err: rejected}}
+	s.interrupt.gaveUp = true
+	if err := s.Commit(t.Context()); err == nil || errors.Is(err, apply.ErrUnknownOutcome) || !errors.Is(err, rejected) {
+		t.Errorf("Commit rejected after the second interrupt = %v, want the error of PostgreSQL", err)
+	}
+}
+
 func TestCommitOutcome(t *testing.T) {
 	cause := io.ErrUnexpectedEOF
 	tests := []struct {

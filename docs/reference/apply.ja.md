@@ -274,14 +274,47 @@ Applied: 0 inserted, 0 updated, 1 deleted.
 
   データベースに対して `kortopi plan` を実行して、どちらの状態かを確かめ、必要ならもう一度 apply する。すでに適用した宣言の apply は、何も変えない。
 
-検査や書き込みの間の Ctrl-C は、トランザクションをロールバックする。
+## apply に割り込む
+
+Ctrl-C や、ジョブの実行役がジョブをキャンセルするときに送る SIGTERM は、コミットの前の apply を止める。
+kortopi は、`psql` と同じくプロトコルのキャンセル要求で、動いている文のキャンセルをサーバーに求める。そしてトランザクションをロールバックして接続を閉じる。
+サーバーは数ミリ秒のうちに文を終え、トランザクションとともにそのロックもなくなる。2つの apply を分けておく kortopi のロックもその1つである。
 
 ```text
 kortopi: interrupted: the apply was stopped
 kortopi: nothing was changed
 ```
 
-コミットが始まったら、Ctrl-C ではそれを止めない。結果を知るためである。
+kortopi は、これを済ませたというサーバーの応答を、割り込みから最長5秒待つ。
+サーバーが届かないところにあるか、文が止まらないために応答がないときは、何がまだ動いているかもしれないかとその終わらせ方を kortopi が伝え、終了コード 1 で終わる。
+
+```text
+kortopi: interrupted: the apply was stopped
+kortopi: the server did not confirm within 5s that the session of the apply ended: its statement may still run on the server and hold its locks until the server notices that kortopi has gone, although its transaction can no longer commit: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 386, and end it with pg_cancel_backend(386), or with pg_terminate_backend(386) if it does not end
+kortopi: nothing was changed
+```
+
+それでも何も変わっていない。トランザクションはコミットしておらず、セッションが終わるときにサーバーがロールバックする。
+2度目の割り込みは待つのをその場で終え、そのとき行は `kortopi stopped waiting for the server to end the session of the apply` で始まる。
+apply が別の apply を待っている間も同じである。
+
+コミットが始まったら、割り込みではそれを止めない。結果を知るためであり、kortopi はその場でそう伝える。
+
+```text
+kortopi: the commit has started, so the interrupt does not stop it: waiting for the answer of the database, so that the outcome is known: interrupt again to give up the wait
+```
+
+2度目の割り込みは応答を待つのをやめ、kortopi は応答のないコミットのメッセージとともに終了コード 1 で終わる。
+
+```text
+kortopi: commit the apply: the commit got no answer from the database, so it is not known whether the changes were made: run kortopi plan to see the state of the database (cause: a second interrupt gave up the wait for the answer)
+```
+
+kortopi はコミットをキャンセルしないので、サーバーはコミットを済ませるか、遅らせた制約が失敗すればロールバックする。どちらだったかは `kortopi plan` を実行して確かめる。
+2度目の割り込みのあと、kortopi はシグナルを受け取らなくなり、3度目の割り込みを受けるとすぐに終わる。
+
+サーバーに届かなくなった接続は、コミットの応答を待つことも含め、kortopi の待ちをすべて終わらせる。kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で待つのをやめる。つまり、約 30 秒の沈黙のあとである（[接続の設定](plan.ja.md#接続の設定)）。
+応答する接続で遅いコミットには上限がない。同期スタンバイを待つときがそうである。そこから抜け出す手段は2度目の割り込みである。
 
 ## 終了コード
 
@@ -297,7 +330,9 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 1つのデータベースの2つの apply は、順に動く。2つ目は待つことを1行で示し、1つ目が終わってから始まる。
 そして、1つ目が書いた行と宣言を比べる。
 
-ロックは接続ではなくトランザクションに属する。そのため、トランザクションモードのコネクションプーラーを通しても働き、kortopi が強制終了されてもトランザクションとともに終わる。
+ロックは接続ではなくトランザクションに属する。そのため、トランザクションモードのコネクションプーラーを通しても働き、トランザクションとともに終わる。
+割り込まれた apply は、終了する前にトランザクションを終える（[apply に割り込む](#apply-に割り込む)）。
+kortopi が強制終了されたときや接続が切れたときは、接続がなくなったことにサーバーが気付いたときにトランザクションが終わる。セッションが待っているか文を実行しているときは、それに長くかかることがある。
 これはサーバーのロックであり、データベースのオブジェクトではない。
 
 ## デプロイでの使い方
@@ -336,7 +371,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
 - コミットのあと、PostgreSQL 自身の一時スキーマ `pg_temp_N` と `pg_toast_temp_N` が、空のままカタログに残る。これらは kortopi のオブジェクトではない。
-- テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。
+- テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。プーラーを通しても、キャンセル要求は転送される設計である。ネットワークを切るテストもない。
 
 ## よくあるエラー
 
@@ -519,6 +554,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:e9694ad88a996df3e579b1226f206bba5bed688a37dc726dffe212c361e00912 -->
+<!-- i18n-source: apply.md sha256:0a9db95cde99255705421559e04e8cb2ebc4e922cde3a36757c271d86a75a73e -->

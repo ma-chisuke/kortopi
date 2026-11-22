@@ -71,10 +71,15 @@ func TestExplainWait(t *testing.T) {
 		t.Errorf("explainWait of no error = %v", none)
 	}
 
-	err := waitForLockError("app", lock)
+	stopped := "run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, " +
+		"as an apply that was stopped may leave it, and end it with pg_terminate_backend"
+	err := (&Session{apply: true}).waitForLockError("app", lock)
 	want := `wait for another apply on database "app": ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): ` +
-		"the other apply held the lock of kortopi longer than lock_timeout or statement_timeout allows: run the apply again once the other apply has ended"
+		"the other apply held the lock of kortopi longer than lock_timeout or statement_timeout allows: " + stopped
 	if err.Error() != want || !errors.Is(err, lock) {
-		t.Errorf("waitForLockError = %s, want %s", err, want)
+		t.Errorf("waitForLockError =\n%s\nwant\n%s", err, want)
+	}
+	if err := (&Session{apply: true}).waitForLockError("app", other); err.Error() != `wait for another apply on database "app": `+other.Error() {
+		t.Errorf("waitForLockError of another error = %s", err)
 	}
 }

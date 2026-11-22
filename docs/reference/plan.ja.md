@@ -120,6 +120,9 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
 apply も固定した設定で読み、比べる。ただし書き込みは、`PGOPTIONS` の設定も含めたセッションの設定で行う（[kortopi apply](apply.ja.md#書き込みの設定)）。
 
+kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で接続を落とす。そのため、応答しなくなったサーバーには約 30 秒の沈黙のあとに気付く。コミットの応答を待つ間も同じである。
+サービスファイルでは、そのための libpq の設定でこれを変えられる。これらの設定に環境変数はない。`keepalives=0` はプローブを止める。`keepalives_idle`・`keepalives_interval`・`keepalives_count` は、待つ秒数・間隔の秒数・プローブの回数を設定し、0 はシステムの値を保つ。
+
 `ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが、計画や apply の読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
 kortopi にはこのための独自の設定がない。`PGOPTIONS` で `lock_timeout` を設定する。
 
@@ -193,12 +196,15 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
 
-計画を止めるには Ctrl-C を押す。
-kortopi はトランザクションをロールバックし、接続を閉じ、終了コード 1 で終わる。
+計画を止めるには Ctrl-C を押すか、SIGTERM を送る。
+kortopi は動いている文のキャンセルをサーバーに求め、トランザクションをロールバックし、接続を閉じ、終了コード 1 で終わる。
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
 ```
+
+セッションが終わったという応答が5秒以内にサーバーからないときは、apply と同じく1行が続く（[kortopi apply](apply.ja.md#apply-に割り込む)）。その行は、文がまだ動いてロックを持っているかもしれないことと、それを `pg_stat_activity` で見つけて終わらせる方法を伝える。
+2度目の割り込みは、待つのをその場で終える。
 
 ### スキーマごとのロール
 
@@ -641,4 +647,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:01b72cb4e164f0fa83fdb2674db026f92ebb38ae1e9bd0f6974d70ab783a74d0 -->
+<!-- i18n-source: plan.md sha256:74eac428b2a5fa01ac6e2e16a5241c63df54a46a7f4c4aaf6b5fe6ae47138a20 -->

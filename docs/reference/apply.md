@@ -272,14 +272,47 @@ Applied: 0 inserted, 0 updated, 1 deleted.
 
   Run `kortopi plan` against the database to see which state it is in, and apply again if needed: an apply of a declaration that is already applied changes nothing.
 
-Ctrl-C during the checks or the writes rolls the transaction back:
+## Interrupt an apply
+
+Ctrl-C, or SIGTERM, as a job runner sends it when it cancels a job, stops an apply before its commit.
+kortopi asks the server to cancel the statement that runs, with the cancel request of the protocol, as `psql` does, rolls the transaction back, and closes the connection.
+The server ends the statement within milliseconds, and with the transaction go its locks, the lock that keeps two applies apart among them:
 
 ```text
 kortopi: interrupted: the apply was stopped
 kortopi: nothing was changed
 ```
 
-Once the commit has started, Ctrl-C does not stop it, so that its outcome is known.
+kortopi waits up to 5 seconds after the interrupt for the server to confirm this.
+When the server does not, because it is out of reach or the statement does not stop, kortopi says what may still run and how to end it, and exits with status 1:
+
+```text
+kortopi: interrupted: the apply was stopped
+kortopi: the server did not confirm within 5s that the session of the apply ended: its statement may still run on the server and hold its locks until the server notices that kortopi has gone, although its transaction can no longer commit: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 386, and end it with pg_cancel_backend(386), or with pg_terminate_backend(386) if it does not end
+kortopi: nothing was changed
+```
+
+Nothing was changed all the same: the transaction never committed, and the server rolls it back when the session ends.
+A second interrupt ends the wait at once, and the line then starts with `kortopi stopped waiting for the server to end the session of the apply`.
+The same holds while an apply waits for another apply.
+
+Once the commit has started, an interrupt does not stop it, so that its outcome is known, and kortopi says so at once:
+
+```text
+kortopi: the commit has started, so the interrupt does not stop it: waiting for the answer of the database, so that the outcome is known: interrupt again to give up the wait
+```
+
+A second interrupt gives up the wait for the answer, and kortopi exits with status 1 and the message of a commit without an answer:
+
+```text
+kortopi: commit the apply: the commit got no answer from the database, so it is not known whether the changes were made: run kortopi plan to see the state of the database (cause: a second interrupt gave up the wait for the answer)
+```
+
+kortopi does not cancel a commit, so the server finishes it, or rolls it back when a deferred constraint fails: run `kortopi plan` to see which.
+After the second interrupt, kortopi no longer catches the signals, and a third one ends it at once.
+
+A connection that no longer reaches the server ends every wait of kortopi, the wait for the answer of the commit among them: kortopi probes an idle connection after 10 seconds, every 5 seconds, and gives up after 4 probes without an answer, so after about 30 seconds of silence ([Connection settings](plan.md#connection-settings)).
+A commit that is slow on a connection that answers, as when it waits for a synchronous standby, has no limit: the second interrupt is the way out.
 
 ## Exit status
 
@@ -295,7 +328,9 @@ An apply never exits with 2. To check after an apply that the database matches t
 Two applies on one database run one after the other: the second one prints the line that it waits, and starts once the first one has ended.
 It then compares the declaration with the rows that the first one wrote.
 
-The lock belongs to the transaction, not to the connection, so it also works through a connection pooler in transaction mode, and it ends with the transaction, also when kortopi is killed.
+The lock belongs to the transaction, not to the connection, so it also works through a connection pooler in transaction mode, and it ends with the transaction.
+An interrupted apply ends its transaction before it exits ([Interrupt an apply](#interrupt-an-apply)).
+When kortopi is killed, or its connection is cut, the transaction ends once the server notices that the connection is gone, which can take long when the session waits or runs a statement.
 It is a lock of the server, not an object in the database.
 
 ## In a deployment
@@ -334,7 +369,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
 - An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit. Each of these tables holds a lock until the commit, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default: it then fails with `out of shared memory` and a hint to raise the setting, and nothing is changed.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
-- Not tested: a standby, Aurora PostgreSQL, and a real connection pooler.
+- Not tested: a standby, Aurora PostgreSQL, and a real connection pooler, through which a cancel request is forwarded by design. No test cuts the network either.
 
 ## Common errors
 
@@ -517,4 +552,4 @@ Apply as a role and with options that leave it on, or apply without `--allow-del
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), and [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md), and [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md).

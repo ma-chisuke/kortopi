@@ -254,17 +254,32 @@ func sortedNames(loaded map[declaration.TableName]*loadedTable) []declaration.Ta
 }
 
 // Commit makes the changes of the apply lasting.
-func (s *Session) Commit(ctx context.Context) error {
+//
+// Once the commit has started, no cancel request leaves kortopi, also when
+// ctx is done: the commit runs on the server to its end. The second
+// interrupt (Options.GiveUp) ends the wait for its answer, and so does a
+// connection whose keepalive finds the server gone; the outcome is then not
+// known (ADR-0043).
+func (s *Session) Commit(ctx context.Context) (err error) {
 	switch {
 	case !s.apply:
 		return errNotApply
 	case s.closed || s.committed:
 		return errors.New("the session has ended: there is nothing to commit")
 	}
+	if s.guard != nil {
+		s.guard.noCancel.Store(true)
+		s.guard.committing.Store(true)
+	}
+	s.commitSent = true
 	// The transaction commits with commitSQL, which sets the settings of
 	// the session first: the deferred constraints and triggers of the
 	// writes run with them, as the writes do (ADR-0037).
 	if err := s.tx.Commit(ctx); err != nil {
+		var pgErr *pgconn.PgError
+		if s.gaveUp() && !errors.As(err, &pgErr) && !errors.Is(err, pgx.ErrTxCommitRollback) {
+			err = errGaveUp
+		}
 		return commitError(err)
 	}
 	s.committed = true

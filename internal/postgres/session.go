@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -8,11 +9,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
+	"github.com/ma-chisuke/kortopi/internal/dialect"
 	"github.com/ma-chisuke/kortopi/internal/plan"
 )
 
@@ -42,6 +45,14 @@ type Options struct {
 	// Wait gets one line when an apply waits for another apply to finish. It
 	// may be nil.
 	Wait io.Writer
+	// GiveUp is closed by a second interrupt, after the first cancelled the
+	// context of Connect: the session stops waiting for the server at once
+	// (dialect.Options.GiveUp). It may be nil.
+	GiveUp <-chan struct{}
+
+	// cancelWait, when it is not zero, replaces the constant of the same
+	// name, so that a test can wait less.
+	cancelWait time.Duration
 }
 
 // settings are the settings that change how PostgreSQL reads and prints a
@@ -138,6 +149,21 @@ type Session struct {
 	// and commits.
 	sessionSettings [][2]string
 	commitSQL       string
+	// guard is what the connection shares with the session, and interrupt
+	// what the session knows of the interrupt of its run, whose context is
+	// run. stopWatch stops watching run (watchInterrupt).
+	guard     *guard
+	run       context.Context
+	interrupt interruption
+	stopWatch func() bool
+	// application is the application_name of the session, and pid the
+	// process ID of the server that runs its transaction, read inside it: 0
+	// until then. They name the session in the error of an interrupt whose
+	// end the server did not confirm.
+	application string
+	pid         int32
+	// commitSent is true once the commit has gone to the server.
+	commitSent bool
 }
 
 var _ plan.Database = (*Session)(nil)
@@ -380,6 +406,11 @@ func (o Options) connString() string {
 // ConnectConfig connects with cfg, in place of the fields of opts that name
 // the database, and starts the transaction of the plan or the apply. Unlike
 // Connect, it reads no environment variable, so tests use it.
+//
+// An interrupt cancels ctx. The session then asks the server to cancel the
+// statement that runs, and its Close waits a short time for the server to
+// confirm that the work of the session ended (ADR-0043). The connection
+// notices a server that no longer answers by its keepalive.
 func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Session, error) {
 	if opts.Apply && opts.Export {
 		return nil, errors.New("a session is for an apply or for an export, not for both")
@@ -391,6 +422,13 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	if _, ok := cfg.RuntimeParams["application_name"]; !ok {
 		cfg.RuntimeParams["application_name"] = applicationName
 	}
+	g := &guard{wait: cmp.Or(opts.cancelWait, cancelWait)}
+	var err error
+	if g.keepAlive, err = keepAliveConfig(cfg.RuntimeParams); err != nil {
+		return nil, err
+	}
+	cfg.DialFunc = g.dial(cfg.DialFunc)
+	cfg.BuildContextWatcherHandler = g.handler
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, connectError(err, cfg.Password != "")
@@ -398,15 +436,25 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
 		apply: opts.Apply, export: opts.Export, loaded: make(map[declaration.TableName]*loadedTable),
+		guard: g, application: cfg.RuntimeParams["application_name"],
 	}
+	s.watchInterrupt(ctx, opts.GiveUp)
 	if s.apply {
-		if err := s.readSessionSettings(ctx); err != nil {
-			_ = conn.Close(ctx)
-			return nil, err
-		}
+		err = s.readSessionSettings(ctx)
 	}
-	if err := s.begin(ctx, opts.Wait); err != nil {
-		_ = conn.Close(ctx)
+	if err == nil {
+		err = s.begin(ctx, opts.Wait)
+	}
+	if err != nil {
+		// Close rolls back what began, with a context of its own, also after
+		// an interrupt, and says when the server did not confirm the end of
+		// the session.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+		defer cancel()
+		var notEnded *dialect.NotEndedError
+		if closeErr := s.Close(closeCtx); errors.As(closeErr, &notEnded) {
+			return nil, errors.Join(err, notEnded)
+		}
 		return nil, err
 	}
 	return s, nil
@@ -428,32 +476,32 @@ const lockKey = 0x6b6f72746f7069
 // The snapshot of REPEATABLE READ is taken by that first statement, a moment
 // before the lock: an apply that commits in that moment makes the writes of
 // this apply fail with ErrConflict instead of overwriting its rows.
+//
+// On an error, the transaction that began is s.tx, which Close rolls back
+// with a context of its own: a rollback with a context that an interrupt
+// cancelled would break the connection instead.
 func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	waited := false
 	for {
-		options := pgx.TxOptions{IsoLevel: pgx.RepeatableRead, CommitQuery: s.commitSQL}
-		if s.export {
-			options.AccessMode = pgx.ReadOnly
-		}
-		tx, err := s.conn.BeginTx(ctx, options)
+		tx, err := s.beginTx(ctx, s.beginSQL(s.export), s.commitSQL)
 		if err != nil {
 			return fmt.Errorf("begin the transaction of the %s: %w", s.work(), err)
 		}
 		if !s.apply {
-			s.tx = tx
 			break
 		}
 		var locked bool
 		var database string
-		err = tx.QueryRow(ctx, "SELECT pg_catalog.pg_try_advisory_xact_lock($1), pg_catalog.current_database()::pg_catalog.text",
-			int64(lockKey)).Scan(&locked, &database)
+		err = tx.QueryRow(ctx, `SELECT pg_catalog.pg_try_advisory_xact_lock($1), pg_catalog.current_database()::pg_catalog.text,
+			pg_catalog.pg_backend_pid()`, int64(lockKey)).Scan(&locked, &database, &s.pid)
 		if err != nil {
-			_ = tx.Rollback(ctx)
 			return fmt.Errorf("take the lock of kortopi: %w", err)
 		}
 		if locked {
-			s.tx = tx
 			break
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("take the lock of kortopi: %w", err)
 		}
 		if err := tx.Rollback(ctx); err != nil {
 			return fmt.Errorf("take the lock of kortopi: %w", err)
@@ -477,8 +525,8 @@ func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("set the settings of the session: %w", err)
 	}
-	if err := s.tx.QueryRow(ctx, "SELECT CURRENT_USER::pg_catalog.text, pg_catalog.current_database()::pg_catalog.text").
-		Scan(&s.role, &s.databaseName); err != nil {
+	if err := s.tx.QueryRow(ctx, "SELECT CURRENT_USER::pg_catalog.text, pg_catalog.current_database()::pg_catalog.text, pg_catalog.pg_backend_pid()").
+		Scan(&s.role, &s.databaseName, &s.pid); err != nil {
 		return fmt.Errorf("read the role of the session: %w", err)
 	}
 	if s.apply {
@@ -487,19 +535,49 @@ func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	return nil
 }
 
+// beginTx begins a transaction with the statements of begin, which commits
+// with those of commit, or with COMMIT when it is empty, and makes it s.tx.
+// The process ID of the server is not known in it yet. With a context that
+// an interrupt cancelled, it sends nothing: pgx breaks the connection when a
+// begin fails without an answer.
+func (s *Session) beginTx(ctx context.Context, begin, commit string) (pgx.Tx, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tx, err := s.conn.BeginTx(ctx, pgx.TxOptions{BeginQuery: begin, CommitQuery: commit})
+	if err != nil {
+		return nil, err
+	}
+	s.tx, s.pid = tx, 0
+	return tx, nil
+}
+
+// beginSQL returns the statement that begins a transaction of the session:
+// at the isolation level REPEATABLE READ, and READ ONLY when readOnly is
+// true.
+func (s *Session) beginSQL(readOnly bool) string {
+	sql := "BEGIN ISOLATION LEVEL REPEATABLE READ"
+	if readOnly {
+		sql += " READ ONLY"
+	}
+	return sql
+}
+
 // waitForLock waits until the apply that holds the lock of kortopi ends, in
 // a transaction of its own that takes the lock and lets it go at once.
 func (s *Session) waitForLock(ctx context.Context, database string) error {
-	tx, err := s.conn.Begin(ctx)
+	tx, err := s.beginTx(ctx, "BEGIN", "")
 	if err != nil {
 		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
 	}
+	if err := tx.QueryRow(ctx, "SELECT pg_catalog.pg_backend_pid()").Scan(&s.pid); err != nil {
+		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
+	}
 	if _, err := tx.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock($1)", int64(lockKey)); err != nil {
-		_ = tx.Rollback(ctx)
 		if ctx.Err() != nil {
 			return fmt.Errorf("wait for another apply on database %q: %w", database, err)
 		}
-		return waitForLockError(database, err)
+		return s.waitForLockError(database, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("wait for another apply on database %q: %w", database, err)
@@ -555,17 +633,53 @@ func (s *Session) needs() string {
 // Close rolls the transaction back, unless Commit made it lasting, and
 // closes the connection. Every temporary table of the session disappears
 // with it, and so does the lock of an apply.
+//
+// After an interrupt, the server has been asked to cancel the statement that
+// ran, and Close waits for the rollback until guard.wait after the interrupt
+// at most, or until the second interrupt. When the server answered and the
+// rollback came back, the work of the session has ended and its locks are
+// gone, and the server ends the session as the connection closes. Otherwise
+// the statement may still run on the server, and Close returns a
+// *dialect.NotEndedError that says how to find and end it; a session whose
+// commit was sent never does, because its outcome is the error of Commit.
 func (s *Session) Close(ctx context.Context) error {
 	if s.closed {
 		return nil
 	}
 	s.closed = true
+	interrupted, endBy := s.interrupted()
+	if interrupted {
+		// The rollback waits until endBy, and a done context ends the wait
+		// at once, without a cancel request. The second interrupt ends it
+		// too, with the deadline that it sets on the connection.
+		s.guard.noCancel.Store(true)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, endBy)
+		defer cancel()
+	}
+	answered := !s.conn.IsClosed()
 	var errs []error
-	if err := s.tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-		errs = append(errs, fmt.Errorf("roll back the transaction of the plan: %w", err))
+	if s.tx != nil {
+		var pgErr *pgconn.PgError
+		switch err := s.tx.Rollback(ctx); {
+		case err == nil, errors.Is(err, pgx.ErrTxClosed):
+		case errors.As(err, &pgErr):
+			// The server answered: its work has ended.
+			errs = append(errs, fmt.Errorf("roll back the transaction of the %s: %w", s.work(), err))
+		default:
+			answered = false
+			errs = append(errs, fmt.Errorf("roll back the transaction of the %s: %w", s.work(), err))
+		}
 	}
 	if err := s.conn.Close(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("close the connection: %w", err))
+	}
+	if s.stopWatch != nil {
+		s.stopWatch()
+		close(s.interrupt.closed)
+	}
+	if interrupted && !answered && !s.commitSent {
+		return s.notEnded()
 	}
 	return errors.Join(errs...)
 }

@@ -68,7 +68,7 @@ func runPlan(ctx context.Context, args []string, e env) int {
 	if o.sql {
 		sql = &bytes.Buffer{}
 	}
-	p, err := makePlan(ctx, o, e.dialects, sql)
+	p, err := makePlan(ctx, o, e, sql)
 	if err != nil {
 		printError(e.stderr, interrupted(ctx, err, errInterrupted))
 		return exitError
@@ -122,8 +122,8 @@ func planFlagSet(o *planOptions) *flag.FlagSet {
 // reported without a database. When sql is not nil, it writes the plan into
 // it as SQL (ADR-0020), which needs the session. The session is closed
 // before makePlan returns, also when ctx is cancelled.
-func makePlan(ctx context.Context, o planOptions, dialects *dialect.Registry, sql *bytes.Buffer) (p *plan.Plan, err error) {
-	d, err := dialects.Choose()
+func makePlan(ctx context.Context, o planOptions, e env, sql *bytes.Buffer) (p *plan.Plan, err error) {
+	d, err := e.dialects.Choose()
 	if err != nil {
 		return nil, err
 	}
@@ -131,13 +131,16 @@ func makePlan(ctx context.Context, o planOptions, dialects *dialect.Registry, sq
 	if err != nil {
 		return nil, err
 	}
-	db, err := o.conn.open(ctx, d, dialect.Options{Dir: decl.Dir})
+	db, err := o.open(ctx, d, dialect.Options{Dir: decl.Dir}, e)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		if closeErr := closeSession(ctx, db); closeErr != nil && err == nil {
+		switch closeErr := closeSession(ctx, db); {
+		case closeErr != nil && err == nil:
 			p, err = nil, closeErr
+		case closeErr != nil:
+			err = withNotEnded(err, closeErr)
 		}
 	}()
 	p, err = plan.Build(ctx, decl, settings, db, plan.Options{NoPending: o.noPending})

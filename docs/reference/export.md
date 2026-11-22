@@ -390,8 +390,10 @@ kortopi: data/facility/types.csv: a file appeared there while the export ran, an
 kortopi: these files were written before the error, and they stay as written: data/facility/room_types.csv, data/facility/rooms.csv
 ```
 
-Press Ctrl-C to stop an export.
+Press Ctrl-C to stop an export, or send it SIGTERM.
+kortopi asks the server to cancel the statement that runs, as for a plan ([kortopi plan](plan.md#what-the-session-needs)).
 The error then starts with `kortopi: interrupted: the export was stopped`, and still says which files were written.
+When the server does not confirm within 5 seconds that the session ended, a last line says that its statement may still run, and how to find it in `pg_stat_activity` and end it ([kortopi apply](apply.md#interrupt-an-apply)).
 
 | Status | Meaning |
 |---|---|
@@ -467,4 +469,4 @@ kortopi: invalid value for flag --table: write the table as <schema>.<table>, wi
 kortopi: invalid value for flag --format: give csv or sql
 ```
 
-The reasons for this behavior are in [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md) and [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.md).
+The reasons for this behavior are in [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.md), and [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md).

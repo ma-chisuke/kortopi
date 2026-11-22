@@ -120,6 +120,9 @@ A setting in `PGOPTIONS` does not change a setting that kortopi pins ([How value
 kortopi pins them inside its transaction, after the session has started, so `-c TimeZone=Asia/Tokyo` or `-c search_path=app` changes nothing in a plan.
 An apply reads and compares in the pinned settings too, but writes with the settings of the session, those of `PGOPTIONS` included ([kortopi apply](apply.md#the-settings-of-the-writes)).
 
+kortopi probes an idle connection after 10 seconds, every 5 seconds, and drops it after 4 probes without an answer, so it notices a server that no longer answers after about 30 seconds of silence, also while it waits for the answer of a commit.
+A service file can change this with the settings of libpq for it, which have no environment variables: `keepalives=0` turns the probes off, and `keepalives_idle`, `keepalives_interval`, and `keepalives_count` set the idle time in seconds, the interval in seconds, and the number of probes, where 0 keeps the value of the system.
+
 A plan and an apply wait without limit, and without a word, while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`.
 kortopi has no setting of its own for this: set `lock_timeout` in `PGOPTIONS`.
 
@@ -193,12 +196,15 @@ In the database, a plan does the following and nothing else:
 - When rows are to be deleted, it follows the foreign keys that reference them with queries, and keeps the rows that it reaches, by their identities, in one more temporary table. It deletes no row.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
 
-Press Ctrl-C to stop a plan.
-kortopi rolls the transaction back, closes the connection, and exits with status 1:
+Press Ctrl-C to stop a plan, or send it SIGTERM.
+kortopi asks the server to cancel the statement that runs, rolls the transaction back, closes the connection, and exits with status 1:
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
 ```
+
+When the server does not confirm within 5 seconds that the session ended, a line follows that says that its statement may still run and hold its locks, and how to find it in `pg_stat_activity` and end it, as for an apply ([kortopi apply](apply.md#interrupt-an-apply)).
+A second interrupt ends that wait at once.
 
 ### One role for each schema
 

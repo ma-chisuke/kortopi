@@ -63,12 +63,14 @@ func (s *Session) explainWait(ctx context.Context, err *error) {
 
 // waitForLockError is the error of an apply that waited for the lock of
 // kortopi until lock_timeout or statement_timeout ended the wait: another
-// apply held it all that time.
-func waitForLockError(database string, err error) error {
+// apply held it all that time, or the session of an apply that was stopped
+// and that the server has not ended yet.
+func (s *Session) waitForLockError(database string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.Code == lockNotAvailable || pgErr.Code == queryCanceled) {
 		return fmt.Errorf("wait for another apply on database %q: %w: the other apply held the lock of kortopi longer than lock_timeout or statement_timeout allows: "+
-			"run the apply again once the other apply has ended", database, err)
+			"run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, "+
+			"as an apply that was stopped may leave it, and end it with pg_terminate_backend", database, err)
 	}
 	return fmt.Errorf("wait for another apply on database %q: %w", database, err)
 }

@@ -50,5 +50,6 @@ func options(o dialect.Options) Options {
 		Apply:    o.Apply,
 		Export:   o.Export,
 		Wait:     o.Wait,
+		GiveUp:   o.GiveUp,
 	}
 }

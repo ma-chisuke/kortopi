@@ -6,7 +6,7 @@ kortopi が人の手を離れて動く場所は3つある。デプロイのと�
 
 ## スクリプトが頼れること
 
-- 標準出力には、`kortopi plan` と `kortopi apply` の計画と、apply が書いたものの行が出る。標準エラー出力には、`kortopi: <message>` の形のエラーが1行ずつ出る。例外は接続の失敗で、接続の試みごとにも1行を出す（[kortopi plan](plan.ja.md#データベースへの接続)）。`note: <message>` の形の注記と、別の apply を待つ apply の行もここに出る。
+- 標準出力には、`kortopi plan` と `kortopi apply` の計画と、apply が書いたものの行が出る。標準エラー出力には、`kortopi: <message>` の形のエラーが1行ずつ出る。例外は接続の失敗で、接続の試みごとにも1行を出す（[kortopi plan](plan.ja.md#データベースへの接続)）。`note: <message>` の形の注記、別の apply を待つ apply の行、コミットが始まったあとに来た割り込みの行もここに出る。
 - 計画はデータベースを変えない。そのため、何度でも実行できる。
 - 適用済みの宣言の apply は何も変えず、空の計画を出す。失敗した apply は何も変えていない。例外は、コミットの結果が分からないとエラーが告げる場合で、そのときは `kortopi plan` で状態を確かめる。データベースやファイルでのエラーのあとは、標準エラー出力の最後の行が `kortopi: nothing was changed` になる。フラグの誤りのあとは、代わりにコマンドの使い方が出力の最後に来る。そのため、apply はどんな失敗のあとでも、もう一度実行できる。
 - 接続の設定は、libpq の環境変数から読む（[kortopi plan](plan.ja.md#データベースへの接続)）。パスワードのフラグはない。パイプラインのシークレットから `PGPASSWORD` に渡すか、パスワードファイルに書く。
@@ -31,6 +31,7 @@ kortopi apply --dir data
 
 - apply は、宣言したテーブルを所有するロールか、[apply に要るもの](apply.ja.md#apply-に要るもの)を持つロールで実行する。スキーマごとに所有者のロールがあるなら、スキーマごとに1回、`--schema` を付けて apply を実行する（[kortopi apply](apply.ja.md#スキーマごとの-apply)）。
 - ロックのタイムアウトを設定する。設定しなければ、宣言したテーブルのロックをほかのセッションが持っている間、apply は際限なく待ち、デプロイもそれを待つ。設定すれば、apply はそう告げるエラーを出して止まり、何も変えない（[kortopi plan](plan.ja.md#接続の設定)）。
+- ジョブをキャンセルする実行役は、kortopi に SIGTERM か SIGINT を送る。コミットの前なら、kortopi は文のキャンセルをサーバーに求め、ロールバックし、5秒以内に終了コード 1 で終わる。最後の行は `kortopi: nothing was changed` である。セッションが終わったという応答がその間にサーバーからなかったときは、その前の行が、セッションを `pg_stat_activity` で見つけて終わらせる方法を伝える。コミットが始まっていれば、kortopi は応答を待つことを伝え、2度目のシグナルで結果の分からないメッセージとともに待つのをやめる。そのときは `kortopi plan` を実行する。それより早くプロセスを強制終了する実行役では、結果はサーバーが決める（[kortopi apply](apply.ja.md#apply-に割り込む)）。
 - 終了コード 1 は、apply が何も変えなかったことを示す。例外は、コミットの結果が分からないとエラーが告げる場合である。直したあとで、デプロイは apply をもう一度実行できる。
 - 削除の扱いは、パイプラインごとに決める。`--allow-delete` がなければ、apply はモード `sync` のテーブルが失うべき行を残し、`Not deleted: ...` の行でそう告げ、0 で終わる。`--allow-delete` があれば、`--max-delete`（既定は 100 行）の範囲でそれらを削除する。この上限は、削除する行と、外部キーがそれと一緒にすべての段で消すか変える行をすべて数える（[kortopi apply](apply.ja.md#削除の安全策)）。上限は、宣言の行だけでなく、パイプラインの削除がそれを参照するテーブルで消し、変える行も見て決める。行を残したデプロイを失敗にしたければ、apply のあとで `kortopi plan --exit-code` を実行する。
 - スキーマにない宣言済みのテーブルや列があれば、apply は止まり、何も変えない（[kortopi apply](apply.ja.md#データベースにないテーブルや列)）。apply の前に `--no-pending` を付けた計画を置くと、同じ名前で止まり、それを宣言したファイルを挙げる。ただし、apply にない検査を足すわけではない。
@@ -89,4 +90,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
 - スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除だけを示すか、何も示さない。
 
-<!-- i18n-source: automation.md sha256:29cbf4d8dfb82237fef5ae02527fac750c1e48e1c70ed6e7605a0ef467558099 -->
+<!-- i18n-source: automation.md sha256:189179e92fb461c0e70312d28c08914afc631d220a1742cfeb0dfb705b5f482c -->
