@@ -69,18 +69,20 @@ kortopi plan --dir data --exit-code
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+grep '^Not declared:' plan.txt || true
 ```
 
 - 終了コード 2 になるのは、挿入・更新・削除する行か、スキーマの変更を待つテーブルや列が1つでもあるときである。
 - モード `insert` のテーブルはキーだけで比べるので、その行の値が変わっても、ずれにはならない。
+- モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行も、ずれにはならない。モードはその行をそのままにするからである。計画は、各テーブルの行と、`Not declared:` から始まる行によってそれを数える。ジョブは上のようにその行を探せる（[kortopi plan](plan.ja.md#宣言にない保存された行)）。そうした行で検査を失敗させたいときは、テーブルにモード `sync` を与える。その削除する行は終了コード 2 になる。
 - ロールには、プライマリで、[計画のセッションに要るもの](plan.ja.md#セッションに要るもの)が要る。
-- `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
+- `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`|| true` は、`grep` が行を見つけないときも止まらないようにする。
 
 ## レビューしたスクリプトのための SQL としての計画
 
@@ -96,4 +98,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
 - スクリプトは、apply のようにコミットの前にテーブルをもう一度比べることはしない。そのため、宣言した値をトリガーが書き換えれば、その書いたものがコミットされる。スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、そうした値を示すか、何も示さない。
 
-<!-- i18n-source: automation.md sha256:1636f04af68de661074805ccd65b6013c2a2e565a21114378ed4b6415996df3a -->
+<!-- i18n-source: automation.md sha256:b629bc198ce943e98723bee7d52891251791aa5c51618a068806e6debc33c089 -->

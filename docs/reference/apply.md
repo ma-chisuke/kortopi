@@ -340,7 +340,8 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
   ```
 
-- When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert`, `No changes. There is nothing to apply.` and a line that names such tables ([kortopi plan](plan.md#read-the-output)).
+- When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert` or holds stored rows that the declaration lacks, `No changes. There is nothing to apply.` and the lines that name such tables ([kortopi plan](plan.md#read-the-output)).
+- The plan of an apply counts the stored rows that tables of mode `upsert` and `insert` hold and the declaration lacks, as a plan does, and the apply leaves those rows as they are ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)).
 - After a failure, the errors go to standard error, and the last line is `kortopi: nothing was changed`.
 - When the answer of the commit does not arrive, the apply cannot know whether the changes were made, and does not say that nothing was changed:
 

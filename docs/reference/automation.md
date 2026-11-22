@@ -69,18 +69,20 @@ A job compares the database with the declaration of the main branch, and tells t
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+grep '^Not declared:' plan.txt || true
 ```
 
 - Status 2 counts every row to insert, to update, or to delete, and every table or column that waits for a schema change.
 - A table of mode `insert` is compared by its keys only, so a changed value of one of its rows is no drift.
+- The stored rows that a table of mode `upsert` or `insert` holds and the declaration lacks are no drift either: the mode leaves them as they are. The plan counts them, in the line of each table and in a line that starts with `Not declared:`, which the job can look for, as above ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). To fail the check on them, give the table mode `sync`, whose rows to delete give status 2.
 - The role needs [what the session of a plan needs](plan.md#what-the-session-needs), on the primary.
-- `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
+- `|| status=$?` keeps a shell with `set -e` from stopping on status 2, and `|| true` keeps it from stopping when `grep` finds no line.
 
 ## The plan as SQL for reviewed scripts
 

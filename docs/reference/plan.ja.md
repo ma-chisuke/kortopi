@@ -275,13 +275,14 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 | `~ code=pro  name: Pro -> "Pro Plan"` | 更新する行。キーと、変わる列のそれぞれを `column: stored -> declared` の形で示す。変わらない列は示さない。 |
 | `- code=legacy` | 削除する行。キーを示す。行を削除するのは、モード `sync` のテーブルだけである。 |
 | `1 to insert, 1 to update, 1 to delete` | テーブルの件数。そのモードが求める変更の種類だけを示す。 |
+| `2 stored rows are not declared, left as they are in mode upsert` | モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行。モードはそれをそのままにする（[宣言にない保存された行](#宣言にない保存された行)）。 |
 | `Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.` | 計画全体の件数と、計画に含まれる宣言したテーブルの数。 |
 
 テーブルは、スキーマ、テーブル名の順に並べる。
 テーブルの中では、挿入する行、更新する行、削除する行の順に並べ、それぞれを照合キーで並べる。
 
 テーブルの件数の行は、そのモードが求める変更の種類だけを示す。`insert` なら挿入、`upsert` なら挿入と更新、`sync` なら3つすべてである。
-モード `upsert` のテーブルに `0 to delete` が出ることはない。kortopi はそのテーブルで削除する行を探さないからである。宣言にない行があっても、そのまま残る。
+モード `upsert` のテーブルに `0 to delete` が出ることはない。そのテーブルは行を削除しないからである。宣言にない保存された行はそのまま残り、それを数える行が出る（[宣言にない保存された行](#宣言にない保存された行)）。
 
 変更のないテーブルは示さず、最後の行がその数を示す。
 
@@ -289,7 +290,7 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 2 tables without changes are not shown.
 ```
 
-違うものも、スキーマの変更を待つものもないときは、計画は1行になる。
+計画が1行になるのは、違うものもスキーマの変更を待つものもなく、モード `insert` のテーブルも宣言にない保存された行を持つテーブルもないときである。
 
 ```text
 No changes. The database matches the declaration.
@@ -305,6 +306,40 @@ No changes. The database matches the declaration.
 No changes. There is nothing to apply.
 A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
 ```
+
+### 宣言にない保存された行
+
+モード `upsert` と `insert` のテーブルは行を削除しないので、宣言にない保存された行を持ちうる。管理画面が足した行や、取り消したコミットが宣言から外した行である。
+計画は、モード `sync` のテーブルが削除する行を見つけるのと同じく、照合キーでそうした行を数え、行ではなく数を示す。
+これは apply がする変更ではない。モードはその行をそのままにする。
+
+まとまりを持つテーブルは件数の行のあとにその数を示し、まとまりのないテーブルは自分の行を得る。
+`Plan:` のあとの1行が、それをまとめる。
+
+```text
+geo.currency: 1 stored row is not declared, left as it is in mode upsert
+
+geo.regions (upsert, key: code)
+  + code=kanto  name=Kanto
+  1 to insert, 0 to update
+  2 stored rows are not declared, left as they are in mode upsert
+
+Plan: 1 to insert, 0 to update, 0 to delete in 2 tables.
+Not declared: 3 stored rows in 2 tables, left as they are in mode upsert.
+```
+
+ほかに違うものがなければ、計画はデータベースが宣言と一致しているとは言わず、最初の行のあとにこれらの行を置く。
+
+```text
+No changes. There is nothing to apply.
+geo.currency: 1 stored row is not declared, left as it is in mode upsert
+Not declared: 1 stored row in 1 table, left as it is in mode upsert.
+```
+
+- これらの行は違いとして数えない。違うものがこれらの行だけなら、`--exit-code` での終了コードは 0 である（[終了コードとずれ](#終了コードとずれ)）。これらの行で失敗させたい検査は、`Not declared:` で始まる行を探せばよい。
+- 行を挙げたいときや削除したいときは、テーブルにモード `sync` を与える。そうすると、計画はそれぞれを削除する行として示し、apply は `--allow-delete` のときだけそれを削除する。
+- 数えるには、モード `sync` の計画が削除する行を見つけるときと同じく、テーブルのキーの列をもう1回読む。権限は、計画にすでに要るもので足りる（[セッションに要るもの](#セッションに要るもの)）。
+- apply は、計画と一緒に同じ行を出し、その行には何もしない。
 
 ### スキーマの変更を待つテーブルと列
 
@@ -503,7 +538,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### スクリプトの読み方
 
-- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行も添える。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。
+- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行と、宣言にない保存された行をまとめた行も添える。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列、そして宣言にない保存された行を持つテーブル（[宣言にない保存された行](#宣言にない保存された行)）を、1行ずつコメントで示す。
 - コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。スクリプトが `on_insert` の値を持つときは、コメントが「but those of on_insert」と添えて、それらの値を設定が固定しないことを示す。セッションは、それらの値を自分の設定で読む。
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
@@ -527,11 +562,13 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
-計画にモード `insert` のテーブルがあれば、代わりに空の計画の行をコメントとして書く。
+計画にモード `insert` のテーブルか、宣言にない保存された行を持つテーブルがあれば、代わりに空の計画の行をコメントとして書く。
 
 ```sql
 -- No changes: there is nothing to do.
 -- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+-- geo.currency: 1 stored row is not declared, left as it is in mode upsert
+-- Not declared: 1 stored row in 1 table, left as it is in mode upsert.
 ```
 
 スキーマの変更を待つテーブルと列しかない計画は、冒頭のコメントと次の行になる。
@@ -641,7 +678,7 @@ kortopi は、次の順に検査する。
 
 | 終了コード | 意味 |
 |---|---|
-| 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。 |
+| 0 | 計画を立てた。`--exit-code` があるときは、適用するものもない。つまり、データベースは宣言と一致している。ただし、計画が比べないモード `insert` のテーブルの値は除く。モード `upsert` と `insert` のテーブルが宣言を超えて持つ保存された行も除く。計画はそれを数え、そのままにする。 |
 | 1 | 計画が失敗した。フラグの誤り、宣言の誤り、`--no-pending` があるときのデータベースにないテーブルや列、データベースのエラー、割り込みを含む。 |
 | 2 | `--exit-code` のときだけ使う。計画が空でない。 |
 
@@ -650,20 +687,22 @@ kortopi は、次の順に検査する。
 `--exit-code` があれば、計画でずれを検出できる。挿入・更新・削除する行が1つでもあるか、スキーマの変更を待つテーブルや列があれば、終了コードは 2 になる。
 `--no-pending` もあれば、そうしたテーブルや列での終了コードは、代わりに 1 である。
 `--format sql` でも同じである。
-データベースを main ブランチの宣言と比べる定期実行は、3つの結果を次のように見分けられる。
+モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行は、終了コードの上ではずれではない。モードはその行をそのままにするので、どの apply もそれを変えない。代わりに、計画がそれを行で数える（[宣言にない保存された行](#宣言にない保存された行)）。
+データベースを main ブランチの宣言と比べる定期実行は、3つの結果を次のように見分け、その行も探せる。
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+grep '^Not declared:' plan.txt || true
 ```
 
-`|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。
+`|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`|| true` は、`grep` が行を見つけないときも止まらないようにする。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:49f78b744e2b6ee73bfde43f81f151056723ea86fb22ea14fcd7c9c5bcb8ce52 -->
+<!-- i18n-source: plan.md sha256:b05ac4d796a082487e5592a6ac7a304c49b19d4b3bdf477a0ea83dd5be64fa4a -->

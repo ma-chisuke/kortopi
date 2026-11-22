@@ -50,5 +50,6 @@
 | [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) | apply のコミットの前に宣言したすべてのテーブルをもう一度比べ、行がすでに宣言した値を持つ更新はその比較で決める | accepted | 2026-11-22 |
 | [ADR-0043](ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md) | 割り込まれた実行の文はサーバーでキャンセルし、コミットの応答を待つのをやめるのは2度目の割り込みか接続が死んだときだけにする | accepted | 2026-11-22 |
 | [ADR-0044](ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) | 実行のロック待ちの上限は `--lock-timeout` で与え、kortopi の各トランザクションのローカルな設定にする | accepted | 2026-11-22 |
+| [ADR-0046](ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) | 行を削除しないモードのテーブルで宣言にない保存された行を数え、それがある間は一致を主張しない | accepted | 2026-11-22 |
 
-<!-- i18n-source: README.md sha256:329107584e781dc5b8bd0668f0cff2fe3c085977e37f4eecf75c5a32c877c86d -->
+<!-- i18n-source: README.md sha256:381bb3217033a3a24d3798646a18d55b106b4871fdd2f04e8207d0d2b48f68c5 -->
