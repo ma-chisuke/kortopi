@@ -126,6 +126,9 @@ const (
 	// sequence with setval.
 	howWalk = "walk"
 	howJump = "jump"
+	// howLeft: a statement of walkSequence left the sequence, whose move
+	// needs a setval, which the role of the plan may not run.
+	howLeft = "left: it needs setval, which the role of the plan may not run"
 )
 
 // What a statement of sequenceSQL does.
@@ -251,7 +254,12 @@ func sequenceSQL(seq plan.SequenceName, maxSQL, minSQL string, kind sequenceStat
 		}
 		after = "(" + last + op("+") + "p.inc)"
 	}
-	b.WriteString("\nSELECT p.how, p.inc::pg_catalog.text AS inc, p.next::pg_catalog.text AS next, p.goal::pg_catalog.text AS goal, p.top::pg_catalog.text AS top,\n")
+	how := "p.how"
+	if kind == walkSequence {
+		// A walk alone leaves a sequence that needs a setval, and says so.
+		how = "CASE WHEN p.how" + op("=") + "'" + howJump + "' THEN '" + howLeft + "' ELSE p.how END AS how"
+	}
+	b.WriteString("\nSELECT " + how + ", p.inc::pg_catalog.text AS inc, p.next::pg_catalog.text AS next, p.goal::pg_catalog.text AS goal, p.top::pg_catalog.text AS top,\n")
 	b.WriteString("  p.lo::pg_catalog.text AS lo, p.hi::pg_catalog.text AS hi, p.typ, p.steps::pg_catalog.text AS steps, " + after + "::pg_catalog.text AS after FROM p")
 	return b.String()
 }

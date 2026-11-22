@@ -201,7 +201,8 @@ func writeSequences(ctx context.Context, b *bytes.Buffer, p *plan.Plan, db Datab
 	comment(b, "than 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not")
 	comment(b, "rolled back with the transaction. A statement runs only for a sequence that the plan shows moving, a move that the role of the")
 	comment(b, "plan may make: for a role that may take values from the sequence and may not set it, without setval, which leaves a sequence")
-	comment(b, "that needs more than 100000 values. The others are comments under their reason: remove the \"-- \" before each line to run one.")
+	comment(b, "that needs more than 100000 values, and says so in the column how of its row. The others are comments under their reason:")
+	comment(b, "remove the \"-- \" before each line of a statement to run it.")
 	for _, t := range tables {
 		b.WriteString("\n")
 		for _, seq := range t.Sequences {

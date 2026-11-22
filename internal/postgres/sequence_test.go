@@ -218,8 +218,9 @@ func TestSequenceSQL(t *testing.T) {
 	if !strings.Contains(move, `pg_catalog.nextval('"a b"."it''s"'::pg_catalog.regclass)`) || !strings.Contains(move, "pg_catalog.setval(") {
 		t.Errorf("the move does not take values or set the sequence by its literal:\n%s", move)
 	}
-	if !strings.Contains(walk, "pg_catalog.nextval(") || strings.Contains(walk, "setval") {
-		t.Errorf("the walk alone sets the sequence, or takes no value:\n%s", walk)
+	if !strings.Contains(walk, "pg_catalog.nextval(") || strings.Contains(walk, "pg_catalog.setval(") ||
+		!strings.Contains(walk, "'left: it needs setval, which the role of the plan may not run'") {
+		t.Errorf("the walk alone sets the sequence, takes no value, or does not say what it leaves:\n%s", walk)
 	}
 	// The walk goes on past the values that its session cached, by the
 	// cache of the sequence at most.

@@ -26,7 +26,8 @@ INSERT INTO geo.cities (10, n10);
 -- than 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not
 -- rolled back with the transaction. A statement runs only for a sequence that the plan shows moving, a move that the role of the
 -- plan may make: for a role that may take values from the sequence and may not set it, without setval, which leaves a sequence
--- that needs more than 100000 values. The others are comments under their reason: remove the "-- " before each line to run one.
+-- that needs more than 100000 values, and says so in the column how of its row. The others are comments under their reason:
+-- remove the "-- " before each line of a statement to run it.
 
 -- geo.cities: sequence geo.cities_id_seq of column id: next value 4 -> 11
 MOVE SEQUENCE geo.cities_id_seq BEYOND geo.cities.id;
