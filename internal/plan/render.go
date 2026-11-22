@@ -183,28 +183,12 @@ func writeTable(b *strings.Builder, t *Table) error {
 	if len(t.Diff.Inserts) > 0 && len(t.OnInsert) > 0 {
 		fmt.Fprintf(b, "  on insert: %s\n", FormatInsertValues(t.OnInsert))
 	}
-	for _, r := range t.Diff.Inserts {
-		if len(r.Key) != len(t.Key) || len(r.Values) != len(t.Compare) {
-			return fmt.Errorf("plan of table %s: a row to insert has %d values for %d columns",
-				t.Name, len(r.Key)+len(r.Values), len(t.Key)+len(t.Compare))
-		}
-		writeLine(b, '+', append(pairs(t.Key, r.Key), pairs(t.Compare, r.Values)...))
+	rows, err := RowLines(t, t.Diff)
+	if err != nil {
+		return err
 	}
-	for _, u := range t.Diff.Updates {
-		if len(u.Key) != len(t.Key) {
-			return keyError(t, "update", len(u.Key))
-		}
-		fields := pairs(t.Key, u.Key)
-		for _, c := range u.Changes {
-			fields = append(fields, FormatName(c.Column)+": "+formatValue(c.Old)+" -> "+formatValue(c.New))
-		}
-		writeLine(b, '~', fields)
-	}
-	for _, r := range t.Diff.Deletes {
-		if len(r.Key) != len(t.Key) {
-			return keyError(t, "delete", len(r.Key))
-		}
-		writeLine(b, '-', pairs(t.Key, r.Key))
+	for _, line := range rows {
+		b.WriteString("  " + line + "\n")
 	}
 
 	if !t.Diff.changes() {
@@ -239,20 +223,50 @@ func FormatInsertValues(values []config.InsertValue) string {
 	return strings.Join(fields, "  ")
 }
 
+// RowLines returns the line of each row of d, a difference of table t, as
+// the block of the table in a plan prints it, without its indent: a row to
+// insert as + and its key and compared values, a row to update as ~ and its
+// key and changed columns, each as stored value -> declared value, and a row
+// to delete as - and its key, in this order. An apply shows with them what
+// still differs after its writes (ADR-0042).
+func RowLines(t *Table, d TableDiff) ([]string, error) {
+	lines := make([]string, 0, len(d.Inserts)+len(d.Updates)+len(d.Deletes))
+	for _, r := range d.Inserts {
+		if len(r.Key) != len(t.Key) || len(r.Values) != len(t.Compare) {
+			return nil, fmt.Errorf("plan of table %s: a row to insert has %d values for %d columns",
+				t.Name, len(r.Key)+len(r.Values), len(t.Key)+len(t.Compare))
+		}
+		lines = append(lines, rowLine('+', append(pairs(t.Key, r.Key), pairs(t.Compare, r.Values)...)))
+	}
+	for _, u := range d.Updates {
+		if len(u.Key) != len(t.Key) {
+			return nil, keyError(t, "update", len(u.Key))
+		}
+		fields := pairs(t.Key, u.Key)
+		for _, c := range u.Changes {
+			fields = append(fields, FormatName(c.Column)+": "+formatValue(c.Old)+" -> "+formatValue(c.New))
+		}
+		lines = append(lines, rowLine('~', fields))
+	}
+	for _, r := range d.Deletes {
+		if len(r.Key) != len(t.Key) {
+			return nil, keyError(t, "delete", len(r.Key))
+		}
+		lines = append(lines, rowLine('-', pairs(t.Key, r.Key)))
+	}
+	return lines, nil
+}
+
 // keyError reports a row whose key does not fit the key of its table.
 func keyError(t *Table, kind string, n int) error {
 	return fmt.Errorf("plan of table %s: a row to %s has %d key values for %d key columns", t.Name, kind, n, len(t.Key))
 }
 
-// writeLine writes the line of one row: the mark of its kind of change, and
+// rowLine returns the line of one row: the mark of its kind of change, and
 // its fields separated by two spaces. A value never holds a space that is not
 // quoted, so the fields cannot run into each other.
-func writeLine(b *strings.Builder, mark byte, fields []string) {
-	b.WriteString("  ")
-	b.WriteByte(mark)
-	b.WriteString(" ")
-	b.WriteString(strings.Join(fields, "  "))
-	b.WriteString("\n")
+func rowLine(mark byte, fields []string) string {
+	return string(mark) + " " + strings.Join(fields, "  ")
 }
 
 // pairs returns each column with its value, as column=value.
