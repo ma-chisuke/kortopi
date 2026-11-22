@@ -202,6 +202,38 @@ func TestNewestConfig(t *testing.T) {
 		t.Errorf("newestConfig with TLS = host %s, TLS %v, %d fallbacks; want db2.example.test with TLS alone", got.Host, got.TLSConfig != nil, len(got.Fallbacks))
 	}
 
+	// TLS sends no server name for a host given as an address, so the
+	// address that the apply reached tells such hosts apart, and the
+	// certificate is verified against that address.
+	ipCfg, err := pgx.ParseConfig("host=192.0.2.1,192.0.2.2 port=5432 user=u dbname=d sslmode=verify-full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client = handshake(t, fakeConn{remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.2"), Port: 5432}}, "192.0.2.2")
+	if got, _ := newestConfig(ipCfg, client); got.Host != "192.0.2.2" || got.TLSConfig == nil || got.TLSConfig.ServerName != "192.0.2.2" || len(got.Fallbacks) != 0 {
+		t.Errorf("newestConfig with TLS to addresses = host %s, %d fallbacks; want 192.0.2.2 alone, verified against it", got.Host, len(got.Fallbacks))
+	}
+
+	// A socket of Unix and a host of TCP on one port: a connection over TCP
+	// takes the host of TCP.
+	mixedCfg, err := pgx.ParseConfig("host=/run/one,db.example.test port=5432 user=u dbname=d sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := newestConfig(mixedCfg, fakeConn{remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.9"), Port: 5432}}); got.Host != "db.example.test" || len(got.Fallbacks) != 0 {
+		t.Errorf("newestConfig over TCP with a socket of Unix first = host %s, %d fallbacks; want db.example.test alone", got.Host, len(got.Fallbacks))
+	}
+
+	// A host given as an address that is not the one that the apply
+	// reached is not taken, also before a host name.
+	nameCfg, err := pgx.ParseConfig("host=192.0.2.1,db.example.test port=5432 user=u dbname=d sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := newestConfig(nameCfg, fakeConn{remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.9"), Port: 5432}}); got.Host != "db.example.test" || len(got.Fallbacks) != 0 {
+		t.Errorf("newestConfig with another address first = host %s, %d fallbacks; want db.example.test alone", got.Host, len(got.Fallbacks))
+	}
+
 	// Over a socket of Unix, the host whose socket the apply reached is the
 	// only host, and no address of TCP is pinned.
 	unixCfg, err := pgx.ParseConfig("host=/run/one,/run/two port=5432 user=u dbname=d sslmode=disable")
@@ -248,14 +280,20 @@ func TestRemoteAddressOfAUnixSocket(t *testing.T) {
 }
 
 // handshake returns the client side of a TLS connection over a pipe, after
-// a handshake with the server name name, with the remote address of conn.
+// a handshake with the server name name, a host name or an address, with
+// the remote address of conn.
 func handshake(t *testing.T, conn fakeConn, name string) *tls.Conn {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	if ip := net.ParseIP(name); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+	} else {
+		tmpl.DNSNames = []string{name}
+	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)

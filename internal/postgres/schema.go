@@ -259,14 +259,18 @@ func (s *Session) openNewest(ctx context.Context) (*Session, error) {
 
 // newestConfig returns the configuration of the second session of an apply
 // whose connection conn reached its server through cfg, and the address
-// that it reaches. Over TCP, it reaches the address of conn alone, whatever
-// host its settings name, so that it meets the same server also when the
-// settings name several hosts: the host of cfg or of its fallbacks with the
-// port of that address, with TLS when conn has it, by the server name of
-// TLS, becomes its only host, with the TLS configuration of that host, and
-// every name resolves to the address. Over a Unix socket, the host whose
-// socket conn reached becomes its only host. The driver does not say which
-// host it reached, but its socket does.
+// that it reaches. The driver does not say which host of cfg and of its
+// fallbacks it reached, but the socket of conn does.
+//
+// Over TCP, the second session reaches the address of conn alone, whatever
+// host its settings name: every dial goes to that address, and every name
+// resolves to it. Its only host, whose TLS configuration it takes, is a host
+// of TCP with the port of that address, with TLS when conn has it: a host
+// given as an address when that address is the one of conn, since TLS sends
+// no server name for an address, or else a host name, the one whose name the
+// handshake of TLS sent when it sent one, so that the certificate is still
+// verified against the name. Over a Unix socket, the host whose socket conn
+// reached becomes its only host.
 func newestConfig(cfg *pgx.ConnConfig, conn net.Conn) (*pgx.ConnConfig, string) {
 	c := cfg.Copy()
 	if conn == nil {
@@ -302,12 +306,23 @@ func newestConfig(cfg *pgx.ConnConfig, conn net.Conn) (*pgx.ConnConfig, string) 
 	if isTLS {
 		serverName = tlsConn.ConnectionState().ServerName
 	}
+	remote := net.ParseIP(host)
+	var byAddress, byName *pgconn.FallbackConfig
 	for _, h := range hosts {
-		if uint64(h.Port) != port || (h.TLSConfig != nil) != isTLS || isTLS && serverName != "" && h.TLSConfig.ServerName != serverName {
+		if network, _ := pgconn.NetworkAddress(h.Host, h.Port); network != "tcp" || uint64(h.Port) != port || (h.TLSConfig != nil) != isTLS {
 			continue
 		}
+		switch ip := net.ParseIP(h.Host); {
+		case ip != nil:
+			if byAddress == nil && serverName == "" && ip.Equal(remote) {
+				byAddress = h
+			}
+		case byName == nil && (serverName == "" || h.TLSConfig.ServerName == serverName):
+			byName = h
+		}
+	}
+	if h := cmp.Or(byAddress, byName); h != nil {
 		c.Host, c.Port, c.TLSConfig, c.Fallbacks = h.Host, h.Port, h.TLSConfig, nil
-		break
 	}
 	c.LookupFunc = func(context.Context, string) ([]string, error) { return []string{host}, nil }
 	return c, addr.String()

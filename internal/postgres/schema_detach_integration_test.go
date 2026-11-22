@@ -3,10 +3,15 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -455,17 +460,28 @@ func TestDeferredTriggersOfAnApplyThatDeletes(t *testing.T) {
 	}
 }
 
-// An apply whose settings name several hosts reaches its server through one
-// of them, and the second session of its check reaches the same address,
-// with the settings of that host (ADR-0048).
+// An apply whose settings name several hosts on one port reaches its server
+// through one of them, and the second session of its check reaches the same
+// address, with the settings of that host (ADR-0048). The first host, on the
+// address ::1, refuses the connection of the apply, which reaches the second,
+// on 127.0.0.1; it then passes every connection to another database of the
+// server, as a proxy that sends a new connection elsewhere would, so a second
+// session that followed the list of hosts would stop the apply.
 func TestCheckThroughSeveralHosts(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := database(t, srv)
 			db.Exec(t, schemaCheckSchema)
-			// The first host refuses every connection.
-			cfg, err := pgx.ParseConfig(fmt.Sprintf("host=127.0.0.1,%s port=1,%d user=%s password=%s dbname=%s sslmode=disable target_session_attrs=any",
-				db.Config.Host, db.Config.Port, db.Config.User, db.Config.Password, db.Config.Database))
+			target := net.JoinHostPort(db.Config.Host, strconv.Itoa(int(db.Config.Port)))
+			first, second := listenTwice(t)
+			relayTo(t, first, target, true, "postgres")
+			relayTo(t, second, target, false, "")
+			_, port, err := net.SplitHostPort(second.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := pgx.ParseConfig(fmt.Sprintf("host=::1,127.0.0.1 port=%s user=%s password=%s dbname=%s sslmode=disable target_session_attrs=any",
+				port, db.Config.User, db.Config.Password, db.Config.Database))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -486,4 +502,124 @@ func TestCheckThroughSeveralHosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// listenTwice listens on one port of 127.0.0.1 and of ::1, and closes both
+// listeners when the test ends.
+func listenTwice(t *testing.T) (onIPv6, onIPv4 net.Listener) {
+	t.Helper()
+	var lc net.ListenConfig
+	for range 20 {
+		v4, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, port, err := net.SplitHostPort(v4.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		v6, err := lc.Listen(t.Context(), "tcp", net.JoinHostPort("::1", port))
+		if err != nil {
+			_ = v4.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = v4.Close(); _ = v6.Close() })
+		return v6, v4
+	}
+	t.Fatal("no port of 127.0.0.1 is free on ::1 too")
+	return nil, nil
+}
+
+// relayTo passes each connection that ln accepts to target. With refuseFirst,
+// it closes the first one at once. With database, it names that database in
+// the startup message of each connection instead of the one that the client
+// names.
+func relayTo(t *testing.T, ln net.Listener, target string, refuseFirst bool, database string) {
+	t.Helper()
+	go func() {
+		for n := 0; ; n++ {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if n == 0 && refuseFirst {
+				_ = c.Close()
+				continue
+			}
+			go relay(c, target, database)
+		}
+	}()
+}
+
+// relay passes the bytes between c and a connection to target, until either
+// side closes, after the startup message of c, which names database when it
+// is not empty.
+func relay(c net.Conn, target, database string) {
+	defer func() { _ = c.Close() }()
+	up, err := new(net.Dialer).DialContext(context.Background(), "tcp", target)
+	if err != nil {
+		return
+	}
+	defer func() { _ = up.Close() }()
+	if database != "" {
+		msg, err := readStartup(c)
+		if err != nil {
+			return
+		}
+		if _, err := up.Write(startupWithDatabase(msg, database)); err != nil {
+			return
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(up, c)
+		close(done)
+	}()
+	_, _ = io.Copy(c, up)
+	_ = c.Close()
+	<-done
+}
+
+// readStartup reads the startup message of the protocol of PostgreSQL from
+// c: its length, which counts itself, and the rest.
+func readStartup(c net.Conn) ([]byte, error) {
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(c, head); err != nil {
+		return nil, err
+	}
+	n := binary.BigEndian.Uint32(head)
+	if n < 8 || n > 1<<16 {
+		return nil, fmt.Errorf("a startup message of %d bytes", n)
+	}
+	msg := make([]byte, n)
+	copy(msg, head)
+	if _, err := io.ReadFull(c, msg[4:]); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+// startupWithDatabase returns the startup message msg with the parameter
+// database set to database: after the length and the version of the
+// protocol, the parameters are pairs of strings that end with a zero byte,
+// and a zero byte ends the list.
+func startupWithDatabase(msg []byte, database string) []byte {
+	fields := bytes.Split(bytes.TrimSuffix(msg[8:], []byte{0, 0}), []byte{0})
+	out := slices.Clone(msg[4:8])
+	for i := 0; i+1 < len(fields); i += 2 {
+		value := fields[i+1]
+		if string(fields[i]) == "database" {
+			value = []byte(database)
+		}
+		out = append(out, fields[i]...)
+		out = append(out, 0)
+		out = append(out, value...)
+		out = append(out, 0)
+	}
+	out = append(out, 0)
+	n := len(out) + 4
+	if n > 1<<16 {
+		return msg
+	}
+	return append(binary.BigEndian.AppendUint32(nil, uint32(n)), out...)
 }
