@@ -1,0 +1,20 @@
+catalog.plans (sync, key: code)
+  + code=team  name=Team
+  ~ code=pro  name: Pro -> "Pro Plan"
+  - code=legacy
+  1 to insert, 1 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.invoices (plan_code) references it through invoices_plan_code_fkey, ON DELETE SET NULL, so the deletion sets plan_code of this row to NULL.
+    2 rows of billing.subscriptions (plan_code) reference it through subscriptions_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+
+geo.regions (sync, key: code)
+  - code=north
+  - code=south
+  0 to insert, 0 to update, 2 to delete
+
+Plan: 1 to insert, 1 to update, 3 to delete in 2 tables.
+Through foreign keys, the deletions also delete 2 rows and change 1 row.
+
+Applied: 0 inserted, 1 updated, 3 deleted.
+Through foreign keys, the deletions also deleted 2 rows and changed 1 row.
+Fewer than planned: 1 row to insert into catalog.plans was there already, after the other writes of the apply.

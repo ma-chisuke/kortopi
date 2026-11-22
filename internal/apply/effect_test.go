@@ -44,7 +44,7 @@ func TestRunEffectAgain(t *testing.T) {
 		{
 			name:  "the same effect",
 			again: planned,
-			want:  append(slices.Clone(before), "Delete z.parent", "CheckEffect", "Commit"),
+			want:  append(slices.Clone(before), "Delete z.parent", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
 		},
 		{
 			name:  "another count",
@@ -217,7 +217,7 @@ func TestRunDeletesReachedTablesFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"Describe m.order_tag m.plan", "Diff m.order_tag", "Diff m.plan", "PrepareDeletes", "ForeignKeys m.order_tag m.plan",
-		"Delete m.order_tag", "Delete m.plan", "CheckEffect", "Commit"}
+		"Delete m.order_tag", "Delete m.plan", "CheckEffect", "DiffAgain m.order_tag", "DiffAgain m.plan", "Commit"}
 	if !reflect.DeepEqual(db.calls, want) {
 		t.Errorf("calls = %v, want %v", db.calls, want)
 	}

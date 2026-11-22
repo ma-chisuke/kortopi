@@ -76,13 +76,16 @@ type applyResult struct {
 // computes the effect of the deletions, defers the deferrable foreign keys,
 // inserts and updates from referenced to referencing tables, and, when
 // allowDelete is true, computes the effect again, stops on a declared row in
-// the way, deletes the other way, and checks the effect. It then commits. It
-// does not compare the two effects, which the package apply does.
+// the way, deletes the other way, and checks the effect. It then compares
+// every table again, stops when a difference is left but the deletions that
+// it left out, and commits. It does not compare the two effects, nor the
+// counts of the writes with the plan, which the package apply does.
 func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDelete bool) (applyResult, error) {
 	var r applyResult
 	byName := make(map[declaration.TableName]plan.DiffRequest, len(reqs))
 	names := make([]declaration.TableName, 0, len(reqs))
 	var deleting []declaration.TableName
+	skipped := make(map[declaration.TableName][]plan.Row)
 	for _, req := range reqs {
 		d, err := s.Diff(ctx, req)
 		if err != nil {
@@ -92,6 +95,9 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		names = append(names, req.Table.Name)
 		if len(d.Deletes) > 0 {
 			deleting = append(deleting, req.Table.Name)
+		}
+		if !allowDelete {
+			skipped[req.Table.Name] = d.Deletes
 		}
 	}
 	// As plan.Build does; the conflicts are left to the deletions.
@@ -148,6 +154,16 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 		}
 		if err := s.CheckEffect(ctx); err != nil {
 			return r, err
+		}
+	}
+	for _, req := range reqs {
+		left, err := s.DiffAgain(ctx, req)
+		if err != nil {
+			return r, err
+		}
+		want := diffLines(plan.TableDiff{Deletes: skipped[req.Table.Name]})
+		if lines := diffLines(left); !slices.Equal(lines, want) {
+			return r, fmt.Errorf("after the writes, table %s differs: %v", req.Table.Name, lines)
 		}
 	}
 	return r, s.Commit(ctx)
@@ -508,8 +524,11 @@ func TestReferences(t *testing.T) {
 	}
 }
 
-// After each statement, the number of rows that it changed must be the
-// number that the plan showed: a trigger that skips a row stops the apply.
+// A write returns the number of rows that its statement changed, which the
+// package apply compares with the plan: a trigger that skips a row makes the
+// insert write 2 of the 3 rows of the plan. The comparison after the writes
+// finds the row that the table lacks, and a session of a plan has none
+// (ADR-0042).
 func TestApplyRowCount(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -523,11 +542,24 @@ func TestApplyRowCount(t *testing.T) {
 			`)
 			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,a\n2,b\n3,c\n"})
 			s := db.applySession(t, db.Config, dir)
-			_, err := applyAll(t.Context(), s, []plan.DiffRequest{request(t, s, csvTable("app", "t", "id", "v"), nil, config.ModeUpsert)}, false)
-			want := "insert into table app.t changed 2 rows, but the plan has 3: " +
-				"a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops"
-			if err == nil || err.Error() != want {
-				t.Errorf("apply: %v\nwant %s", err, want)
+			req := request(t, s, csvTable("app", "t", "id", "v"), nil, config.ModeUpsert)
+			if _, err := s.Diff(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := s.Insert(t.Context(), req); n != 2 || err != nil {
+				t.Errorf("Insert = %d, %v, want 2 rows", n, err)
+			}
+			left, err := s.DiffAgain(t.Context(), req)
+			if lines := diffLines(left); err != nil || !slices.Equal(lines, []string{`+ "2" | "b"`}) {
+				t.Errorf("DiffAgain = %v, %v, want the row that the trigger skipped", lines, err)
+			}
+
+			plain := db.session(t, dir)
+			if _, err := plain.Diff(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := plain.DiffAgain(t.Context(), req); !errors.Is(err, errNotApply) {
+				t.Errorf("DiffAgain on a session of a plan: %v, want %v", err, errNotApply)
 			}
 		})
 	}

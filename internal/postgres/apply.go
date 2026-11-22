@@ -20,7 +20,7 @@ var _ apply.Database = (*Session)(nil)
 
 // loadedTable is a declared table that Diff loaded, and what the plan found
 // in it. Effects reads it, and in an apply, Insert, Update, and Delete write
-// from it and check that they changed as many rows as the plan showed.
+// from it, and DiffAgain compares it again.
 type loadedTable struct {
 	meta *tableMeta
 	c    *comparison
@@ -150,9 +150,9 @@ func (s *Session) checkConstraintNames(ctx context.Context, keys []apply.Foreign
 		k.Name, k.Table, other, k.Table.Schema)
 }
 
-// Insert adds the declared rows that the table lacks, from the rows that
-// Diff loaded, and returns their number, which must be the number that the
-// plan showed.
+// Insert adds the declared rows that the table lacks when it runs, from the
+// rows that Diff loaded, and returns the number of rows that its statement
+// inserted. The apply compares it with the plan (ADR-0042).
 func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
 	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
@@ -174,11 +174,11 @@ func (s *Session) Insert(ctx context.Context, req plan.DiffRequest) (_ int, err 
 			batchStatement{what: "create the temporary table of the values of on_insert of table " + table.String(), sql: createDeclaredSQL(values, table, columns)},
 			batchStatement{what: "read the values of on_insert of table " + table.String(), sql: lt.c.insertValuesSQL(values)})
 	}
-	return s.write(ctx, lt, "insert into", prepare, lt.c.insertSQL(picked, values), lt.inserts)
+	return s.write(ctx, lt, "insert into", prepare, lt.c.insertSQL(picked, values))
 }
 
-// Update sets the compared columns that differ to the declared values, and
-// returns the number of rows, which must be the number that the plan showed.
+// Update sets the compared columns that differ when it runs to the declared
+// values, and returns the number of rows that its statement updated.
 func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
 	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
@@ -187,13 +187,13 @@ func (s *Session) Update(ctx context.Context, req plan.DiffRequest) (_ int, err 
 	}
 	picked := s.nextTemp()
 	pick := batchStatement{what: "pick the rows to update in table " + lt.meta.name.String(), sql: lt.c.pickUpdatesSQL(picked)}
-	return s.write(ctx, lt, "update", []batchStatement{pick}, lt.c.updateSQL(picked), lt.updates)
+	return s.write(ctx, lt, "update", []batchStatement{pick}, lt.c.updateSQL(picked))
 }
 
-// Delete removes the rows that the declaration lacks, and returns their
-// number, which must be the number that the plan showed. The first call
-// checks that the role may delete from every loaded table that has rows to
-// delete, before the first row is deleted.
+// Delete removes the rows that the declaration lacks, and returns the number
+// of rows that its statement deleted, which the apply holds to the number of
+// the plan. The first call checks that the role may delete from every loaded
+// table that has rows to delete, before the first row is deleted.
 func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err error) {
 	defer s.explainWait(ctx, &err)
 	lt, err := s.loadedFor(req)
@@ -212,7 +212,7 @@ func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err 
 	s.deleted[lt.meta.name] = len(s.deleted)
 	picked := s.nextTemp()
 	pick := batchStatement{what: "pick the rows to delete from table " + lt.meta.name.String(), sql: lt.c.pickDeletesSQL(picked)}
-	return s.write(ctx, lt, "delete from", []batchStatement{pick}, lt.c.deleteSQL(picked), lt.deletes)
+	return s.write(ctx, lt, "delete from", []batchStatement{pick}, lt.c.deleteSQL(picked))
 }
 
 // checkDeletes returns an error when the role may not delete from a loaded
@@ -334,22 +334,17 @@ func (lt *loadedTable) matchKeyIndex(index string) bool {
 }
 
 // write runs one statement of an apply, after the statements of prepare,
-// which pick its rows, and checks that it changed want rows: a trigger or a
-// rule that changes what the statement does makes the apply stop. The
-// statement runs with the settings of the session, and the others with the
-// pinned settings (execWrite).
-func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepare []batchStatement, sql string, want int) (int, error) {
-	table := lt.meta.name
-	tag, failed, isWrite, err := s.execWrite(ctx, prepare, batchStatement{what: verb + " table " + table.String(), sql: sql})
+// which pick its rows, and returns the number of rows that it changed, as
+// PostgreSQL reports it: the rows of the statement itself, without those of
+// the triggers and the actions of foreign keys that it fires. The statement
+// runs with the settings of the session, and the others with the pinned
+// settings (execWrite).
+func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepare []batchStatement, sql string) (int, error) {
+	tag, failed, isWrite, err := s.execWrite(ctx, prepare, batchStatement{what: verb + " table " + lt.meta.name.String(), sql: sql})
 	if err != nil {
 		return 0, lt.writeFailure(failed, isWrite, verb, err)
 	}
-	if got := int(tag.RowsAffected()); got != want {
-		return 0, fmt.Errorf("%s table %s changed %d %s, but the plan has %d: "+
-			"a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops",
-			verb, table, got, plural(int64(got), "row", "rows"), want)
-	}
-	return want, nil
+	return int(tag.RowsAffected()), nil
 }
 
 // writeFailure returns the error of a statement of the batch of a write

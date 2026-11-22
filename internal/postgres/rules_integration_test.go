@@ -67,7 +67,8 @@ DROP RULE gone ON o.dropped;
 // expression that NEW stands for is evaluated again: the default of a
 // serial column gives the log another number than the table. A rule DO
 // INSTEAD that updates another table reports the planned count of rows
-// while the declared table stays as it was.
+// while the declared table stays as it was, which the comparison before the
+// commit finds (ADR-0042).
 func TestWritesThroughRules(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -92,12 +93,11 @@ func TestWritesThroughRules(t *testing.T) {
 			})
 			s := db.applySession(t, db.Config, dir)
 			items := request(t, s, csvTable("o", "items", "id", "name"), nil, config.ModeSync)
-			instead := request(t, s, csvTable("o", "instead", "id", "name"), nil, config.ModeUpsert)
-			got, err := applyAll(t.Context(), s, []plan.DiffRequest{items, instead}, true)
+			got, err := applyAll(t.Context(), s, []plan.DiffRequest{items}, true)
 			if err != nil {
 				t.Fatalf("apply through the rules: %v", err)
 			}
-			if want := (applyResult{inserted: 2, updated: 2, deleted: 1}); got != want {
+			if want := (applyResult{inserted: 2, updated: 1, deleted: 1}); got != want {
 				t.Errorf("apply through the rules = %+v, want %+v", got, want)
 			}
 			logs := db.Query(t, `SELECT l.what, l.id, l.n IS NOT DISTINCT FROM i.n FROM o.log AS l LEFT JOIN o.items AS i USING (id) ORDER BY l.what, l.id`)
@@ -105,9 +105,21 @@ func TestWritesThroughRules(t *testing.T) {
 			if !slices.EqualFunc(logs, want, slices.Equal) {
 				t.Errorf("the log of the rules DO ALSO = %v, want %v", logs, want)
 			}
-			// The rule DO INSTEAD changed the other table, not the declared one.
-			if rows := dump(t, db, "o.instead", "o.other"); !slices.Equal(rows, []string{"o.instead (1,one)", "o.other (1,ONE)"}) {
-				t.Errorf("the tables of the rule DO INSTEAD = %v", rows)
+
+			// The rule DO INSTEAD changes the other table, not the declared
+			// one, and reports the planned count; the comparison after the
+			// writes finds the declared row as it was.
+			s = db.applySession(t, db.Config, dir)
+			instead := request(t, s, csvTable("o", "instead", "id", "name"), nil, config.ModeUpsert)
+			if _, err := s.Diff(t.Context(), instead); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := s.Update(t.Context(), instead); n != 1 || err != nil {
+				t.Errorf("Update through the rule DO INSTEAD = %d, %v, want the planned count, 1", n, err)
+			}
+			left, err := s.DiffAgain(t.Context(), instead)
+			if lines := diffLines(left); err != nil || !slices.Equal(lines, []string{`~ "1" | name: "one" -> "ONE"`}) {
+				t.Errorf("DiffAgain after the rule DO INSTEAD = %v, %v, want the declared row as it was", lines, err)
 			}
 		})
 	}

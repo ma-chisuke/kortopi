@@ -11,10 +11,13 @@ import (
 // RenderSummary writes what an apply wrote, for the lines after its plan,
 // which Options.Planned shows: a blank line and the count of the rows
 // inserted, updated, and deleted, and a line of the rows that the deletions
-// also deleted and changed through foreign keys (ADR-0039). When deletions
-// were left out, a line counts them, with what they would also do, and names
-// the flag that allows them (ADR-0018); when they were all that differed,
-// that line stands alone and says that nothing was written. An
+// also deleted and changed through foreign keys (ADR-0039). When inserts or
+// updates wrote fewer or more rows than the plan shows, a line says which,
+// and that the other writes of the apply had done their work already or
+// undone it, as the check before the commit confirmed (ADR-0042). When
+// deletions were left out, a line counts them, with what they would also
+// do, and names the flag that allows them (ADR-0018); when they were all that
+// differed, that line stands alone and says that nothing was written. An
 // apply that found nothing to change writes nothing more than its plan,
 // which says so.
 func RenderSummary(w io.Writer, r *Result) error {
@@ -23,7 +26,7 @@ func RenderSummary(w io.Writer, r *Result) error {
 	}
 	var b bytes.Buffer
 	b.WriteString("\n")
-	wrote := r.Inserted+r.Updated+r.Deleted > 0
+	wrote := r.Committed || r.Inserted+r.Updated+r.Deleted > 0
 	totals := r.Plan.Totals()
 	if wrote || r.SkippedDeletes == 0 {
 		fmt.Fprintf(&b, "Applied: %d inserted, %d updated, %d deleted.\n", r.Inserted, r.Updated, r.Deleted)
@@ -33,6 +36,9 @@ func RenderSummary(w io.Writer, r *Result) error {
 				deletions = "deletion"
 			}
 			fmt.Fprintf(&b, "Through foreign keys, the %s also %s.\n", deletions, reach)
+		}
+		for _, line := range unevenLines(r.Uneven) {
+			b.WriteString(line + "\n")
 		}
 	}
 	if r.SkippedDeletes > 0 {
@@ -57,4 +63,35 @@ func RenderSummary(w io.Writer, r *Result) error {
 	}
 	_, err := w.Write(b.Bytes())
 	return err
+}
+
+// unevenLines returns the lines of the writes that wrote another number of
+// rows than the plan shows: one line for those that wrote fewer, whose rows
+// the other writes of the apply had brought to their declared values
+// already, and one for those that wrote more, whose rows the other writes
+// had taken away from those values, so that kortopi wrote them too.
+func unevenLines(uneven []Uneven) []string {
+	var fewer, more []string
+	moreRows := 0
+	for _, u := range uneven {
+		switch n := u.Planned - u.Wrote; {
+		case n > 0 && u.Kind == "insert":
+			fewer = append(fewer, rowsTo(n, "insert")+" into "+u.Table.String()+" "+word(n, "was", "were")+" there already")
+		case n > 0:
+			fewer = append(fewer, rowsTo(n, "update")+" of "+u.Table.String()+" held "+word(n, "its", "their")+" declared values already")
+		case u.Kind == "insert":
+			more, moreRows = append(more, "inserted "+rows(-n)+" into "+u.Table.String()), moreRows-n
+		default:
+			more, moreRows = append(more, "updated "+rows(-n)+" of "+u.Table.String()), moreRows-n
+		}
+	}
+	var lines []string
+	if len(fewer) > 0 {
+		lines = append(lines, "Fewer than planned: "+joinAnd(fewer)+", after the other writes of the apply.")
+	}
+	if len(more) > 0 {
+		lines = append(lines, "More than planned: kortopi also "+joinAnd(more)+", which the other writes of the apply had taken away from "+
+			word(moreRows, "its", "their")+" declared values.")
+	}
+	return lines
 }

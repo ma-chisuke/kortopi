@@ -1,5 +1,6 @@
 // Package apply brings the rows of the target database to the declared state
-// in one transaction (ADR-0017), behind the guards on deletions (ADR-0018).
+// in one transaction (ADR-0017), behind the guards on deletions (ADR-0018),
+// and commits only when the declared tables are as declared (ADR-0042).
 //
 // The package holds what is the same for every database: the order of the
 // tables along their foreign keys, the cycles, and the guards. What differs
@@ -19,15 +20,18 @@ import (
 //
 // The methods of plan.Database compute the difference. The declared rows
 // that Diff loads stay loaded until the session ends, in a plan too, because
-// Effects reads them (ADR-0039), and Insert, Update, and Delete write from
-// them. Everything happens in one transaction, which only Commit makes
-// lasting.
+// Effects reads them (ADR-0039), Insert, Update, and Delete write from them,
+// and DiffAgain compares them again. Everything happens in one transaction,
+// which only Commit makes lasting.
 //
 // An apply that deletes calls the methods in this order: Diff for every
 // table; Effects, through plan.Build; PrepareDeletes, before any write;
 // Insert and Update; Effects again, after the inserts and updates, whose
 // result the apply compares with the first; Delete for every table with rows
-// to delete; CheckEffect; and Commit.
+// to delete; CheckEffect; DiffAgain for every table; and Commit. An apply
+// without deletions leaves out PrepareDeletes, the second Effects, Delete,
+// and CheckEffect, and an apply that writes nothing calls none of the
+// methods after Diff and Effects (ADR-0042).
 type Database interface {
 	plan.Database
 
@@ -46,16 +50,20 @@ type Database interface {
 	// writes.
 	PrepareDeletes(ctx context.Context) error
 
-	// Insert adds the declared rows that the table lacks, and returns their
-	// number. The request is the one that Diff got for the table.
+	// Insert adds the declared rows that the table lacks when it runs, and
+	// returns the number of rows that its statement inserted, which the
+	// apply compares with the plan. The request is the one that Diff got for
+	// the table.
 	Insert(ctx context.Context, req plan.DiffRequest) (int, error)
 
-	// Update sets the compared columns of the rows that differ to the
-	// declared values, and returns the number of rows.
+	// Update sets the compared columns of the rows that differ when it runs
+	// to the declared values, and returns the number of rows that its
+	// statement updated.
 	Update(ctx context.Context, req plan.DiffRequest) (int, error)
 
-	// Delete removes the rows that the declaration lacks, and returns their
-	// number. Effects must have computed the effect of the deletions after
+	// Delete removes the rows that the declaration lacks, and returns the
+	// number of rows that its statement deleted, which must be the number of
+	// the plan. Effects must have computed the effect of the deletions after
 	// the inserts and updates, before the first Delete.
 	Delete(ctx context.Context, req plan.DiffRequest) (int, error)
 
@@ -68,6 +76,15 @@ type Database interface {
 	// error stops the apply, which then rolls back. Nothing that changes rows
 	// runs between it and Commit.
 	CheckEffect(ctx context.Context) error
+
+	// DiffAgain compares the declared rows that Diff loaded for the table of
+	// req with the rows of the table again, after the writes of the apply
+	// and before its commit, in the same transaction and with the
+	// comparison of Diff, and returns what still differs, as Diff returns
+	// it: the rows to insert, and those to update and to delete when the
+	// mode of the table allows them (ADR-0042). It reads, and changes no row.
+	// The request is the one that Diff got for the table.
+	DiffAgain(ctx context.Context, req plan.DiffRequest) (plan.TableDiff, error)
 
 	// Commit makes the changes lasting. Without it, closing the session
 	// leaves the database as it was. When the database rejects the commit,
@@ -118,11 +135,32 @@ const DefaultMaxDelete = 100
 type Result struct {
 	// Plan is the difference that the apply found, as a plan shows it.
 	Plan *plan.Plan
-	// Inserted, Updated, and Deleted count the rows that the apply wrote.
+	// Inserted, Updated, and Deleted count the rows that the statements of
+	// the apply wrote, as the database reported them.
 	Inserted int
 	Updated  int
 	Deleted  int
 	// SkippedDeletes counts the rows to delete that the apply left in place
 	// because Options.AllowDelete was false.
 	SkippedDeletes int
+	// Uneven holds the inserts and updates that wrote another number of rows
+	// than the plan shows, in the order of the writes. The check before the
+	// commit found the declared tables as declared all the same: the other
+	// writes of the apply had brought the rows to their declared values, or
+	// taken them away from those values (ADR-0042).
+	Uneven []Uneven
+	// Committed is true when the apply committed its transaction.
+	Committed bool
+}
+
+// Uneven is an insert or an update of an apply that wrote another number of
+// rows than the plan shows.
+type Uneven struct {
+	Table declaration.TableName
+	// Kind is "insert" or "update".
+	Kind string
+	// Wrote is the number of rows that the statement wrote, and Planned the
+	// number that the plan shows.
+	Wrote   int
+	Planned int
 }
