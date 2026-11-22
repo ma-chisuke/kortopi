@@ -38,7 +38,7 @@ How does a plan learn what its deletions do, how does it show it, and what do th
 ## Decision Outcome
 
 Chosen option: "Follow every foreign key to the end in the transaction, keep the rows that it reaches in a temporary table, and count all of it", because it gives exact numbers at every depth for every action, with queries alone and no write to any table, so that the plan, the limit, and the check of the declaration all rest on the same count.
-It refines ADR-0024, ADR-0026, ADR-0027, and ADR-0029, sentence by sentence, as the last rule lists them.
+It refines ADR-0024, ADR-0026, ADR-0027, ADR-0029, ADR-0037, and ADR-0038, sentence by sentence, as the last rule lists them.
 
 The rules are as follows.
 
@@ -58,15 +58,16 @@ The effect:
 How it is computed:
 
 - After every table is compared, a plan asks the database once for the effect of the deletions of the tables with rows to delete, in the order of the plan. The database runs queries in the transaction of the plan, one for each foreign key and level, and never a deletion.
-- It keeps the rows that it reaches by their identity in the snapshot, `tableoid` and `ctid`, in a temporary table of the session, `ON COMMIT DROP`, analyzed after each level. The rows to delete themselves are found as the plan finds them, by the declared rows.
+- It keeps the rows that it reaches by their identity in the snapshot, `tableoid` and `ctid`, in a temporary table of the session, `ON COMMIT DROP`, analyzed after each level. The rows to delete themselves are found as the plan finds them, by the declared rows, and not by an identity: the stored rows that no declared row matches, as the batch of a deletion picks them by their match key (ADR-0037).
+- The walk, the walk again, and the check after the deletions run in the pinned settings of ADR-0023 and ADR-0037, between the batches of the writes and never inside one, and name every function and operator with its schema. A foreign key is followed with its own equality operators and collations, as PostgreSQL matches its rows, also for a type that a plan compares by its text, such as an interval (ADR-0040).
 - A plan now keeps the declared rows of every table loaded until it ends, as an apply does, because the walk reads the declared rows of every table that it reaches. The rollback at the end of the plan removes them all.
 - Each level reads each referencing table once, with one set-based query for each foreign key, so a foreign key without an index on its referencing columns costs a sequential scan of the referencing table at each level where the walk follows it. PostgreSQL itself deletes row by row, through the triggers of the foreign keys, so for the deletion such a table is scanned once for each deleted row.
-- One measurement gives the order of the cost: `TestEffectsOnLargeTables`, on 2026-11-22, against PostgreSQL 18.7 in a container on a laptop with an Apple M2 and 8 GB of memory, without the race detector. The deletion of one row cascades into 500 rows and then 25,000 rows, and sets 100,000 rows of a table of 200,000 rows to NULL. Without indexes on the referencing columns, the plan with its effect took 0.6 seconds. With them, it took 0.3 seconds, the deletion 0.4 seconds, and the check after the deletions with the commit 0.1 seconds. The test does not run the deletion without the indexes: PostgreSQL would scan the table of 200,000 rows once for each of the 25,000 deleted rows.
+- One measurement gives the order of the cost: `TestEffectsOnLargeTables`, on 2026-11-22, against PostgreSQL 18.7 in a container on a laptop with an Apple M2 and 8 GB of memory, without the race detector, with the batches of ADR-0037. The deletion of one row cascades into 500 rows and then 25,000 rows, and sets 100,000 rows of a table of 200,000 rows to NULL. Without indexes on the referencing columns, the plan with its effect took 0.6 seconds. With them, it took 0.4 seconds, the deletion 0.5 seconds, and the check after the deletions with the commit 0.1 seconds. The test does not run the deletion without the indexes: PostgreSQL would scan the table of 200,000 rows once for each of the 25,000 deleted rows.
 - The effect of a step is not known, and the walk goes no further along it, at whatever level it stands and for every action, for one of these reasons, each with its own advice in the error of an apply:
   - the role may not use the schema of the referencing table;
-  - the role may not read the referencing table as a whole: the identity of a row is a system column, which a privilege on columns does not cover;
+  - the role may not read the referencing table as a whole: the identity of a row is a system column, which a privilege on columns does not cover. This holds for a declared table too, such as a table that references itself, although a plan and the writes of an apply need its declared columns alone (ADR-0024, ADR-0037);
   - row-level security applies to the referencing table for the role;
-  - the role may not read the referenced columns, which ADR-0027 did not need;
+  - the role may not read the referenced columns, which ADR-0027 did not need. Of a declared table, the referenced columns are enough at the first level, where the rows to delete are found by the declared rows; beyond it, and for a partitioned table above the declared table, the walk reads the identities of the referenced rows, and needs `SELECT` on the referenced table as a whole;
   - a trigger of PostgreSQL that runs the action of the foreign key is disabled, so the action would not run as counted;
   - the action `ON UPDATE` of another key follows the step, as above.
 - The summary counts each foreign key whose effect is not known once, however many tables and levels reach it.
@@ -115,11 +116,12 @@ Declared rows in the way:
 The order of an apply with `--allow-delete`:
 
 1. The plan, with its effect, comes first, and the guards and the declared rows in the way stop the apply before any write, as above.
-2. The apply inserts and updates (ADR-0026).
-3. Just before the first deletion, it follows the foreign keys again, with the same queries, and compares what they reach with the plan, step by step: the same foreign keys at the same levels, the same counts, and the same reasons for an effect that is not known. A row that it wrote can now be reached, because a default of a column, a value of `on_insert`, a trigger, or a rule gave it a reference that the declaration does not show. A declared row that the deletions would now delete or change is reported as a declared row in the way, with the file that declares it and these causes. Any other difference stops the apply with an error that names the first step that differs, the count of the plan and the count now, and the same causes. A change of a column that the declaration does not name, which leaves the references as the plan counted them, passes.
-4. It deletes, from referencing tables to referenced ones, and a table whose rows to delete a cascade from another table reaches comes before that table. Otherwise the cascade would delete those rows first, and the statement of their table, which must delete as many rows as the plan shows (ADR-0026), would fail. When both orders cannot hold, the order of the foreign keys stays.
-5. After the deletions and before the commit, it checks the effect, as the next rules say. The check takes a context that an interrupt cancels, so an interrupt during it rolls the apply back.
-6. It commits.
+2. Before any write, the apply checks that the session keeps the counts of the rows that its transaction deletes and updates, which the check after the deletions reads: PostgreSQL keeps them only with `track_counts` on, its default. With `track_counts` off, in the server, the database, the role, or the options of the connection, every deletion would look like one that did less than the plan counted, so the apply stops here, with an error that names the setting and says to apply in a session that leaves it on, or without deleting rows. An apply without deletions needs no counts.
+3. The apply inserts and updates (ADR-0026).
+4. Just before the first deletion, it follows the foreign keys again, with the same queries, and compares what they reach with the plan, step by step: the same foreign keys at the same levels, the same counts, and the same reasons for an effect that is not known. A row that it wrote can now be reached, because a default of a column, a value of `on_insert`, a trigger, or a rule created after the plan gave it a reference that the declaration does not show. A rule of a declared table that such a write would fire stops the plan already (ADR-0038). A declared row that the deletions would now delete or change is reported as a declared row in the way, with the file that declares it and these causes. Any other difference stops the apply with an error that names the first step that differs, the count of the plan and the count now, and the same causes. A change of a column that the declaration does not name, which leaves the references as the plan counted them, passes.
+5. It deletes, from referencing tables to referenced ones, and a table whose rows to delete a cascade from another table reaches comes before that table. Otherwise the cascade would delete those rows first, the batch of their table would pick fewer rows, and its statement, which must delete as many rows as the plan shows (ADR-0026, ADR-0037), would fail. When both orders cannot hold, the order of the foreign keys stays.
+6. After the deletions and before the commit, it checks the effect, as the next rules say. The check takes a context that an interrupt cancels, so an interrupt during it rolls the apply back.
+7. It commits, with the settings of the session and `COMMIT` in one message (ADR-0037). Nothing runs between the check and the commit.
 
 After the fact:
 
@@ -127,11 +129,12 @@ After the fact:
 - PostgreSQL runs the actions of a foreign key with the newest rows, and checks each row that an action deletes or changes against the snapshot of the transaction: a row that the snapshot does not show is a serialization failure. A referencing row that another transaction inserted or changed after the snapshot, in a table that the walk followed, therefore makes the deletion fail with the error of a concurrent change (ADR-0026), and nothing is written.
 - A referencing row that another transaction deleted, or pointed at another row, after the snapshot is not found by the action, so the deletions would do less than the counts say. The check after the deletions reads every row that the effect counted as deleted or changed, by its identity: a row that is still in the snapshot stops the apply. The same holds for a row that a trigger `BEFORE DELETE` or `BEFORE UPDATE` kept.
 - A query of the catalogs in the snapshot does not see a foreign key or a partition that another transaction added after it, while PostgreSQL runs the actions of the newest catalogs. The check therefore also reads how many rows the transaction deleted and updated in each table since its first deletion, from `pg_stat_xact_user_tables`, by the partitioned table at the top of each relation. Each table must have lost the rows that the plan deletes from it and the effect counted, and a table that the effect did not reach must have lost and changed none. A foreign key or a partition that another transaction added, a trigger or a rule that deletes rows of another table or changes rows of a table that the effect did not reach, and the disabled triggers of a foreign key stop the apply there, and nothing is written.
-- PostgreSQL itself refuses a rule that rewrites the query of a cascade, with an error that the apply passes on.
+- A plan stops on a rule of a declared table that its apply would fire (ADR-0038), but a cascade also fires the rules of the tables that it reaches: of tables that the declaration does not hold, and a rule `ON DELETE` of a declared table whose mode never deletes, or `ON UPDATE` for `SET NULL` and `SET DEFAULT`. The check above finds what such a rule deletes, changes elsewhere, or keeps, and PostgreSQL itself stops a cascade whose query a rule turns into nothing, as `DO INSTEAD NOTHING` does, with an error that the apply passes on.
 - What stays out of sight is what the counts of deletions and of tables that the effect did not reach cannot show:
   - a row that a trigger or a rule inserts during the deletions;
   - a row of a table that the effect reaches, which a trigger or a rule changes beyond the rows that the effect counted;
-  - for a row that references rows to delete through a key `SET NULL` and a key `CASCADE`, which action PostgreSQL runs first. The plan counts the row as deleted, which it is in the end.
+  - for a row that references rows to delete through a key `SET NULL` and a key `CASCADE`, which action PostgreSQL runs first. The plan counts the row as deleted, which it is in the end;
+  - what a constraint trigger deferred to the commit deletes or changes, since it fires at the commit, after the check.
 
 What this refines:
 
@@ -140,6 +143,8 @@ What this refines:
   - ADR-0026, in "The order of the work": step 7, "Phase 2, in the reverse order: it deletes", gains the second walk before it, the order of the deletions above, and the check after it, before the commit of step 8. "A plan still drops each table's rows as soon as it compared them" no longer holds either.
   - ADR-0027: the limit counts the rows that a cascade deletes "at the first level", and a referencing row that the run also deletes "is counted twice"; the limit now counts every level and the changed rows, each once. A reference count needs "`SELECT` on the columns on either side of the key"; the walk needs `SELECT` on the referencing table as a whole. "Each count stands under the rows to delete of the table, once per table"; the block replaces those lines. "Just before the rows of a table are deleted, the apply counts the references again"; the second walk replaces that count. "Without `--allow-delete`: The apply makes the other changes, leaves the rows to delete in place"; it still does, unless a declared row is in the way. In its Confirmation, `internal/plan/testdata/effect.golden` replaces `references.golden`, `TestEffectsOfColumnsThatTheRoleMayNotRead` replaces `TestReferencesToColumnsThatTheRoleMayNotRead`, and `TestApplyEffectAgainAfterTheWrites` replaces `TestApplyReferencesAgainBeforeDeletes`.
   - ADR-0029: "The reference lines of the plan (ADR-0027) stand as comments before the deletions of their table"; the block stands there now. "Nothing in the script applies `--max-delete` or counts the references again"; nor does it follow the foreign keys again or check the effect after the deletions. "Then come the deletions, from referencing tables to referenced ones"; they come in the order of the deletions above.
+  - ADR-0037: "Everything else keeps the pinned settings: ..., the second count of the references before the deletions (ADR-0027), and the statements that pick the rows of each write." The walk, the walk again that replaces that count, and the check after the deletions keep them. "Each write adds one of the rows that it picked, and an insert with values of `on_insert` one more": these temporary tables, and the one of the walk, are left out of the counts that the check reads.
+  - ADR-0038: "A rule on a kind of statement that the mode never writes cannot fire, and is no mistake." A cascade or `SET NULL` from the deletions of another table fires it; it stays no mistake of the plan, and the check after the deletions finds what it does. "The count of rows stays for triggers, cascades, and rules created after the plan": the check after the deletions stays for them too, and for the rules of the tables that the deletions reach.
 
 ### Consequences
 
@@ -154,7 +159,9 @@ What this refines:
   - a declared row in the way stops a plan, and an apply without `--allow-delete`, which left the deletion out;
   - a tool that reads the lines `referenced by` of a plan, or their comments in the plan as SQL, finds them gone;
   - a reference that a default of a column, `on_insert`, a trigger, or a rule writes to a row that the deletions reach stops an apply with `--allow-delete`;
-  - a trigger or a rule that deletes rows of another table, or changes rows of a table that the deletions do not reach, and disabled triggers of a foreign key, stop an apply with `--allow-delete` before its commit.
+  - a trigger or a rule that deletes rows of another table, or changes rows of a table that the deletions do not reach, and disabled triggers of a foreign key, stop an apply with `--allow-delete` before its commit;
+  - a session with `track_counts` off stops an apply with `--allow-delete` that has rows to delete, before any write;
+  - a role that may read a table that references the rows to delete in some of its columns alone, a declared table that references itself among them, stops an apply with `--allow-delete`, where ADR-0024 and ADR-0037 let it apply with the declared columns.
 
   The flag keeps its name, `--max-delete`, although it now counts changed rows too. A row that `SET NULL` changes loses its reference as a deleted row loses everything, and both are what the limit guards against. A new name would break every pipeline that passes the flag.
 - Bad, because a plan and an apply read every table that the deletions reach, to the end of every cascade, which costs a scan of each referencing table without an index at each level, on the database that serves the application.
@@ -163,6 +170,7 @@ What this refines:
 - Bad, because the action `ON UPDATE` that a `SET NULL` or `SET DEFAULT` fires is not followed: it stops an apply with `--allow-delete`.
 - Bad, because a row that two foreign keys reach is shown under one of them only, so the other line counts fewer rows than reference through it.
 - Bad, because a plan does not follow triggers and rules: the check after the deletions stops what they delete or change outside the effect, but not the rows that stay out of sight, and the action `ON UPDATE` of an update of the apply is still not shown (ADR-0027).
+- Bad, because the check rests on the counts of PostgreSQL, so an apply that deletes needs `track_counts` on.
 
 ### Confirmation
 
@@ -171,7 +179,8 @@ What this refines:
   - `TestRun` and `TestRenderSummary`: the limit with each part once, the stop on an effect that is not known, a run without `--allow-delete`, and the lines after the plan;
   - `TestRunEffectAgain`: the second walk, with another count, another step, and a declared row in the way after the writes, and the check after the deletions before the commit;
   - `TestRunInterruptedDuringTheCheck`: an interrupt during the check after the deletions;
-  - `TestDeletionOrder` and `TestRunDeletesReachedTablesFirst`: the order of the deletions.
+  - `TestDeletionOrder` and `TestRunDeletesReachedTablesFirst`: the order of the deletions;
+  - `TestRun`, the case "the session cannot check the deletions": an error of `PrepareDeletes` stops the apply before any write.
 - The golden test `TestWrite` in `internal/script` confirms the comments of the plan as SQL.
 - Integration tests against PostgreSQL 15 to 18 in `make check-all`, in `internal/postgres`:
   - `TestEffectsOfEveryAction`: a cascade three levels deep into 50,000 rows, `SET NULL` with and without a column list, `SET DEFAULT`, `NO ACTION`, `RESTRICT`, and tables that the role may not read at the first and the second level;
@@ -186,8 +195,11 @@ What this refines:
   - `TestEffectsOfColumnsThatTheRoleMayNotRead`: privileges and row-level security, each with its reason;
   - `TestApplyEffectAgainAfterTheWrites`: the second walk;
   - `TestApplyEffectAfterConcurrentChanges`: through a second connection, a referencing row that another transaction inserts, deletes, or points at another row, a foreign key and a partition that it adds; and a trigger that keeps a row, a rule that PostgreSQL refuses, and a trigger that deletes rows of another table;
-  - `TestEffectsOnLargeTables`: the cost on large tables, on the newest version alone.
-- In `cmd/kortopi`, `TestApplyEffectOfDeletions`, `TestDeclaredRowsInTheWay`, and `TestApplyAfterItsWrites` run the command against each version: `SET NULL` at the limit and into a table that the role may not read, a cascade three levels deep, the plan as SQL, declared rows in the way, a reference that the plan moves, a reference from a default and from `on_insert` that stops the apply, a change of a column that the declaration does not name, and a table that a cascade reaches deleted first. After each apply, they count the rows of every table through a plain connection and compare them with what the output announced.
+  - `TestEffectsOnLargeTables`: the cost on large tables, on the newest version alone;
+  - `TestApplyNeedsTrackCounts`: `track_counts` off in the options of the session and in the settings of the role;
+  - `TestEffectsOfForeignKeysOfIntervals`: a foreign key over intervals that equal each other with different texts, which fails when the walk compares the text;
+  - `TestApplyWhenRowLevelSecurityComesToApply` of ADR-0037, which now follows the foreign keys before its deletion.
+- In `cmd/kortopi`, `TestApplyEffectOfDeletions`, `TestDeclaredRowsInTheWay`, `TestApplyAfterItsWrites`, and `TestApplyDeletesWithSelectOnTheDeclaredColumns` run the command against each version: `SET NULL` at the limit and into a table that the role may not read, a cascade three levels deep, the plan as SQL, declared rows in the way, a reference that the plan moves, a reference from a default and from `on_insert` that stops the apply, a change of a column that the declaration does not name, a table that a cascade reaches deleted first, inserts with values of `on_insert`, updates, and deletions in one apply, a session with `track_counts` off, and a role that reads the declared tables in their declared columns alone. After each apply, they count the rows of every table through a plain connection and compare them with what the output announced.
 
 ## Pros and Cons of the Options
 
