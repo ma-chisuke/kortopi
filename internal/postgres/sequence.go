@@ -321,17 +321,37 @@ func (s *Session) onSequence(ctx context.Context, step string, f func(tx pgx.Tx)
 // onSequence. When PostgreSQL ends the read with an error that leaves the
 // session usable, it returns why, and a nil error; any other error stops the
 // run.
-func (s *Session) readPosition(ctx context.Context, step string, o *ownedSequence, maxSQL, minSQL string) (pos position, why string, err error) {
+func (s *Session) readPosition(ctx context.Context, step string, o *ownedSequence, maxSQL, minSQL string) (pos position, why, code string, err error) {
 	bound, err := s.onSequence(ctx, step, func(tx pgx.Tx) error {
 		return pos.scan(tx.QueryRow(ctx, sequenceSQL(o.name, maxSQL, minSQL, readSequence)))
 	})
 	if err == nil {
-		return pos, "", nil
+		return pos, "", "", nil
 	}
-	if why, _, ok := s.sequenceError(ctx, err, bound); ok {
-		return pos, why, nil
+	if why, code, ok := s.statementFailure(ctx, err, bound); ok {
+		return pos, why, code, nil
 	}
-	return pos, "", err
+	return pos, "", "", err
+}
+
+// replacedSequence says why a statement on a sequence found no row: the
+// statement names the sequence by its name, which the newest catalogs
+// resolve, while it reads pg_sequence in the snapshot of the run, which
+// does not see a sequence that another session created after the run
+// began under that name, nor one that it dropped. replacedCode stands for
+// it in the place of a SQLSTATE.
+const (
+	replacedSequence = "another session dropped or replaced the sequence after the run began"
+	replacedCode     = "replaced"
+)
+
+// statementFailure is sequenceError, and says replacedSequence, with
+// replacedCode, for a statement on a sequence that found no row.
+func (s *Session) statementFailure(ctx context.Context, err error, bound int64) (why, code string, ok bool) {
+	if ctx.Err() == nil && errors.Is(err, pgx.ErrNoRows) {
+		return replacedSequence, replacedCode, true
+	}
+	return s.sequenceError(ctx, err, bound)
 }
 
 // sequenceError says what happened when PostgreSQL ended a statement on a
@@ -407,10 +427,12 @@ func (s *Session) Sequences(ctx context.Context, name declaration.TableName, col
 			continue
 		}
 		maxSQL, minSQL := s.plannedTopSQL(lt, col)
-		pos, why, err := s.readPosition(ctx, "read", o, maxSQL, minSQL)
+		pos, why, code, err := s.readPosition(ctx, "read", o, maxSQL, minSQL)
 		switch {
 		case err != nil:
 			return nil, fmt.Errorf("read sequence %s of column %q of table %s: %w", o.name, column, name, err)
+		case code == replacedCode:
+			seq.Unread, seq.Stays, seq.Advice = true, why, "plan again, which reads the sequence that the column owns then"
 		case why != "":
 			seq.Unread, seq.Stays, seq.Advice = true, "PostgreSQL ended the read: "+why, "an apply reads it again, and moves it if it can"
 		case pos.how == howBeyond:
@@ -502,7 +524,7 @@ func (s *Session) MoveSequences(ctx context.Context, name declaration.TableName,
 		done := seq
 		switch {
 		case seq.Tries():
-			done, err = s.moveOne(ctx, col.sequence, seq, maxSQL, minSQL)
+			done, err = s.moveOne(ctx, name, col.sequence, seq, maxSQL, minSQL)
 		case seq.Goal != "":
 			done, err = s.readAgain(ctx, col.sequence, seq, maxSQL, minSQL)
 		case seq.Next == "":
@@ -561,15 +583,20 @@ func (s *Session) checkDeferred(ctx context.Context) error {
 // move it the rest of the way; and one behind where the move left it was
 // set back by another session. When that read fails, the position is not
 // known, also after a move that ended.
-func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequence, maxSQL, minSQL string) (plan.Sequence, error) {
+func (s *Session) moveOne(ctx context.Context, table declaration.TableName, o *ownedSequence, seq plan.Sequence, maxSQL, minSQL string) (plan.Sequence, error) {
 	out := plan.Sequence{Column: seq.Column, Name: seq.Name}
-	// Advice for a position that the apply does not know.
+	// Advice for a position that the apply does not know, and for a
+	// sequence whose name names another sequence, or none, now.
 	unknown := byStatement(o, maxSQL, minSQL, "once it can be read, ")
-	before, why, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
+	replaced := replacedAdvice(o, table, seq.Column, maxSQL, minSQL)
+	before, why, code, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
 	switch {
 	case err != nil:
 		// A read moves nothing.
 		return out, err
+	case code == replacedCode:
+		out.Unread, out.Stays, out.Advice = true, why, replaced
+		return out, nil
 	case why != "":
 		out.Unread, out.Stays, out.Advice = true, "PostgreSQL ended the read before the move: "+why, unknown
 		return out, nil
@@ -586,14 +613,17 @@ func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequen
 	bound, err := s.onSequence(ctx, "move", func(tx pgx.Tx) error {
 		return pos.scan(tx.QueryRow(ctx, sequenceSQL(o.name, maxSQL, minSQL, moveSequence)))
 	})
-	var failed, code string
+	var failed string
 	if err != nil {
 		var ok bool
-		if failed, code, ok = s.sequenceError(ctx, err, bound); !ok {
+		if failed, code, ok = s.statementFailure(ctx, err, bound); !ok {
 			out.Unknown, out.Stays, out.Advice = true, "the apply stopped during its move, before it could read the sequence again", unknown
 			return out, err
 		}
 		failed = "the statement that moves it failed: " + failed
+		if code == replacedCode {
+			unknown = replaced
+		}
 	}
 	if failed == "" && !pos.behind() {
 		// The sequence moved beyond the values between the two reads, so
@@ -603,7 +633,10 @@ func (s *Session) moveOne(ctx context.Context, o *ownedSequence, seq plan.Sequen
 		return out, nil
 	}
 
-	after, why, err := s.readPosition(ctx, "after", o, maxSQL, minSQL)
+	after, why, afterCode, err := s.readPosition(ctx, "after", o, maxSQL, minSQL)
+	if afterCode == replacedCode {
+		unknown = replaced
+	}
 	switch {
 	case err != nil:
 		out.Unknown, out.Ran, out.Stays, out.Advice = true, failed == "", "the apply stopped while it read the sequence again after its move", unknown
@@ -657,7 +690,7 @@ func (s *Session) readAgain(ctx context.Context, o *ownedSequence, seq plan.Sequ
 	if !o.usable || !o.readable {
 		return seq, nil
 	}
-	pos, why, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
+	pos, why, _, err := s.readPosition(ctx, "before", o, maxSQL, minSQL)
 	if err != nil || why != "" {
 		return seq, err
 	}
@@ -759,11 +792,35 @@ func (o *ownedSequence) byHand(pos position, code string) string {
 // sequence when it runs, and moves the sequence beyond the column, never
 // back, so it is the statement to run whatever the position is.
 func byStatement(o *ownedSequence, maxSQL, minSQL, lead string) string {
+	return "move it " + lead + "as a role that may read and update it, with " + moveOnOneLine(o, maxSQL, minSQL)
+}
+
+// moveOnOneLine returns the statement of sequenceSQL that moves the
+// sequence, on one line.
+func moveOnOneLine(o *ownedSequence, maxSQL, minSQL string) string {
 	lines := strings.Split(sequenceSQL(o.name, maxSQL, minSQL, moveSequence), "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimLeft(line, " ")
 	}
-	return "move it " + lead + "as a role that may read and update it, with " + strings.Join(lines, " ")
+	return strings.Join(lines, " ")
+}
+
+// replacedAdvice returns the advice for a sequence that another session
+// dropped or replaced after the run began (replacedSequence): its name may
+// name another sequence now, so a person finds the sequence that column of
+// table owns now, which pg_get_serial_sequence names, and moves it with the
+// statement of the move, with its name.
+func replacedAdvice(o *ownedSequence, table declaration.TableName, column, maxSQL, minSQL string) string {
+	tableLit, err1 := literal(plan.Value{Text: quoteIdent(table.Schema) + "." + quoteIdent(table.Name)})
+	columnLit, err2 := literal(plan.Value{Text: column})
+	if err1 != nil || err2 != nil {
+		// Names of the catalogs are valid UTF-8 in a database whose
+		// encoding kortopi accepts.
+		return "plan again, which reads the sequence that the column owns then"
+	}
+	return "find the sequence that the column owns now, with SELECT pg_catalog.pg_get_serial_sequence(" + tableLit + ", " + columnLit + "), " +
+		"and move it as a role that may read and update it, with this statement, its name in place of " + o.ident + ": " +
+		moveOnOneLine(o, maxSQL, minSQL)
 }
 
 // byHand says how to move the sequence by hand from pos, by who: with as

@@ -112,6 +112,55 @@ func TestSequenceWhosePositionIsNotKnown(t *testing.T) {
 	}
 }
 
+// A sequence that another session renames and replaces with a new one after
+// the run began stops neither a plan nor an apply (ADR-0045): the run names
+// the sequence by its name, which names the new one in the newest catalogs,
+// while its snapshot does not see that one. The plan says that it could not
+// read the sequence, and the apply leaves it with a note that says how to
+// find the sequence that the column owns and move it.
+func TestSequenceReplacedDuringTheRun(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app; CREATE TABLE app.t (id serial PRIMARY KEY, v text); INSERT INTO app.t (v) VALUES ('a'), ('b');`)
+			dir := writeFiles(t, map[string]string{"app/t.csv": "id,v\n1,a\n2,b\n3,c\n"})
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{csvTable("app", "t", "id", "v")}}
+			other, err := pgx.ConnectConfig(t.Context(), db.Config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = other.Close(context.Background()) }()
+			replace := func(ctx context.Context, step string, _ pgx.Tx) error {
+				if step != "read" {
+					return nil
+				}
+				_, err := other.Exec(ctx, "ALTER SEQUENCE app.t_id_seq RENAME TO t_id_seq_old; CREATE SEQUENCE app.t_id_seq")
+				return err
+			}
+
+			r, err := moveWithHook(t, db, decl, 0, replace)
+			if err != nil || !r.Committed {
+				t.Fatalf("apply = %+v, %v, want a commit", r, err)
+			}
+			planned, done := sequencesOf(r)
+			wantPlanned := "app.t.id app.t_id_seq: could not be read: another session dropped or replaced the sequence after the run began: " +
+				"plan again, which reads the sequence that the column owns then"
+			wantDone := "app.t.id app.t_id_seq: could not be read: another session dropped or replaced the sequence after the run began: " +
+				`find the sequence that the column owns now, with SELECT pg_catalog.pg_get_serial_sequence('"app"."t"', 'id'), ` +
+				"and move it as a role that may read and update it, with this statement, its name in place of app.t_id_seq: WITH RECURSIVE "
+			if len(planned) != 1 || planned[0] != wantPlanned || len(done) != 1 || !strings.HasPrefix(done[0], wantDone) {
+				t.Fatalf("plan:\n%s\nafter the commit:\n%s\nwant:\n%s\n%s…", strings.Join(planned, "\n"), strings.Join(done, "\n"), wantPlanned, wantDone)
+			}
+			if notes := apply.SequenceNotes(r); len(notes) != 1 {
+				t.Errorf("notes after the apply: %q, want one", notes)
+			}
+			if got := db.Query(t, "SELECT pg_catalog.pg_get_serial_sequence('app.t', 'id') || ' ' || count(*) FROM app.t"); fmt.Sprint(got) != "[[app.t_id_seq_old 3]]" {
+				t.Errorf("sequence of the column and rows after the apply: %v, want the renamed sequence and the rows written", got)
+			}
+		})
+	}
+}
+
 // moveWithHook applies decl, with --lock-timeout lockTimeout when it is not
 // zero, while hook runs before each statement on a sequence, and returns
 // the result and the error of the apply.
