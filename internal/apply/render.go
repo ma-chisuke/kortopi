@@ -16,8 +16,9 @@ import (
 // the other writes of the apply had done their work already, as the check
 // before the commit confirmed (ADR-0042). When
 // deletions were left out, a line counts them, with what they would also
-// do, and names the flag that allows them (ADR-0018); when they were all that
-// differed, that line stands alone and says that nothing was written. An
+// do, and names the flag that allows them (ADR-0018); when the plan held
+// nothing else to write, that line stands alone and says that nothing was
+// written. An
 // apply that found nothing to change writes nothing more than its plan,
 // which says so.
 func RenderSummary(w io.Writer, r *Result) error {
@@ -48,13 +49,16 @@ func RenderSummary(w io.Writer, r *Result) error {
 				tables++
 			}
 		}
-		them, only, their := "them", "They are the only differences", "their"
+		them, their := "them", "their"
 		if r.SkippedDeletes == 1 {
-			them, only, their = "it", "It is the only difference", "its"
+			them, their = "it", "its"
 		}
 		fmt.Fprintf(&b, "Not deleted: %s of %s.", rows(r.SkippedDeletes), plural(tables, "table", "tables"))
 		if !wrote {
-			fmt.Fprintf(&b, " %s, so nothing was written.", only)
+			// The plan can hold more than the deletions, such as stored rows
+			// that a mode deletes none of (ADR-0046), but nothing else that
+			// an apply writes.
+			b.WriteString(" The plan holds nothing else to write, so nothing was written.")
 		}
 		if reach := plan.Reach(totals, "delete", "change"); reach != "" {
 			fmt.Fprintf(&b, " Through foreign keys, %s deletion would also %s.", their, reach)

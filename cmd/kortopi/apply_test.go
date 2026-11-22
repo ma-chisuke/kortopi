@@ -210,7 +210,7 @@ func TestRunApply(t *testing.T) {
 				"Plan: 0 to insert, 0 to update, 1 to delete in 2 tables.\n" +
 				"1 table without changes is not shown.\n" +
 				"\n" +
-				"Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.\n",
+				"Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.\n",
 			wantCalls: diffs,
 		},
 		{
