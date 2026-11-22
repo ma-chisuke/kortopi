@@ -57,12 +57,12 @@ func TestSettingsFromTheEnvironment(t *testing.T) {
 			t.Setenv("PGOPTIONS", "-c lock_timeout=200ms")
 			code, stdout, stderr = e.command(t, "plan", "--dir", dir)
 			checkRun(t, code, stdout, stderr, exitError, "", "canceling statement due to lock timeout (SQLSTATE 55P03): "+
-				"another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: "+
-				"nothing was changed: run the plan again once that session has released the lock\n")
+				"another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout of the session allows: "+
+				"nothing was changed: run the plan again once that session has released the lock, or allow the wait more time with --lock-timeout\n")
 			code, stdout, stderr = e.command(t, "apply", "--dir", dir)
 			checkRun(t, code, stdout, stderr, exitError, "", "(SQLSTATE 55P03): "+
-				"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as lock_timeout allows: "+
-				"run the apply again once that session has released the lock\nkortopi: nothing was changed\n")
+				"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as lock_timeout of the session allows: "+
+				"run the apply again once that session has released the lock, or allow the wait more time with --lock-timeout\nkortopi: nothing was changed\n")
 
 			t.Setenv("PGOPTIONS", "-c statement_timeout=200ms")
 			code, stdout, stderr = e.command(t, "plan", "--dir", dir)

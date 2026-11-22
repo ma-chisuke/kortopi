@@ -39,6 +39,16 @@ func sourceFlags(command string) string {
 	return dirFlag + schemaFlag(command)
 }
 
+// lockTimeoutFlag is the help of --lock-timeout, which plan, apply, and
+// export share (ADR-0044).
+const lockTimeoutFlag = "  --lock-timeout <duration>\n" +
+	"                    stop when a statement waits longer than this for a lock\n" +
+	"                    that another session holds, such as 10s, 500ms, or\n" +
+	"                    1m30s (default: the lock_timeout of the session)\n"
+
+// maxLockTimeout is the longest --lock-timeout.
+const maxLockTimeout = 24 * time.Hour
+
 // connectionFlags is the help of the flags of the connection.
 const connectionFlags = "  --host <host>     the host of the database server\n" +
 	"  --port <port>     the port of the database server\n" +
@@ -52,14 +62,17 @@ const connectionHelp = "The connection comes from the environment variables of l
 	"override them. There is no flag for the password.\n"
 
 // closeTimeout bounds the rollback and the close of the session, which run
-// also after an interrupt.
+// also after an interrupt. After an interrupt, the session waits less
+// (dialect.Options.GiveUp).
 const closeTimeout = 10 * time.Second
 
-// common are the flags that plan and apply share.
+// common are the flags that plan, apply, and export share.
 type common struct {
 	dir     string
 	schemas []string
 	conn    connection
+	// lockTimeout is --lock-timeout, or 0 without it.
+	lockTimeout time.Duration
 }
 
 // connection holds the flags that override the connection settings of libpq.
@@ -73,10 +86,12 @@ type connection struct {
 	dbname string
 }
 
-// open opens a session of d on the database that c names, for what opts
-// say.
-func (c connection) open(ctx context.Context, d dialect.Dialect, opts dialect.Options) (dialect.Session, error) {
-	opts.Host, opts.Port, opts.User, opts.Database = c.host, c.port, c.user, c.dbname
+// open opens a session of d on the database that the flags of c name, for
+// what opts say, with the lock timeout of the flags, and the second
+// interrupt of e.
+func (c common) open(ctx context.Context, d dialect.Dialect, opts dialect.Options, e env) (dialect.Session, error) {
+	opts.Host, opts.Port, opts.User, opts.Database = c.conn.host, c.conn.port, c.conn.user, c.conn.dbname
+	opts.LockTimeout, opts.GiveUp = c.lockTimeout, e.again
 	return d.Open(ctx, opts)
 }
 
@@ -108,6 +123,14 @@ func (c *common) define(fs *flag.FlagSet) {
 	})
 	fs.Func("user", "", nameOnly(&c.conn.user, "the name of the user"))
 	fs.Func("dbname", "", nameOnly(&c.conn.dbname, "the name of the database"))
+	fs.Func("lock-timeout", "", func(s string) error {
+		d, err := time.ParseDuration(s)
+		if err != nil || d < time.Millisecond || d > maxLockTimeout {
+			return errors.New("give a duration from 1ms to 24h, such as 10s, 500ms, or 1m30s")
+		}
+		c.lockTimeout = d
+		return nil
+	})
 }
 
 // nameOnly returns the function of a flag of the connection that takes a
@@ -167,10 +190,26 @@ func closeSession(ctx context.Context, s dialect.Session) error {
 
 // interrupted returns instead when ctx was cancelled by an interrupt, and
 // err otherwise: after an interrupt, the error of the database only says that
-// a statement was cancelled.
+// a statement was cancelled. When the database did not confirm that the
+// session ended, the error that says so follows instead (ADR-0043).
 func interrupted(ctx context.Context, err, instead error) error {
-	if ctx.Err() != nil {
-		return instead
+	if ctx.Err() == nil {
+		return err
+	}
+	var notEnded *dialect.NotEndedError
+	if errors.As(err, &notEnded) {
+		return errors.Join(instead, notEnded)
+	}
+	return instead
+}
+
+// withNotEnded returns err, and the error of closeErr that says that the
+// database did not confirm the end of the session after an interrupt, if it
+// holds one: the other errors of a close after a failure add nothing.
+func withNotEnded(err, closeErr error) error {
+	var notEnded *dialect.NotEndedError
+	if errors.As(closeErr, &notEnded) {
+		return errors.Join(err, notEnded)
 	}
 	return err
 }

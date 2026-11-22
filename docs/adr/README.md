@@ -48,3 +48,5 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0040](ADR-0040-compare-an-interval-by-its-months-days-and-time.md) | Compare an interval by its months, days, and time | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.md) | Write issues through forms with required fields | accepted | 2026-11-21 |
 | [ADR-0042](ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md) | Compare every declared table again before the commit of an apply, and let that comparison decide for updates whose rows already hold their declared values | accepted | 2026-11-22 |
+| [ADR-0043](ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md) | Cancel the statement of an interrupted run on the server, and give up the wait for a commit only on a second interrupt or a dead connection | accepted | 2026-11-22 |
+| [ADR-0044](ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md) | Set the lock timeout of a run with `--lock-timeout`, local to each transaction of kortopi | accepted | 2026-11-22 |

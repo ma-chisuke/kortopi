@@ -37,6 +37,10 @@ flags:
                     the flag for more tables
   --format <name>   csv (the default), or sql: the format of a new file
   --overwrite       replace the files that declare the exported tables
+  --lock-timeout <duration>
+                    stop when a statement waits longer than this for a lock
+                    that another session holds, such as 10s, 500ms, or
+                    1m30s (default: the lock_timeout of the session)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -59,6 +63,7 @@ exit status:
 - `--dir` is the data directory to write into, the current directory by default. It is created when it is missing. When it holds `kortopi.toml`, the export reads the keys of the tables from it.
 - `--format` is the format of a new file. A file that declares a table already keeps its format.
 - `--overwrite` lets the export replace the files that declare the named tables ([Refresh a declared table](#refresh-a-declared-table)).
+- `--lock-timeout` stops the export when it waits longer than that for a lock that another session holds on a table that it reads, as in [kortopi plan](plan.md#wait-for-a-lock).
 
 The connection works as for [kortopi plan](plan.md#connect-to-the-database): the environment variables of libpq, the password file, and the flags `--host`, `--port`, `--user`, and `--dbname`.
 kortopi takes no argument other than flags.
@@ -390,8 +395,10 @@ kortopi: data/facility/types.csv: a file appeared there while the export ran, an
 kortopi: these files were written before the error, and they stay as written: data/facility/room_types.csv, data/facility/rooms.csv
 ```
 
-Press Ctrl-C to stop an export.
+Press Ctrl-C to stop an export, or send it SIGTERM.
+kortopi asks the server to cancel the statement that runs, as for a plan ([kortopi plan](plan.md#what-the-session-needs)).
 The error then starts with `kortopi: interrupted: the export was stopped`, and still says which files were written.
+When the server does not confirm within 5 seconds that the session ended, a last line says that its statement may still run, and how to find it in `pg_stat_activity` and end it ([kortopi apply](apply.md#interrupt-an-apply)).
 
 | Status | Meaning |
 |---|---|
@@ -467,4 +474,4 @@ kortopi: invalid value for flag --table: write the table as <schema>.<table>, wi
 kortopi: invalid value for flag --format: give csv or sql
 ```
 
-The reasons for this behavior are in [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md) and [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.md).
+The reasons for this behavior are in [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.md), [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md), and [ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md).

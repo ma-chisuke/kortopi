@@ -421,16 +421,20 @@ func TestRunApplyInterruptedUnknownOutcome(t *testing.T) {
 	dir := writeFiles(t, twoTables)
 	ctx, cancel := context.WithCancel(t.Context())
 	unknown := fmt.Errorf("commit the apply: %w", apply.ErrUnknownOutcome)
+	notice := "kortopi: " + errCommitStarted.Error() + "\n"
+	var stdout, stderr lockedBuffer
 	s := &fakeSession{diffs: newPlan, fail: map[string]error{"Commit": unknown}, after: func(call string) {
 		if call == "Commit" {
+			// The interrupt comes while the commit waits for its answer,
+			// which never comes.
 			cancel()
+			stderr.waitFor(t, notice)
 		}
 	}}
 	fd := &fakeDialect{session: s}
-	var stdout, stderr strings.Builder
 	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
 
-	if want := "kortopi: " + unknown.Error() + "\n"; code != exitError || stderr.String() != want || stdout.String() != planOfGold {
+	if want := notice + "kortopi: " + unknown.Error() + "\n"; code != exitError || stderr.String() != want || stdout.String() != planOfGold {
 		t.Errorf("kortopi apply = %d, stdout %q, stderr %q, want %d, the plan, stderr %q", code, stdout.String(), stderr.String(), exitError, want)
 	}
 	if !s.closed {

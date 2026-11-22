@@ -6,7 +6,7 @@ kortopi が人の手を離れて動く場所は3つある。デプロイのと�
 
 ## スクリプトが頼れること
 
-- 標準出力には、`kortopi plan` と `kortopi apply` の計画と、apply が書いたものの行が出る。標準エラー出力には、`kortopi: <message>` の形のエラーが1行ずつ出る。例外は接続の失敗で、接続の試みごとにも1行を出す（[kortopi plan](plan.ja.md#データベースへの接続)）。`note: <message>` の形の注記と、別の apply を待つ apply の行もここに出る。
+- 標準出力には、`kortopi plan` と `kortopi apply` の計画と、apply が書いたものの行が出る。標準エラー出力には、`kortopi: <message>` の形のエラーが1行ずつ出る。例外は接続の失敗で、接続の試みごとにも1行を出す（[kortopi plan](plan.ja.md#データベースへの接続)）。`note: <message>` の形の注記、別の apply を待つ apply の行、コミットが始まったあとに来た割り込みの行もここに出る。
 - 計画はデータベースを変えない。そのため、何度でも実行できる。
 - 適用済みの宣言の apply は何も変えず、空の計画を出す。失敗した apply は何も変えていない。例外は、コミットの結果が分からないとエラーが告げる場合で、そのときは `kortopi plan` で状態を確かめる。データベースやファイルでのエラーのあとは、標準エラー出力の最後の行が `kortopi: nothing was changed` になる。フラグの誤りのあとは、代わりにコマンドの使い方が出力の最後に来る。そのため、apply はどんな失敗のあとでも、もう一度実行できる。
 - 接続の設定は、libpq の環境変数から読む（[kortopi plan](plan.ja.md#データベースへの接続)）。パスワードのフラグはない。パイプラインのシークレットから `PGPASSWORD` に渡すか、パスワードファイルに書く。
@@ -25,12 +25,12 @@ kortopi が人の手を離れて動く場所は3つある。デプロイのと�
 ```sh
 export PGHOST=db.example.test PGDATABASE=app PGUSER=app_owner
 export PGPASSWORD="$APP_OWNER_PASSWORD"
-export PGOPTIONS='-c lock_timeout=10s'
-kortopi apply --dir data
+kortopi apply --dir data --lock-timeout 10s
 ```
 
 - apply は、宣言したテーブルを所有するロールか、[apply に要るもの](apply.ja.md#apply-に要るもの)を持つロールで実行する。スキーマごとに所有者のロールがあるなら、スキーマごとに1回、`--schema` を付けて apply を実行する（[kortopi apply](apply.ja.md#スキーマごとの-apply)）。
-- ロックのタイムアウトを設定する。設定しなければ、宣言したテーブルのロックをほかのセッションが持っている間、apply は際限なく待ち、デプロイもそれを待つ。設定すれば、apply はそう告げるエラーを出して止まり、何も変えない（[kortopi plan](plan.ja.md#接続の設定)）。
+- `--lock-timeout` で apply にロック待ちの上限を与える。与えなければ、宣言したテーブルや書く行のロックをほかのセッションが持っている間、apply は際限なく待ち、デプロイもそれを待つ。与えれば、apply はそう告げるエラーを出して止まり、何も変えない（[kortopi plan](plan.ja.md#ロックを待つとき)）。`PGOPTIONS` ではなくフラグを使う。トランザクションモードのコネクションプーラーの後ろでは `PGOPTIONS` がサーバーに届かず、実行は接続に失敗するか、上限なしに待つ（[接続の設定](plan.ja.md#接続の設定)）。
+- ジョブをキャンセルする実行役は、kortopi に SIGTERM か SIGINT を送る。コミットの前なら、kortopi は文のキャンセルをサーバーに求め、ロールバックし、5秒以内に終了コード 1 で終わる。最後の行は `kortopi: nothing was changed` である。セッションが終わったという応答がその間にサーバーからなかったときは、その前の行が、セッションを `pg_stat_activity` で見つけて終わらせる方法を伝える。コミットが始まっていれば、kortopi は応答を待つことを伝え、2度目のシグナルで結果の分からないメッセージとともに待つのをやめる。そのときは `kortopi plan` を実行する。それより早くプロセスを強制終了する実行役では、結果はサーバーが決める（[kortopi apply](apply.ja.md#apply-に割り込む)）。
 - 終了コード 1 は、apply が何も変えなかったことを示す。例外は、コミットの結果が分からないとエラーが告げる場合である。直したあとで、デプロイは apply をもう一度実行できる。
 - 削除の扱いは、パイプラインごとに決める。`--allow-delete` がなければ、apply はモード `sync` のテーブルが失うべき行を残し、`Not deleted: ...` の行でそう告げ、0 で終わる。`--allow-delete` があれば、`--max-delete`（既定は 100 行）の範囲でそれらを削除する。この上限は、削除する行と、外部キーがそれと一緒にすべての段で消すか変える行をすべて数える（[kortopi apply](apply.ja.md#削除の安全策)）。上限は、宣言の行だけでなく、パイプラインの削除がそれを参照するテーブルで消し、変える行も見て決める。行を残したデプロイを失敗にしたければ、apply のあとで `kortopi plan --exit-code` を実行する。
 - apply は、コミットの前に、その実行の宣言したすべてのテーブルをもう一度比べる。書き込みのあとでデータベースが宣言と違う値や行を持てば、何も変えずに失敗する。宣言した値を書き換えるトリガーは、そうした違いを生む（[kortopi apply](apply.ja.md#コミット前の比較)）。宣言した値を書き換えるトリガーを持つテーブルでは、そのテーブルが保存するとおりの値を宣言が持つまで、そうした apply はどれも失敗する。コミットした apply の直後の計画にも、次のものはまだ現れうる。
@@ -96,4 +96,4 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - `--exit-code` は、テキストと同じく `--format sql` でも働く。計画が空でなければ終了コードは 2 である。
 - スクリプトは、apply のようにコミットの前にテーブルをもう一度比べることはしない。そのため、宣言した値をトリガーが書き換えれば、その書いたものがコミットされる。スクリプトのあとの `kortopi plan --exit-code` は、コメントのまま残った削除と、そうした値を示すか、何も示さない。
 
-<!-- i18n-source: automation.md sha256:9613478e06c6462d9e3c7e23ffdba156c1d73a02e2fcc5b94a94457b607253da -->
+<!-- i18n-source: automation.md sha256:eee4f21ddb78d5b7028551bb9fec8235bd3d81a740f3968017890ece2899f53d -->

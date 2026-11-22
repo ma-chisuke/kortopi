@@ -157,8 +157,9 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 	}
 
 	// An interrupt before this point rolls back. Once the commit starts, it
-	// runs to its end, so that the outcome is known: a second interrupt ends
-	// the process.
+	// runs to its end, so that the outcome is known: a second interrupt only
+	// gives up the wait for its answer, and the outcome is then not known
+	// (ADR-0043).
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
