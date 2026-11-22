@@ -240,6 +240,38 @@ func TestInterruptedCommitCommand(t *testing.T) {
 	}
 }
 
+// TestCommitRejectedAfterAnInterruptCommand interrupts `kortopi apply
+// --lock-timeout 2s` while its commit waits in a deferred trigger for a lock
+// that another session holds. The interrupt does not stop the commit, which
+// the lock timeout then ends: kortopi prints that error, and not that the
+// apply was stopped, and that nothing was changed. It sets the environment,
+// so it does not run in parallel with other tests.
+func TestCommitRejectedAfterAnInterruptCommand(t *testing.T) {
+	notice := "kortopi: " + errCommitStarted.Error() + "\n"
+	for _, srv := range pgtest.Servers() {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := srv.Database(t)
+			db.Exec(t, statusSchema+atCommitTrigger)
+			e := connect(t, db)
+			dir := writeFiles(t, map[string]string{"m/status.csv": interruptFiles["m/status.csv"]})
+			lockHolder(t, db, "SELECT pg_advisory_xact_lock(4242)")
+			r, interrupt := e.start(t, nil, "apply", "--dir", dir, "--lock-timeout", "2s")
+			waitForKortopi(t, db, "wait_event = 'advisory'")
+			interrupt()
+			code := r.wait(t)
+			want := notice + "kortopi: commit: canceling statement due to lock timeout: another session holds a lock on a table or on rows that the apply needs, " +
+				"and the apply waited for it as long as --lock-timeout 2s allows: run the apply again once that session has released the lock\n" +
+				"kortopi: nothing was changed\n"
+			if code != exitError || r.stderr.String() != want {
+				t.Errorf("kortopi apply = %d, stderr\n%s\nwant %d, stderr\n%s", code, r.stderr.String(), exitError, want)
+			}
+			if got := db.Query(t, "SELECT label FROM m.status WHERE code = 'paid'"); got[0][0] != "Paid" {
+				t.Errorf("the rejected commit changed the row: %v", got)
+			}
+		})
+	}
+}
+
 // TestLockTimeoutCommand gives each command --lock-timeout 200ms, and the
 // session a lock_timeout of 20s of its own in PGOPTIONS. The run stops after
 // the time of the flag in each phase where it waits for a lock that another

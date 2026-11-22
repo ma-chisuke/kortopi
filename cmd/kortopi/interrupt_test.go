@@ -267,3 +267,31 @@ func TestCommitInterrupted(t *testing.T) {
 		})
 	}
 }
+
+// A commit that the interrupt did not stop, and that the database then
+// rejects, prints its own error and that nothing was changed: the apply was
+// not stopped, so the error of the interrupt would be false, and the reason
+// would be lost.
+func TestCommitRejectedAfterAnInterrupt(t *testing.T) {
+	t.Parallel()
+
+	dir := writeFiles(t, twoTables)
+	ctx, cancel := context.WithCancel(t.Context())
+	notice := "kortopi: " + errCommitStarted.Error() + "\n"
+	rejected := errors.New("commit: canceling statement due to lock timeout: another session holds a lock on a table or on rows that the apply needs, " +
+		"and the apply waited for it as long as --lock-timeout 1.5s allows: run the apply again once that session has released the lock")
+	var stdout, stderr lockedBuffer
+	s := &fakeSession{diffs: newPlan, fail: map[string]error{"Commit": rejected}, after: func(call string) {
+		if call == "Commit" {
+			cancel()
+			stderr.waitFor(t, notice)
+		}
+	}}
+	fd := &fakeDialect{session: s}
+	code := run(ctx, []string{"apply", "--dir", dir}, env{stdout: &stdout, stderr: &stderr, dialects: fd.registry(t)})
+
+	want := notice + "kortopi: " + rejected.Error() + "\nkortopi: nothing was changed\n"
+	if code != exitError || stderr.String() != want || stdout.String() != planOfGold {
+		t.Errorf("kortopi apply = %d, stdout\n%s\nstderr\n%s\nwant %d, the plan, stderr\n%s", code, stdout.String(), stderr.String(), exitError, want)
+	}
+}

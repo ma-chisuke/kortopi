@@ -308,6 +308,7 @@ Once the commit has started, an interrupt does not stop it, so that its outcome 
 kortopi: the commit has started, so the interrupt does not stop it: waiting for the answer of the database, so that the outcome is known: interrupt again to give up the wait
 ```
 
+When the answer comes, the apply ends as it would have without the interrupt: with what it wrote, or, when the database rejected the commit, as a deferred constraint or a lock timeout in a deferred trigger can make it, with the error of the commit and `kortopi: nothing was changed`.
 A second interrupt gives up the wait for the answer, and kortopi exits with status 1 and the message of a commit without an answer:
 
 ```text

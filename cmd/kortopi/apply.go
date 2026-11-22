@@ -85,7 +85,14 @@ func runApply(ctx context.Context, args []string, e env) int {
 		printError(e.stderr, err)
 		return exitError
 	case err != nil:
-		printError(e.stderr, interrupted(ctx, err, errApplyInterrupted))
+		// An interrupt does not stop a commit that has started, so the error
+		// of the commit is what happened, also after an interrupt.
+		var commitErr *commitFailure
+		if errors.As(err, &commitErr) {
+			printError(e.stderr, err)
+		} else {
+			printError(e.stderr, interrupted(ctx, err, errApplyInterrupted))
+		}
 		printError(e.stderr, errNothingChanged)
 		return exitError
 	}
@@ -206,7 +213,24 @@ func (c committing) Commit(ctx context.Context) error {
 	close(done)
 	// Nothing writes to stderr until the line has been written.
 	<-exited
-	return err
+	if err != nil {
+		return &commitFailure{err: err}
+	}
+	return nil
+}
+
+// commitFailure is the error of a commit that started. An interrupt did not
+// stop it, so this error, and not the interrupt, is what the apply reports.
+type commitFailure struct {
+	err error
+}
+
+func (e *commitFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e *commitFailure) Unwrap() error {
+	return e.err
 }
 
 // committed reports whether an apply committed: it does when it wrote a row
