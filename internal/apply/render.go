@@ -12,9 +12,9 @@ import (
 // which Options.Planned shows: a blank line and the count of the rows
 // inserted, updated, and deleted, and a line of the rows that the deletions
 // also deleted and changed through foreign keys (ADR-0039). When inserts or
-// updates wrote fewer or more rows than the plan shows, a line says which,
-// and that the other writes of the apply had done their work already or
-// undone it, as the check before the commit confirmed (ADR-0042). When
+// updates wrote fewer rows than the plan shows, a line says which, and that
+// the other writes of the apply had done their work already, as the check
+// before the commit confirmed (ADR-0042). When
 // deletions were left out, a line counts them, with what they would also
 // do, and names the flag that allows them (ADR-0018); when they were all that
 // differed, that line stands alone and says that nothing was written. An
@@ -65,33 +65,21 @@ func RenderSummary(w io.Writer, r *Result) error {
 	return err
 }
 
-// unevenLines returns the lines of the writes that wrote another number of
-// rows than the plan shows: one line for those that wrote fewer, whose rows
-// the other writes of the apply had brought to their declared values
-// already, and one for those that wrote more, whose rows the other writes
-// had taken away from those values, so that kortopi wrote them too.
+// unevenLines returns the line of the writes that wrote fewer rows than the
+// plan shows, whose rows the other writes of the apply had brought to their
+// declared values already, or nothing.
 func unevenLines(uneven []Uneven) []string {
-	var fewer, more []string
-	moreRows := 0
+	var fewer []string
 	for _, u := range uneven {
-		switch n := u.Planned - u.Wrote; {
-		case n > 0 && u.Kind == "insert":
+		n := u.Planned - u.Wrote
+		if u.Kind == "insert" {
 			fewer = append(fewer, rowsTo(n, "insert")+" into "+u.Table.String()+" "+word(n, "was", "were")+" there already")
-		case n > 0:
+		} else {
 			fewer = append(fewer, rowsTo(n, "update")+" of "+u.Table.String()+" held "+word(n, "its", "their")+" declared values already")
-		case u.Kind == "insert":
-			more, moreRows = append(more, "inserted "+rows(-n)+" into "+u.Table.String()), moreRows-n
-		default:
-			more, moreRows = append(more, "updated "+rows(-n)+" of "+u.Table.String()), moreRows-n
 		}
 	}
-	var lines []string
-	if len(fewer) > 0 {
-		lines = append(lines, "Fewer than planned: "+joinAnd(fewer)+", after the other writes of the apply.")
+	if len(fewer) == 0 {
+		return nil
 	}
-	if len(more) > 0 {
-		lines = append(lines, "More than planned: kortopi also "+joinAnd(more)+", which the other writes of the apply had taken away from "+
-			word(moreRows, "its", "their")+" declared values.")
-	}
-	return lines
+	return []string{"Fewer than planned: " + joinAnd(fewer) + ", after the other writes of the apply."}
 }

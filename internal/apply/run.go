@@ -35,9 +35,10 @@ import (
 // table again, and stops when a difference is left that the run does not
 // report: a row to insert or to update, or a row to delete but those that it
 // left out without Options.AllowDelete (ADR-0042). A deletion must delete as
-// many rows as the plan shows. An insert or an update may write another
-// number, because the other writes of the apply can have done its work
-// already, or undone it: the comparison decides, and the result names such
+// many rows as the plan shows. An apply writes only the rows that its plan
+// shows, so an insert or an update that writes more rows stops it too. One
+// that writes fewer goes on, because the other writes of the apply can have
+// done its work already: the comparison decides, and the result names such
 // writes in Result.Uneven.
 //
 // On any error before the commit, Run returns without committing, so the
@@ -122,8 +123,11 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 			if err != nil {
 				return nil, err
 			}
+			if n > w.planned {
+				return nil, wroteMoreRows(name, w.kind, n, w.planned)
+			}
 			*w.total += n
-			if n != w.planned {
+			if n < w.planned {
 				r.Uneven = append(r.Uneven, Uneven{Table: name, Kind: w.kind, Wrote: n, Planned: w.planned})
 			}
 		}
@@ -184,6 +188,23 @@ func write(ctx context.Context, statement func(context.Context, plan.DiffRequest
 		return 0, nil
 	}
 	return statement(ctx, req)
+}
+
+// wroteMoreRows is the error of an insert or an update that wrote more rows
+// than the plan shows (ADR-0042). Its pick, made when the write runs, found
+// declared rows that the plan did not show: another write of the apply had
+// taken them away from their declared values, and an apply writes only the
+// rows that its plan shows.
+func wroteMoreRows(table declaration.TableName, kind string, got, want int) error {
+	what, verb := "the update of table ", "updated"
+	if kind == "insert" {
+		what, verb = "the insert into table ", "inserted"
+	}
+	return fmt.Errorf("%s%s %s %s, but the plan has %s: another write of the apply, through a trigger, or a cascade or another action of a foreign key, "+
+		"took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, "+
+		"and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table %s "+
+		"when the apply writes another table, or declare the values that it writes",
+		what, table, verb, rows(got), rowsTo(want, kind), table)
 }
 
 // deletedOtherRows is the error of a deletion that deleted another number of

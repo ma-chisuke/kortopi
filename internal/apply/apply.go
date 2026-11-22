@@ -143,18 +143,19 @@ type Result struct {
 	// SkippedDeletes counts the rows to delete that the apply left in place
 	// because Options.AllowDelete was false.
 	SkippedDeletes int
-	// Uneven holds the inserts and updates that wrote another number of rows
-	// than the plan shows, in the order of the writes. The check before the
-	// commit found the declared tables as declared all the same: the other
-	// writes of the apply had brought the rows to their declared values, or
-	// taken them away from those values (ADR-0042).
+	// Uneven holds the inserts and updates that wrote fewer rows than the
+	// plan shows, in the order of the writes. The check before the commit
+	// found the declared tables as declared all the same: the other writes of
+	// the apply had brought the rows to their declared values already
+	// (ADR-0042). A write that writes more rows than the plan shows stops the
+	// apply.
 	Uneven []Uneven
 	// Committed is true when the apply committed its transaction.
 	Committed bool
 }
 
-// Uneven is an insert or an update of an apply that wrote another number of
-// rows than the plan shows.
+// Uneven is an insert or an update of an apply that wrote fewer rows than
+// the plan shows.
 type Uneven struct {
 	Table declaration.TableName
 	// Kind is "insert" or "update".

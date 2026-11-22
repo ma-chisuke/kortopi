@@ -604,18 +604,38 @@ func TestRun(t *testing.T) {
 			// The comparison before the commit finds the tables as
 			// declared, so the apply goes on and commits, and the result
 			// counts what the statements wrote.
-			name:     "an insert and an update that write other numbers of rows than the plan shows",
+			name:     "an insert and an update that write fewer rows than the plan shows",
 			settings: sync,
 			db: &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{
-				"Insert z.parent": 3, "Update z.parent": 0,
+				"Insert z.parent": 1, "Update z.parent": 0,
 			}},
 			opts: all,
 			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent", "Insert a.child",
 				"Delete a.child", "Delete z.parent", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
-			wantResult: Result{Inserted: 4, Updated: 0, Deleted: 3, Uneven: []Uneven{
-				{Table: parent, Kind: "insert", Wrote: 3, Planned: 2},
+			wantResult: Result{Inserted: 2, Updated: 0, Deleted: 3, Uneven: []Uneven{
+				{Table: parent, Kind: "insert", Wrote: 1, Planned: 2},
 				{Table: parent, Kind: "update", Wrote: 0, Planned: 1},
 			}},
+		},
+		{
+			// An apply writes only the rows that its plan shows.
+			name:     "an insert that writes more rows than the plan shows",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Insert z.parent": 3}},
+			opts:     all,
+			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent"),
+			wantErr: "the insert into table z.parent inserted 3 rows, but the plan has 2 rows to insert: another write of the apply, " +
+				"through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, " +
+				"or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: " +
+				"change the trigger or the foreign key that writes rows of table z.parent when the apply writes another table, or declare the values that it writes",
+		},
+		{
+			name:     "an update that writes more rows than the plan shows",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent}, changed: map[string]int{"Update z.parent": 2}},
+			opts:     all,
+			want:     append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent", "Insert z.parent", "Update z.parent"),
+			wantErr:  "the update of table z.parent updated 2 rows, but the plan has 1 row to update: another write of the apply, ",
 		},
 		{
 			name:     "a deletion deletes fewer rows than the plan shows",

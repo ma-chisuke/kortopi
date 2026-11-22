@@ -92,7 +92,7 @@ func TestRunChecksTheResult(t *testing.T) {
 			want:    slices.Concat(planned, deletes, again),
 			wantErr: "a/child.csv: after the writes of the apply, table a.child still differs from the declaration in 1 row to insert: + id=2  name=x: " +
 				"declare only rows that the table keeps after the writes, or change what takes them away\n" +
-				causes + ", and the writes that wrote another number of rows than the plan shows are the place to look first: " +
+				causes + ", and the writes that wrote fewer rows than the plan shows are the place to look first: " +
 				"the insert into table a.child wrote 0 rows, and the plan has 1",
 		},
 		{
@@ -131,14 +131,14 @@ func TestRunChecksTheResult(t *testing.T) {
 			left: map[declaration.TableName]plan.TableDiff{parent: {
 				Inserts: []plan.Row{row("0", "z")}, Updates: many, Deletes: []plan.Row{keyRow("9")},
 			}},
-			changed: map[string]int{"Update z.parent": 2},
+			changed: map[string]int{"Update z.parent": 0},
 			want:    slices.Concat(planned, deletes, again),
 			wantErr: "z/parent.csv: after the writes of the apply, table z.parent still differs from the declaration in 1 row to insert, 7 rows to update, and 1 row to delete: " +
 				"+ id=0  name=z, ~ id=1  name: A -> a, ~ id=2  name: A -> a, ~ id=3  name: A -> a, ~ id=4  name: A -> a, and 4 more: " +
 				"declare only rows that the table keeps after the writes, or change what takes them away, " + valueAdvice + ", and " +
 				`declare the rows that the writes add to the table, or give the table mode upsert in [tables."z.parent"] of kortopi.toml, which deletes no row` + "\n" +
-				causes + ", and the writes that wrote another number of rows than the plan shows are the place to look first: " +
-				"the update of table z.parent wrote 2 rows, and the plan has 1",
+				causes + ", and the writes that wrote fewer rows than the plan shows are the place to look first: " +
+				"the update of table z.parent wrote 0 rows, and the plan has 1",
 		},
 	}
 	for _, tt := range tests {

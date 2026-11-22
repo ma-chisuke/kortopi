@@ -172,7 +172,7 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 					wantErr: lines(
 						"kortopi: {dir}/app/t.csv: after the writes of the apply, table app.t still differs from the declaration in 1 row to insert: + id=2  v=b: "+
 							"declare only rows that the table keeps after the writes, or change what takes them away",
-						resultCauses+", and the writes that wrote another number of rows than the plan shows are the place to look first: "+
+						resultCauses+", and the writes that wrote fewer rows than the plan shows are the place to look first: "+
 							"the insert into table app.t wrote 2 rows, and the plan has 3",
 						"kortopi: nothing was changed",
 					),
@@ -205,6 +205,7 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 					wantRows: []string{"x 1 y 1=new"},
 				},
 				{
+					// The plan updates no row of b.y, so no statement writes it.
 					name: "a trigger that writes a declared row of another table to other values",
 					schema: `CREATE SCHEMA a; CREATE SCHEMA b;
 						CREATE TABLE a.x (id int PRIMARY KEY);
@@ -230,6 +231,33 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 						resultCauses,
 						"kortopi: nothing was changed",
 					),
+				},
+				{
+					// The update of b.y would write the touched row back: an
+					// apply writes only the rows that its plan shows, so it
+					// stops before the comparison.
+					name: "a trigger that writes a declared row of another table to other values, which the plan updates another row of",
+					schema: `CREATE SCHEMA a; CREATE SCHEMA b;
+						CREATE TABLE a.x (id int PRIMARY KEY);
+						CREATE TABLE b.y (id int PRIMARY KEY, v text);
+						INSERT INTO b.y VALUES (1, 'old'), (2, 'old');
+						CREATE FUNCTION a.touch() RETURNS trigger LANGUAGE plpgsql AS $$
+						BEGIN UPDATE b.y SET v = 'touched' WHERE id = 1; RETURN NEW; END $$;
+						CREATE TRIGGER touch AFTER INSERT ON a.x FOR EACH ROW EXECUTE FUNCTION a.touch();`,
+					files: map[string]string{"a/x.csv": "id\n1\n", "b/y.csv": "id,v\n1,old\n2,new\n"},
+					rows:  "SELECT 'x ' || (SELECT count(*) FROM a.x) || ' y ' || (SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM b.y)",
+					wantStdout: lines(
+						"a.x (upsert, key: id)",
+						"  + id=1",
+						"  1 to insert, 0 to update",
+						"",
+						"b.y (upsert, key: id)",
+						"  ~ id=2  v: old -> new",
+						"  0 to insert, 1 to update",
+						"",
+						"Plan: 1 to insert, 1 to update, 0 to delete in 2 tables.",
+					),
+					wantErr: lines("kortopi: the update of table b.y updated 2 rows, but the plan has 1 row to update: another write of the apply, through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table b.y when the apply writes another table, or declare the values that it writes", "kortopi: nothing was changed"),
 				},
 				{
 					name:   "a table of mode insert, compared by its key alone",

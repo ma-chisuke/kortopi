@@ -272,6 +272,20 @@ func TestRunApply(t *testing.T) {
 			wantStderr: "kortopi: the apply committed its changes, but closing the connection failed: connection reset\n",
 		},
 		{
+			// An apply writes only the rows that its plan shows (ADR-0042).
+			name:       "an insert that wrote more rows than the plan shows",
+			files:      twoTables,
+			session:    &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 2}},
+			wantCode:   exitError,
+			wantStdout: planOfGold,
+			wantStderr: "kortopi: the insert into table app.plans inserted 2 rows, but the plan has 1 row to insert: another write of the apply, " +
+				"through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, " +
+				"or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: " +
+				"change the trigger or the foreign key that writes rows of table app.plans when the apply writes another table, or declare the values that it writes\n" +
+				nothingChanged,
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans"),
+		},
+		{
 			name:  "a difference that is left after the writes",
 			files: twoTables,
 			session: &fakeSession{diffs: newPlan, written: map[string]int{"Insert app.plans": 0}, left: map[declaration.TableName]plan.TableDiff{
@@ -284,7 +298,7 @@ func TestRunApply(t *testing.T) {
 				"kortopi: the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: " +
 				"a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, " +
 				"the cascade or another action of a foreign key, or a rule created after the plan can do that, " +
-				"and the writes that wrote another number of rows than the plan shows are the place to look first: " +
+				"and the writes that wrote fewer rows than the plan shows are the place to look first: " +
 				"the insert into table app.plans wrote 0 rows, and the plan has 1\n" + nothingChanged,
 			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries"),
 		},

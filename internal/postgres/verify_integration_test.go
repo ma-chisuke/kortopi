@@ -57,7 +57,9 @@ func currencySchema(price, currency string) string {
 //     row, and the apply commits;
 //   - a trigger of one declared table that writes a declared row of another
 //     to its declared values lets the apply commit, and one that writes other
-//     values stops it;
+//     values stops it: before the comparison, when the plan updates another
+//     row of that table, whose update then writes more rows than the plan
+//     shows, and at the comparison when the plan updates none;
 //   - a table of mode insert is compared by its key alone;
 //   - in mode sync, a row that the writes add, or a left-out deletion that
 //     they take away, stops the apply, also a row that a trigger of a
@@ -138,7 +140,7 @@ func TestApplyChecksTheResult(t *testing.T) {
 					rows:   "SELECT count(*)::text FROM app.t",
 					wantErr: "{dir}/app/t.csv: after the writes of the apply, table app.t still differs from the declaration in 1 row to insert: + id=2  v=b: " +
 						"declare only rows that the table keeps after the writes, or change what takes them away\n" +
-						resultCauses + ", and the writes that wrote another number of rows than the plan shows are the place to look first: " +
+						resultCauses + ", and the writes that wrote fewer rows than the plan shows are the place to look first: " +
 						"the insert into table app.t wrote 2 rows, and the plan has 3",
 				},
 				{
@@ -157,6 +159,7 @@ func TestApplyChecksTheResult(t *testing.T) {
 					wantResult: "1 inserted, 0 updated, 0 deleted, [update of b.y: 0 of 1]",
 				},
 				{
+					// The plan updates no row of b.y, so no statement writes it.
 					name: "a trigger that writes a declared row of another table to other values",
 					schema: `CREATE SCHEMA a; CREATE SCHEMA b;
 						CREATE TABLE a.x (id int PRIMARY KEY);
@@ -171,6 +174,22 @@ func TestApplyChecksTheResult(t *testing.T) {
 					wantErr: "{dir}/b/y.csv: after the writes of the apply, table b.y still differs from the declaration in 1 row to update: ~ id=1  v: touched -> old: " +
 						"declare each value as the table stores it after the writes, or leave its column out of {dir}/b/y.csv, " +
 						`and give the column a value in on_insert of [tables."b.y"] in {dir}/kortopi.toml if new rows need one` + "\n" + resultCauses,
+				},
+				{
+					// The update of b.y would write the touched row back: an
+					// apply writes only the rows that its plan shows.
+					name: "a trigger that writes a declared row of another table to other values, which the plan updates another row of",
+					schema: `CREATE SCHEMA a; CREATE SCHEMA b;
+						CREATE TABLE a.x (id int PRIMARY KEY);
+						CREATE TABLE b.y (id int PRIMARY KEY, v text);
+						INSERT INTO b.y VALUES (1, 'old'), (2, 'old');
+						CREATE FUNCTION a.touch() RETURNS trigger LANGUAGE plpgsql AS $$
+						BEGIN UPDATE b.y SET v = 'touched' WHERE id = 1; RETURN NEW; END $$;
+						CREATE TRIGGER touch AFTER INSERT ON a.x FOR EACH ROW EXECUTE FUNCTION a.touch();`,
+					files:   map[string]string{"a/x.csv": "id\n1\n", "b/y.csv": "id,v\n1,old\n2,new\n"},
+					tables:  []declaration.Table{csvTable("a", "x", "id"), csvTable("b", "y", "id", "v")},
+					rows:    "SELECT 'x ' || (SELECT count(*) FROM a.x) || ' y ' || (SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM b.y)",
+					wantErr: "the update of table b.y updated 2 rows, but the plan has 1 row to update: another write of the apply, through a trigger, or a cascade or another action of a foreign key, took declared rows of the table away from their declared values after the plan, or a rule created after the plan changed what the statement did, and an apply writes only the rows that its plan shows, so it stops: change the trigger or the foreign key that writes rows of table b.y when the apply writes another table, or declare the values that it writes",
 				},
 				{
 					name: "a table of mode insert, compared by its key alone",
@@ -189,7 +208,7 @@ func TestApplyChecksTheResult(t *testing.T) {
 					// trigger skips is missing.
 					wantErr: "{dir}/o/skipped.csv: after the writes of the apply, table o.skipped still differs from the declaration in 1 row to insert: + code=x: " +
 						"declare only rows that the table keeps after the writes, or change what takes them away\n" +
-						resultCauses + ", and the writes that wrote another number of rows than the plan shows are the place to look first: " +
+						resultCauses + ", and the writes that wrote fewer rows than the plan shows are the place to look first: " +
 						"the insert into table o.skipped wrote 0 rows, and the plan has 1",
 				},
 				{
@@ -439,7 +458,7 @@ func applyThrough(t *testing.T, cfg *pgx.ConnConfig, decl *declaration.Declarati
 }
 
 // resultText returns the counts of a result and its writes that wrote
-// another number of rows than the plan shows.
+// fewer rows than the plan shows.
 func resultText(r *apply.Result) string {
 	uneven := make([]string, len(r.Uneven))
 	for i, u := range r.Uneven {

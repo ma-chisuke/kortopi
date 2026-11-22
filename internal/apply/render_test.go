@@ -69,10 +69,6 @@ func TestRenderSummary(t *testing.T) {
 			Plan: &plan.Plan{Tables: []plan.Table{plansTable, regionsTable}}, Inserted: 0, Updated: 1, Deleted: 3, Committed: true,
 			Uneven: []Uneven{{Table: tn("catalog.plans"), Kind: "insert", Wrote: 0, Planned: 1}},
 		}},
-		{name: "more_than_planned", result: &Result{
-			Plan: &plan.Plan{Tables: []plan.Table{plansTable}}, Inserted: 2, Updated: 3, Committed: true, SkippedDeletes: 1,
-			Uneven: []Uneven{{Table: tn("catalog.plans"), Kind: "insert", Wrote: 2, Planned: 1}, {Table: tn("catalog.plans"), Kind: "update", Wrote: 3, Planned: 1}},
-		}},
 		// A commit whose statements wrote no row, next to deletions that it
 		// left out, still says that it applied.
 		{name: "committed_without_rows", result: &Result{

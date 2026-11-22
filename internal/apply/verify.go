@@ -33,8 +33,8 @@ const resultCauses = "a trigger that changes the values that a write gives, skip
 // its rows as a plan does, at most maxLeftRows of them, with their number,
 // and says what to do. A last line says what can make the database do
 // something else with the writes than the declaration says, and names the
-// inserts and updates of uneven, which wrote another number of rows than the
-// plan shows: they point at where it happened.
+// inserts and updates of uneven, which wrote fewer rows than the plan
+// shows: they point at where it happened.
 func checkResult(ctx context.Context, decl *declaration.Declaration, db Database, p *plan.Plan, requests map[declaration.TableName]plan.DiffRequest,
 	allowDelete bool, uneven []Uneven,
 ) error {
@@ -69,7 +69,7 @@ func checkResult(ctx context.Context, decl *declaration.Declaration, db Database
 		for i, u := range uneven {
 			writes[i] = u.phrase()
 		}
-		last += ", and the writes that wrote another number of rows than the plan shows are the place to look first: " + joinAnd(writes)
+		last += ", and the writes that wrote fewer rows than the plan shows are the place to look first: " + joinAnd(writes)
 	}
 	return errors.New(strings.Join(append(lines, last), "\n"))
 }
