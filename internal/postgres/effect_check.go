@@ -220,9 +220,23 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 		}
 	}
 	slices.Sort(oids)
+	// upper holds the most updates of each table: the pairs of Effects, but
+	// those whose referencing rows the same statement, or one that came
+	// before, deleted.
+	upper := make(map[uint32]int64, len(s.effectUpdates))
+	for oid, n := range s.effectUpdates {
+		upper[oid] = n
+	}
+	for _, g := range s.effectGone {
+		first, okFirst := s.deleted[g.first]
+		then, okThen := s.deleted[g.then]
+		if okFirst && okThen && first <= then {
+			upper[g.top] -= g.pairs
+		}
+	}
 	for _, oid := range oids {
 		want := expected[oid]
-		most := s.effectUpdates[oid]
+		most := upper[oid]
 		got := written{
 			deleted:  now[oid].deleted - s.writtenBefore[oid].deleted,
 			updated:  now[oid].updated - s.writtenBefore[oid].updated,

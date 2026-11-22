@@ -106,7 +106,7 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 			})
 		}
 		out.Conflicts = w.conflicts
-		s.effect, s.effectUpdates, s.effectMoves = w.table, w.updates, w.moves
+		s.effect, s.effectUpdates, s.effectMoves, s.effectGone = w.table, w.updates, w.moves, w.gone
 		return nil
 	})
 	if err != nil {
@@ -132,6 +132,21 @@ type walk struct {
 	// SET NULL or SET DEFAULT sets a column of a partition key, so that a
 	// changed row can move to another partition.
 	moves map[uint32]bool
+	// gone holds the pairs of updates that PostgreSQL never makes when the
+	// rows go first, which CheckEffect takes off the most updates.
+	gone []goneFirst
+}
+
+// goneFirst counts the pairs of the most updates of the table at the top
+// of a relation whose referencing rows are rows to delete of the declared
+// table first, and which reference rows to delete of the declared table
+// then. The action of the key runs at the end of the statement that deletes
+// the row that it references, and finds no such referencing row when the
+// statement that deletes it came first, or is the same statement.
+type goneFirst struct {
+	top         uint32
+	first, then declaration.TableName
+	pairs       int64
 }
 
 // level is one level of the walk from the rows to delete of a table: the
@@ -476,7 +491,27 @@ func (w *walk) countUpdates(ctx context.Context, r refs, root *loadedTable, i, l
 		return fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
 	}
 	w.updates[r.e.top] += n
-	if n == 0 || w.moves[r.e.top] {
+	if n == 0 {
+		return nil
+	}
+	if lv == 0 {
+		// The rows of level 0 are the rows to delete of root, which its own
+		// statement deletes.
+		for _, c := range r.covers {
+			if !c.lt.sync || c.lt.deletes == 0 {
+				continue
+			}
+			var m int64
+			if err := w.tx.QueryRow(ctx, "SELECT pg_catalog.count(*) FROM "+r.from()+" WHERE "+c.in()+" AND NOT ("+c.matched()+") AND "+
+				w.referencing(r, root, i, lv)).Scan(&m); err != nil {
+				return fmt.Errorf("follow foreign key %q of table %s: %w", r.e.name, r.e.table, err)
+			}
+			if m > 0 {
+				w.gone = append(w.gone, goneFirst{top: r.e.top, first: c.lt.meta.name, then: root.meta.name, pairs: m})
+			}
+		}
+	}
+	if w.moves[r.e.top] {
 		return nil
 	}
 	// A row moves only within the tree of the relation that the action

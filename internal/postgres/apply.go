@@ -206,6 +206,10 @@ func (s *Session) Delete(ctx context.Context, req plan.DiffRequest) (_ int, err 
 		}
 		s.deletesChecked = true
 	}
+	if s.deleted == nil {
+		s.deleted = make(map[declaration.TableName]int)
+	}
+	s.deleted[lt.meta.name] = len(s.deleted)
 	picked := s.nextTemp()
 	pick := batchStatement{what: "pick the rows to delete from table " + lt.meta.name.String(), sql: lt.c.pickDeletesSQL(picked)}
 	return s.write(ctx, lt, "delete from", []batchStatement{pick}, lt.c.deleteSQL(picked), lt.deletes)

@@ -292,3 +292,95 @@ func TestApplyEffectOfActionsThatMeetOnARow(t *testing.T) {
 		})
 	}
 }
+
+// The upper bound of the updates leaves out the rows that PostgreSQL can
+// never update (ADR-0039): a row to delete that the same statement deletes
+// with the row that it references, and a row to delete of a table that the
+// apply deleted before the table of the row that it references. A foreign
+// key SET NULL that another transaction adds after the snapshot then finds
+// no room between the bounds for the rows that it changes, and the apply
+// stops.
+func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			causes := ": a foreign key or a partition that another transaction added while the apply ran, " +
+				"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, " +
+				"so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table "
+			for _, tt := range []struct {
+				name       string
+				schema     string
+				files      map[string]string
+				tables     []declaration.Table
+				concurrent string
+				wantErr    string
+				dump       []string
+			}{
+				{
+					name: "rows that the same statement deletes",
+					schema: `CREATE SCHEMA m;
+						CREATE TABLE m.plan (id int PRIMARY KEY, code text NOT NULL UNIQUE,
+							successor_id int REFERENCES m.plan ON DELETE SET NULL, fallback_id int);
+						INSERT INTO m.plan VALUES (1, 'basic', NULL, 2), (2, 'legacy', NULL, NULL), (3, 'old', 2, NULL);`,
+					files:      map[string]string{"m/plan.csv": "id,code\n1,basic\n"},
+					tables:     []declaration.Table{csvTable("m", "plan", "id", "code")},
+					concurrent: "ALTER TABLE m.plan ADD CONSTRAINT plan_fallback_fkey FOREIGN KEY (fallback_id) REFERENCES m.plan ON DELETE SET NULL",
+					wantErr:    "the deletions changed 1 row of table m.plan, which the plan did not count" + causes + "m.plan",
+					dump:       []string{"m.plan"},
+				},
+				{
+					name: "a row of a table that the apply deletes first",
+					schema: `CREATE SCHEMA m;
+						CREATE TABLE m.kind (id int PRIMARY KEY, code text NOT NULL UNIQUE);
+						INSERT INTO m.kind VALUES (1, 'keep'), (2, 'gone');
+						CREATE TABLE m.item (id int PRIMARY KEY, kind_id int REFERENCES m.kind ON DELETE SET NULL, other_kind int);
+						INSERT INTO m.item VALUES (1, 2, NULL), (2, 1, 2);`,
+					files:      map[string]string{"m/item.csv": "id,kind_id\n2,1\n", "m/kind.csv": "id,code\n1,keep\n"},
+					tables:     []declaration.Table{csvTable("m", "item", "id", "kind_id"), csvTable("m", "kind", "id", "code")},
+					concurrent: "ALTER TABLE m.item ADD CONSTRAINT item_other_fkey FOREIGN KEY (other_kind) REFERENCES m.kind ON DELETE SET NULL",
+					wantErr:    "the deletions changed 1 row of table m.item, which the plan did not count" + causes + "m.item",
+					dump:       []string{"m.item", "m.kind"},
+				},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					db := database(t, srv)
+					db.Exec(t, tt.schema)
+					s := db.applySession(t, db.Config, writeFiles(t, tt.files))
+					var names []declaration.TableName
+					var reqs []plan.DiffRequest
+					for _, table := range tt.tables {
+						req := request(t, s, table, nil, config.ModeSync)
+						if _, err := s.Diff(t.Context(), req); err != nil {
+							t.Fatal(err)
+						}
+						names = append(names, table.Name)
+						reqs = append(reqs, req)
+					}
+					if _, err := s.Effects(t.Context(), names); err != nil {
+						t.Fatal(err)
+					}
+					db.Exec(t, tt.concurrent)
+					before := dump(t, db, tt.dump...)
+					// The order of an apply: a referencing table first.
+					var err error
+					for _, req := range reqs {
+						if err == nil {
+							_, err = s.Delete(t.Context(), req)
+						}
+					}
+					if err == nil {
+						err = s.CheckEffect(t.Context())
+					}
+					if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
+						t.Errorf("apply: %v\nwant %s", err, tt.wantErr)
+					}
+					if err := s.Close(t.Context()); err != nil {
+						t.Fatal(err)
+					}
+					if got := dump(t, db, tt.dump...); !slices.Equal(got, before) {
+						t.Errorf("rows after the failed apply: %v, want %v", got, before)
+					}
+				})
+			}
+		})
+	}
+}

@@ -110,8 +110,12 @@ type Session struct {
 	effect        string
 	effectUpdates map[uint32]int64
 	// effectMoves holds the partitioned tables at the top of a relation in
-	// which a change of the deletions can move a row to another partition.
+	// which a change of the deletions can move a row to another partition,
+	// and effectGone the pairs of updates that go when rows go first.
 	effectMoves map[uint32]bool
+	effectGone  []goneFirst
+	// deleted holds the order of the tables whose rows Delete deleted.
+	deleted map[declaration.TableName]int
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
 	// temps counts the temporary tables, to name the next one.
