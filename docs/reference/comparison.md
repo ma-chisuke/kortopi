@@ -16,9 +16,12 @@ The files themselves are described in [Declaration files](declaration.md), and t
 - Text compares under the collation of its column. Under a nondeterministic collation that ignores case, `abc` equals `ABC`.
 - `json` has no equality of its own, and compares as `jsonb`.
 - A type that has no equality, such as `xml` or `point`, compares by its text, byte for byte. So does an array or a composite type that holds such a type.
-- The columns of the match key compare in the same way, and rows are sorted by the key in the order of its type: an `integer` key `9` comes before `10`. A key column therefore needs a type with an equality and a B-tree ordering. A type such as `xid`, whose equality comes from a hash operator class alone, cannot be a key column.
+- An interval compares by its months, its days, and its time, each exactly, and not by the equality of its type, which counts a month as 30 days and a day as 24 hours: `1 mon` differs from `30 days`, and `1 day` from `24 hours` ([Intervals](#intervals)).
+- The columns of the match key compare in the same way, and rows are sorted by the key in the order of its type: an `integer` key `9` comes before `10`. A key column therefore needs a type with an equality and a B-tree ordering. A type such as `xid`, whose equality comes from a hash operator class alone, cannot be a key column. An interval in a key has a rule of its own ([An interval in the match key](#an-interval-in-the-match-key)).
 
 A value prints in a plan as PostgreSQL prints it as text, in the settings of the next section.
+A value that the type of its column takes for equal to the stored value is no change, also when the declaration writes it otherwise, and an apply does not write it ([Values that the type takes for equal](#values-that-the-type-takes-for-equal)).
+An interval is the exception: it is equal only when its months, its days, and its time are, although its type takes `1 mon` for `30 days` ([Intervals](#intervals)).
 
 ## The settings of the session
 
@@ -38,7 +41,10 @@ They decide how PostgreSQL reads the values of your files and how a plan prints 
 | `xmloption` | `content` | An `xml` value is read as content, as `pg_dump` writes it, not as a whole document. |
 | `lc_monetary` | `C` | A `money` value reads and prints in the form of the C locale, the same in every environment. |
 | `row_security` | `off` | A query that a policy of row-level security would filter fails instead of returning fewer rows ([kortopi plan](plan.md#what-the-session-needs)). |
+| `array_nulls` | `on` | `{NULL}` in an array is a NULL element, not the text `NULL`. |
+| `timezone_abbreviations` | `Default` | An abbreviation of a time zone in a value, such as `EST`, reads with the set `Default` of PostgreSQL, where `EST` is five hours behind UTC. |
 
+An apply reads and compares in these settings too, but it writes the rows with the settings that the session had before kortopi pinned them, so the defaults and the triggers of your tables see the settings of your application ([kortopi apply](apply.md#the-settings-of-the-writes)).
 [kortopi export](export.md) writes values in these settings too, so a plan reads its files back as the same values.
 A plan printed as SQL writes each value so that it reads the same in a session with other settings ([Values in the script](plan.md#values-in-the-script)).
 
@@ -58,7 +64,7 @@ The second shows how a change prints in a line of a plan, as `column: stored -> 
 | `timestamp` | `2026-11-19 09:00` and `2026-11-19T09:00:00`; an offset in the input is ignored | `"2026-11-19 09:00:00" -> "2026-11-19 09:00:01"` |
 | `date` | `2026-11-19`, `11/19/2026`, and `20261119` | `2026-11-19 -> 2026-11-20` |
 | `time` | `09:00`, `09:00:00.000`, and `9:00 AM` | `09:00:00 -> 09:00:01` |
-| `interval` | `1 hour`, `60 minutes`, and `PT1H`; `1 day`, `24 hours`, and `24:00:00` | `"1 day" -> "2 days"` |
+| `interval` | `1 hour`, `60 minutes`, and `PT1H`; `1 year` and `12 mons`; `P1M` and `1 mon` | `"30 days" -> "1 mon"`; `"1 day" -> "24:00:00"` |
 | `boolean` | `true`, `TRUE`, `t`, and `yes` | `true -> false` |
 | `uuid` | the same value in any case, with or without braces | the new value, in lower case |
 | `bytea` | `\x6869`, and `hi` read as bytes | `\x6869 -> \x6870` |
@@ -74,6 +80,81 @@ The second shows how a change prints in a line of a plan, as `column: stored -> 
 
 In a SQL file, a cast to the type of the column, such as `date '2026-11-19'` or `'hi'::pg_catalog.bytea`, reads the same as the value without the cast.
 The quotes and escapes in the last column are those of a plan: a value prints in double quotes when it holds a space, `=`, or a quote ([kortopi plan](plan.md#values-and-names)).
+
+## Intervals
+
+PostgreSQL keeps an interval as three parts: months, days, and a time.
+The equality of the type `interval` turns them into one length, with a month of 30 days and a day of 24 hours, but the parts give other results: `date '2025-01-31' + interval '1 mon'` is `2025-02-28`, and with `30 days` it is `2025-03-02`.
+A plan therefore compares two intervals by their text in the pinned style `postgres`, which writes each part apart.
+Two intervals are equal when their months, their days, and their time are equal.
+
+| Stored | Declared | A plan shows |
+|---|---|---|
+| `30 days` | `1 mon` | `"30 days" -> "1 mon"` |
+| `24 hours` | `1 day` | `"24:00:00" -> "1 day"` |
+| `-30 days` | `-1 mon` | `"-30 days" -> "-1 mons"` |
+| `0` | `1 mon -30 days` | `"00:00:00" -> "1 mon -30 days"` |
+| `12 mons` | `1 year` | no change |
+| `01:30:00` | `90 minutes` | no change |
+| `1 mon` | `P1M` | no change |
+| `-1 mon +2 days` | `2 days -1 mon` | no change |
+| `infinity` | `infinity` | no change, from PostgreSQL 17 |
+
+The rule holds wherever an interval sits:
+
+- In a column with a type modifier, the modifier applies when PostgreSQL reads the declared value. In an `interval(0)` column, `00:00:00.6` is `00:00:01`. `interval day to second` keeps the months, so `1 mon` against `30 days` is a change there too.
+- A domain over `interval` compares as `interval`.
+- An array compares by its text: `"{\"30 days\",\"1 day\"}" -> "{\"1 mon\",\"1 day\"}"`.
+- A range or a multirange of intervals compares by its text: `"[\"30 days\",\"60 days\")" -> "[\"1 mon\",\"2 mons\")"`.
+- A composite type that holds an interval compares as a whole by its text, so its other columns compare by their text too: `"(1.0,\"1 mon\")" -> "(1.00,\"1 mon\")"` is a change, although a `numeric` column alone takes `1.0` for `1.00`.
+
+### An interval in the match key
+
+A key column of an interval matches rows by the equality of its type, as the unique index of the key does.
+A key with the same parts, written otherwise, such as `P1D` for a stored `1 day`, matches its row.
+The unique index takes `1 mon` and `30 days` for one key, so the table can hold only one of them, and a plan never changes a key.
+A plan therefore stops, in every mode, when two declared rows hold such keys:
+
+```text
+kortopi: data/billing/terms.csv: declared rows hold keys that differ, but that the equality of their type takes for one key, as the unique index of the key does, so the table can hold only one row of each pair: (span)=(1 mon) and (span)=(30 days): declare each key once
+```
+
+It also stops when a declared key matches a stored row whose key has other parts:
+
+```text
+kortopi: data/billing/terms.csv: declared keys match stored rows by the equality of their type, as the unique index of the key does, but differ from the keys of those rows, and a plan never changes a key: (span)=(1 mon) matches the stored (span)=(30 days): declare each key as the table stores it, or change the stored key with an UPDATE in the schema change, which runs before kortopi
+```
+
+Each error lists up to ten pairs or keys, and an apply stops in the same way.
+
+A key of a composite type that holds an interval, or of an array or a range of one, compares by its text as a whole, as its values do ([Intervals](#intervals)).
+A declared key that differs from the stored key only in another column of the composite type, in a way that the type of that column ignores, therefore stops the plan with the second error too: `(1.00,"1 mon")` against a stored `(1.0,"1 mon")`, for example.
+Declare such a key as the table stores it.
+
+## Values that the type takes for equal
+
+A declared value that the type of its column takes for equal to the stored value is no change, also when the declaration writes another value.
+A plan does not show it, and an apply does not write it: the table keeps its stored value.
+This rule keeps `1.0` against `1.00` off every plan, and it has a cost, because a team cannot change such a value with a declaration:
+
+| Type | Stored | Declared | Why there is no change |
+|---|---|---|---|
+| `numeric` without a scale | `1000.0` | `1000.00` | The scale does not count. |
+| `citext` | `abc` | `ABC` | The type ignores case. |
+| `text` under a nondeterministic collation that ignores case | `abc` | `ABC` | The collation ignores case. |
+| `double precision` | `-0` | `0` | `-0` equals `0`. |
+| `json` | `{"a":1}` | `{"a": 1}` | `json` compares as `jsonb`, which ignores white space. |
+| `json` | `{"a":1,"b":2}` | `{"b":2,"a":1}` | `jsonb` ignores the order of keys. |
+| `json` | `{"tier":"a","tier":"b"}` | `{"tier":"b"}` | `jsonb` keeps the last of repeated keys. |
+
+To change such a value, write the change with an `UPDATE` in the schema change, which runs before kortopi:
+
+```sql
+UPDATE billing.plans SET price = 1000.00 WHERE code = 'pro';
+```
+
+The change stays: the next plans see the declared value as equal to it, and an apply leaves it as it is.
+An interval is not such a value, because a plan compares its parts ([Intervals](#intervals)).
 
 ## NULL and the empty string
 
@@ -120,4 +201,4 @@ A plan therefore does not check:
 These are found when the rows are applied ([kortopi apply](apply.md)).
 ADR-0016 describes how a team finds them before a merge: it applies the new schema and then the rows to a throwaway PostgreSQL in CI.
 
-The reasons for these rules are in [ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.md) and [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md).
+The reasons for these rules are in [ADR-0009](../adr/ADR-0009-let-postgresql-interpret-declared-values.md), [ADR-0023](../adr/ADR-0023-compare-values-with-the-equality-of-their-type-in-pinned-settings.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), and [ADR-0040](../adr/ADR-0040-compare-an-interval-by-its-months-days-and-time.md).

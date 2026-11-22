@@ -164,6 +164,7 @@
 | type cast | キャスト |
 | type modifier | 型修飾子 |
 | domain（型） | ドメイン |
+| interval（型 `interval`）、its parts: months, days, and time | 期間、その部分：月数・日数・時間 |
 | identity column | 識別列 |
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |
@@ -258,4 +259,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:269f4e979fbe908285dc3b189f7a0adce66036dc9306e9aa5b2eba66dac28052 -->
+<!-- i18n-source: translation.md sha256:6be8ee5d436d936053da4f620e66450a1787d5f6b537c9f23f6eb07252f69bf2 -->

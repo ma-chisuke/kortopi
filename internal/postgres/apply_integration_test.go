@@ -520,7 +520,7 @@ func TestApplyRowCount(t *testing.T) {
 			s := db.applySession(t, db.Config, dir)
 			_, err := applyAll(t.Context(), s, []plan.DiffRequest{request(t, s, csvTable("app", "t", "id", "v"), nil, config.ModeUpsert)}, false)
 			want := "insert into table app.t changed 2 rows, but the plan has 3: " +
-				"a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops"
+				"a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops"
 			if err == nil || err.Error() != want {
 				t.Errorf("apply: %v\nwant %s", err, want)
 			}

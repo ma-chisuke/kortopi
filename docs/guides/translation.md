@@ -164,6 +164,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | type cast | キャスト |
 | type modifier | 型修飾子 |
 | domain (a type) | ドメイン |
+| interval (the type `interval`), its parts: months, days, and time | 期間、その部分：月数・日数・時間 |
 | identity column | 識別列 |
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |

@@ -625,6 +625,73 @@ func TestBuildErrors(t *testing.T) {
 	}
 }
 
+// A rule on a kind of statement that the mode of a table writes is a
+// mistake of the table, reported with its other mistakes before any row is
+// compared (ADR-0038). A rule on a kind that the mode never writes is not.
+func TestBuildRules(t *testing.T) {
+	t.Parallel()
+
+	rules := []Rule{{Name: "a_log", Event: RuleOnInsert}, {Name: "b_keep", Event: RuleOnUpdate}, {Name: "c_soft", Event: RuleOnDelete}}
+	onInsert := `table a.t has rule "a_log" ON INSERT, and kortopi does not write through rules, ` +
+		`because a rule makes the statements of an apply write other rows than the plan shows: ` +
+		`replace the rule with a trigger, or leave the table out of the declaration`
+	onUpdate := `table a.t has rule "b_keep" ON UPDATE, and kortopi does not write through rules, ` +
+		`because a rule makes the statements of an apply write other rows than the plan shows: ` +
+		`replace the rule with a trigger, give the table mode insert in [tables."a.t"] of data/kortopi.toml, which updates no row, ` +
+		`or leave the table out of the declaration`
+	onDelete := `table a.t has rule "c_soft" ON DELETE, and kortopi does not write through rules, ` +
+		`because a rule makes the statements of an apply write other rows than the plan shows: ` +
+		`replace the rule with a trigger, give the table mode upsert in [tables."a.t"] of data/kortopi.toml, which deletes no row, ` +
+		`or leave the table out of the declaration`
+	tests := []struct {
+		name  string
+		mode  config.Mode
+		rules []Rule
+		want  []string
+	}{
+		{name: "every rule in mode sync", mode: config.ModeSync, rules: rules, want: []string{onInsert, onUpdate, onDelete}},
+		{name: "inserts and updates in mode upsert", mode: config.ModeUpsert, rules: rules, want: []string{onInsert, onUpdate}},
+		{name: "inserts in mode insert", mode: config.ModeInsert, rules: rules, want: []string{onInsert}},
+		{name: "a rule on a kind that the mode does not write", mode: config.ModeInsert, rules: rules[1:]},
+		{name: "no rule", mode: config.ModeSync},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			info := with(existing([]string{"id"}, "id", "name"), func(i *TableInfo) { i.Rules = tt.rules })
+			db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: info}}
+			decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "id", "name")}}
+			settings := config.New(map[declaration.TableName]config.Table{tableT: {Mode: tt.mode}})
+			_, err := Build(t.Context(), decl, settings, db, Options{})
+			if len(tt.want) == 0 {
+				if err != nil || len(db.requests) != 1 {
+					t.Errorf("Build() = %v with %d calls of Diff, want a plan", err, len(db.requests))
+				}
+				return
+			}
+			want := filepath.FromSlash(strings.Join(tt.want, "\n"))
+			if err == nil || err.Error() != want {
+				t.Errorf("Build() error =\n%v\nwant\n%v", err, want)
+			}
+			if len(db.requests) != 0 {
+				t.Errorf("Build() called Diff %d times, want no call", len(db.requests))
+			}
+		})
+	}
+
+	// The rules come with the other mistakes of the table.
+	info := with(existing([]string{"id"}, "id", "name"), func(i *TableInfo) { i.Rules = rules[:1] })
+	db := &fakeDB{infos: map[declaration.TableName]TableInfo{tableT: info}}
+	decl := &declaration.Declaration{Dir: "data", Tables: []declaration.Table{csvTable(tableT, "name")}}
+	_, err := Build(t.Context(), decl, nil, db, Options{})
+	want := filepath.FromSlash(onInsert + "\n" +
+		`data/a/t.csv: column "id" of the primary key of table a.t is not declared, so no row can be matched: add the column to the file, or name another key with key in data/kortopi.toml`)
+	if err == nil || err.Error() != want {
+		t.Errorf("Build() error =\n%v\nwant\n%v", err, want)
+	}
+}
+
 func TestBuildErrorsOfSeveralTables(t *testing.T) {
 	t.Parallel()
 

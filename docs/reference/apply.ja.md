@@ -90,7 +90,8 @@ GRANT SELECT ON billing.subscriptions TO deployer;
 8. `--allow-delete` があれば、挿入と更新のあとで削除の外部キーをもう一度たどり、計画が数えたのと違う行に着けば止まる。それから、宣言にない行を削除する。順番は、参照するテーブルから参照されるテーブルへであり、削除する行に別のテーブルからのカスケードが着くテーブルは、そのテーブルより先にする。削除が計画の数えたとおりにしたことを確かめる。
 9. コミットし、書いたものを出力する。
 
-どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガーかルールが文のすることを変えたので、apply は止まる。
+どの文も、計画が示す数だけ行を変えなければならない。そうでなければ、トリガー、計画のあとに作られたルール、外部キーのカスケードのどれかが文のすることを変えたので、apply は止まる。
+apply の文を書き換えるルールは、それより前に計画を止める。行数の確認では、すべてのルールを捉えられないからである（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
 計画と書き込みは1つのスナップショットから来るので、出力した計画が、apply の書き込むものである。
 その間に別のトランザクションが同じ行を変えれば、apply は失敗し、もう一度実行するよう求める。
 
@@ -98,6 +99,34 @@ GRANT SELECT ON billing.subscriptions TO deployer;
 kortopi は `on_insert` の列を更新しない。すでにある行は、持っている値を保つ。
 更新は、値が違わない列に保存されている値を戻すので、等しいとみなす値は保存されているテキストを保つ。
 kortopi はシーケンスを読みも動かしもしない。
+
+### 書き込みの設定
+
+apply は、計画が固定する設定で読み、比べる（[値の比べ方](comparison.ja.md#セッションの設定)）。そのため、宣言した値と `on_insert` の値は、どの環境でも同じ意味になる。
+一方、挿入・更新・削除とコミットは、kortopi が固定する前にセッションが持っていた設定で動く。`client_encoding` だけは固定したままである。セッションが持っていた設定とは、サーバー・`ALTER DATABASE ... SET`・`ALTER ROLE ... SET`・`PGOPTIONS` が設定したものである。
+そのため、書き込みが発火させる既定値、トリガー、外部キーの動作、遅らせた検査は、アプリケーションの文と同じ設定を見る。
+
+- `timestamp` の列への既定値 `now()` や `current_date` は、データベースの `TimeZone` での時刻と日付になる。値をテキストにする既定値は、その `DateStyle` と `IntervalStyle` の形になる。
+- スキーマを付けずにテーブルを挙げるトリガーは、ロールの検索パスでそのテーブルを見つける。
+- 行単位セキュリティを持つテーブルに書くトリガーは、アプリケーションの文と同じく、そのポリシーに従う。
+
+どの行を書き、行のどの列を更新するかは、固定した設定のもとで、計画と同じ比べ方で決める。決めるのは、書き込みのたびにその直前である。書き込みはその行を取るだけで、保存された行を照合キーで取るほかは値を比べない。
+どの設定もトランザクションの中に限られる。そのため、apply のあと、接続は自分の設定に戻る。コネクションプーラーを通しても同じである。
+アプリケーションの設定で失敗するトリガーは、apply も PostgreSQL のエラーで失敗させる。このとき何も変わらない。
+
+### データベースの中ですること
+
+apply はデータベースの中で、次のことをこの順に行い、それ以外は何もしない。
+
+1. 接続した直後に、どのトランザクションの外でも、書き込みが使うセッションの設定を1つの問い合わせで読む。
+2. 分離レベル `REPEATABLE READ` のトランザクションを1つ開き、`pg_try_advisory_xact_lock` で kortopi のロックを取り、値の読み方を変える設定を固定する。
+3. カタログを読み、計画と同じく、`on_insert` の各値をその列だけの一時テーブルで確かめる。これはロールバックするセーブポイントの中で行う。
+4. 宣言した各テーブルについて、計画と同じく一時テーブルを作り、宣言した行を読み込み、テーブルと比べる。ただし、その一時テーブルはコミットまで残す。
+5. 外部キーの循環が必要とすれば、`SET CONSTRAINTS` でその検査を遅らせる。
+6. 書き込みごとに、1回の往復で次を行う。固定した設定のもとで1つの文が行を選び、もう1つの一時テーブルに入れる。`on_insert` の値を持つ挿入では、列のとおりに型を付けた別の一時テーブルにその値を読む。`set_config` でセッションの設定にする。挿入・更新・削除が、選んだ行を取る。そして `set_config` で設定を再び固定する。テーブルの行を削除する前には、その行への参照を数え直す。
+7. セッションの設定と `COMMIT` を、1つのメッセージで送る。
+
+どの一時テーブルもコミットで消え、どの設定もトランザクションとともに終わる。
 
 ### 外部キーと循環
 
@@ -275,7 +304,7 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
-- `PGOPTIONS='-c lock_timeout=10s'` のようにロックのタイムアウトを設定する。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[kortopi plan](plan.ja.md#接続の設定)）。接続の設定は計画と同じである。
+- `PGOPTIONS='-c lock_timeout=10s'` のようにロックのタイムアウトを設定する。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[kortopi plan](plan.ja.md#接続の設定)）。接続の設定は計画と同じであり、書き込みもその設定で動く（[書き込みの設定](#書き込みの設定)）。
 - 失敗した apply は何も変えない。宣言かデータベースを直して、もう一度実行する。
 
 ### スキーマごとの apply
@@ -301,7 +330,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - トリガーとルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。削除が着くテーブルでトリガーが変える行も数えない。ただし、トリガーが削除の着かないテーブルの行を消すか変えれば、apply は止まる。1つの行が、`SET NULL` のキーと `CASCADE` のキーの両方で削除する行を参照するときは、計画はそれを消える行として数え、実際に最後には消える。どちらの動作を先に実行するかは、PostgreSQL が決める順による。
 - kortopi はシーケンスを動かさない。`serial` や識別列に明示の値を挿入する apply のあと、そのシーケンスの次の値が、すでに使われていることがある。
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
-- apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。
+- apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
 - コミットのあと、PostgreSQL 自身の一時スキーマ `pg_temp_N` と `pg_toast_temp_N` が、空のままカタログに残る。これらは kortopi のオブジェクトではない。
 - テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。
 
@@ -440,7 +469,7 @@ kortopi: update table app.t: could not serialize access due to concurrent update
 ### 文を変えるトリガーやルール
 
 ```text
-kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops
+kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops
 ```
 
 ### 挿入と更新のあとで削除がほかの行に着く
@@ -474,6 +503,6 @@ apply の間に別のトランザクションが参照する行を挿入した�
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:09ff40cf9dd5681c490cf651a84368d7727a0aac113460af6998f55d94ce12f8 -->
+<!-- i18n-source: apply.md sha256:6d0d0bc6d587636d63b5b0e94c3fd1f2a110206837cf627f45560f5e5aa9be88 -->

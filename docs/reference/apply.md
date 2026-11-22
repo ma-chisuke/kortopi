@@ -89,7 +89,8 @@ An apply refuses a session whose `session_replication_role` is not `origin`, bec
 8. With `--allow-delete`, it follows the foreign keys of the deletions again, after its inserts and updates, and stops when they reach other rows than the plan counted. It then deletes the rows that the declaration lacks, from referencing tables to referenced ones, and a table whose rows to delete a cascade from another table reaches before that table. It checks that the deletions did what the plan counted.
 9. It commits, and prints what it wrote.
 
-Each statement must change as many rows as the plan shows; otherwise a trigger or a rule changed what it did, and the apply stops.
+Each statement must change as many rows as the plan shows; otherwise a trigger, a rule created after the plan, or the cascade of a foreign key changed what it did, and the apply stops.
+A rule that would rewrite the statements of an apply stops the plan before that, because the count of rows does not catch every rule ([Declaration files](declaration.md#a-table-with-a-rule)).
 Because the plan and the writes come from one snapshot, the printed plan is what the apply writes.
 When another transaction changes the same rows in the meantime, the apply fails and asks you to run it again.
 
@@ -97,6 +98,34 @@ An insert names the declared columns and the columns of `on_insert` in `kortopi.
 kortopi never updates a column of `on_insert`: a row that exists keeps what it holds.
 An update gives a column whose value does not differ its stored value back, so a value that compares equal keeps its stored text.
 kortopi neither reads nor moves sequences.
+
+### The settings of the writes
+
+An apply reads and compares in the settings that a plan pins ([How values are compared](comparison.md#the-settings-of-the-session)), so the declared values and the values of `on_insert` mean the same in every environment.
+Its inserts, updates, and deletions, and its commit, run with the settings that the session had before kortopi pinned them, but `client_encoding`: what the server, `ALTER DATABASE ... SET`, `ALTER ROLE ... SET`, and `PGOPTIONS` set.
+So the defaults, the triggers, the actions of the foreign keys, and the deferred checks that the writes fire see what the statements of your application see:
+
+- A default `now()` into a `timestamp` column, or `current_date`, gives the time and the date of the database's `TimeZone`, and a default that turns a value into text gives the form of its `DateStyle` and `IntervalStyle`.
+- A trigger that names a table without its schema finds it through the search path of the role.
+- A trigger that writes a table with row-level security is held to its policies as your application's statement is.
+
+Which rows to write, and which columns of a row to update, is decided just before each write, in the pinned settings, with the comparisons of the plan; the write then takes those rows, the stored ones by their match key, and compares no other value.
+Each setting is local to the transaction, so the connection has its own settings again after the apply, also through a connection pooler.
+A trigger that fails in the settings of your application fails the apply too, with the error of PostgreSQL, and nothing is changed.
+
+### In the database
+
+In the database, an apply does the following and nothing else, in this order:
+
+1. Right after it connects, outside any transaction, one query reads the settings of the session that its writes use.
+2. It opens one transaction at the isolation level `REPEATABLE READ`, takes the lock of kortopi with `pg_try_advisory_xact_lock`, and pins the settings that change how values are read.
+3. It reads the catalogs, and checks each value of `on_insert` in a temporary table of its column alone, inside a savepoint that it rolls back, as a plan does.
+4. For each declared table, it creates a temporary table, loads the declared rows into it, and compares them with the table, as a plan does, but keeps the temporary table until the commit.
+5. When a cycle of foreign keys needs it, it defers their checks with `SET CONSTRAINTS`.
+6. For each write, in one round trip: a statement in the pinned settings picks the rows into one more temporary table, and an insert with values of `on_insert` reads them into another, typed like their columns; `set_config` sets the settings of the session; the insert, the update, or the deletion takes the picked rows; and `set_config` pins the settings again. Before the deletions of a table, it counts the references to their rows again.
+7. It sends the settings of the session and `COMMIT` in one message.
+
+Every temporary table is dropped at the commit, and every setting ends with the transaction.
 
 ### Foreign keys and cycles
 
@@ -273,7 +302,7 @@ Apply the schema first, with the tool that changes your schema, and the rows sec
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.
-- Set a lock timeout, such as `PGOPTIONS='-c lock_timeout=10s'`, so that an apply does not wait without limit for a lock that another session holds ([kortopi plan](plan.md#connection-settings)). The settings of the connection are those of a plan.
+- Set a lock timeout, such as `PGOPTIONS='-c lock_timeout=10s'`, so that an apply does not wait without limit for a lock that another session holds ([kortopi plan](plan.md#connection-settings)). The settings of the connection are those of a plan, and the writes run with them ([The settings of the writes](#the-settings-of-the-writes)).
 - A failed apply changes nothing. Fix the declaration or the database, and run it again.
 
 ### One apply for each schema
@@ -299,7 +328,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - Triggers and rules act out of sight of the plan. A row that a trigger or a rule inserts during the deletions is not counted. A row of a table that the deletions reach and that a trigger changes is not counted, although a deletion or a change in a table that they do not reach stops the apply. When one row references rows to delete through a key `SET NULL` and a key `CASCADE`, the plan counts it as deleted, which it is in the end; which action PostgreSQL runs first is its own order.
 - kortopi does not move sequences. After an apply that inserts explicit values into a `serial` or identity column, the next value of its sequence may already be taken.
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
-- An apply keeps the declared rows loaded and the changed rows locked until it commits.
+- An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit. Each of these tables holds a lock until the commit, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default: it then fails with `out of shared memory` and a hint to raise the setting, and nothing is changed.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
 - Not tested: a standby, Aurora PostgreSQL, and a real connection pooler.
 
@@ -438,7 +467,7 @@ kortopi: update table app.t: could not serialize access due to concurrent update
 ### A trigger or a rule that changes a statement
 
 ```text
-kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule, or the cascade of a foreign key changes what the statement does, so the apply stops
+kortopi: insert into table app.t changed 2 rows, but the plan has 3: a trigger, a rule created after the plan, or the cascade of a foreign key changes what the statement does, so the apply stops
 ```
 
 ### The deletions reach other rows after the inserts and updates
@@ -472,4 +501,4 @@ A referencing row that another transaction inserted while the apply ran makes th
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), and [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), and [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md).

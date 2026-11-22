@@ -49,6 +49,11 @@ type tableMeta struct {
 	// deletable is true when the role of the session may delete rows of the
 	// table.
 	deletable bool
+	// hasRules is true when the catalogs mark the table as one that has, or
+	// had, rules, and rules holds those that can rewrite a write of an
+	// apply.
+	hasRules bool
+	rules    []plan.Rule
 }
 
 // columnMeta is what a session knows about a column from the catalogs.
@@ -70,7 +75,13 @@ type columnMeta struct {
 	// collatable is true when the column has a collation.
 	collatable bool
 	typ        uint32
-	eq         equality
+	// eq is the equality of the type, which a unique index of the column
+	// uses: a plan matches the rows by it.
+	eq equality
+	// interval is true when the type is interval or holds one. The equality
+	// of interval takes a month for 30 days and a day for 24 hours, so a plan
+	// compares the values of such a column by their text (ADR-0040).
+	interval bool
 	// ordered is true when the type has a B-tree ordering, which a key
 	// column needs to sort and to match rows.
 	ordered bool
@@ -90,6 +101,7 @@ func (m *tableMeta) info() plan.TableInfo {
 		Exists: m.exists, PrimaryKey: m.primaryKey, UniqueKeys: m.uniqueKeys, SetAsideKeys: m.setAsideKeys, PartitionOf: m.partitionOf,
 		Partitions: m.partitions,
 		NearNames:  m.nearNames, NearSchemas: m.nearSchemas,
+		Rules: m.rules,
 	}
 	for _, c := range m.columns {
 		info.Columns = append(info.Columns, plan.ColumnInfo{
@@ -155,7 +167,8 @@ func (s *Session) table(ctx context.Context, name declaration.TableName) (*table
 }
 
 // describe reads the catalogs for names, with three queries in all: the
-// relations and their columns, the keys, and the types of the columns.
+// relations and their columns, the keys, and the types of the columns. A
+// fourth reads the rules, when a table has any.
 func (s *Session) describe(ctx context.Context, names []declaration.TableName) (map[declaration.TableName]*tableMeta, error) {
 	metas := make(map[declaration.TableName]*tableMeta, len(names))
 	schemas := make([]string, 0, len(names))
@@ -185,7 +198,54 @@ func (s *Session) describe(ctx context.Context, names []declaration.TableName) (
 	if err := s.readEqualities(ctx, byOID); err != nil {
 		return nil, err
 	}
+	if err := s.readRules(ctx, byOID); err != nil {
+		return nil, err
+	}
 	return metas, nil
+}
+
+// ruleEvents names the kinds of statement of pg_rewrite.ev_type that write
+// rows. The fourth kind, SELECT, belongs to the rule _RETURN of a view.
+var ruleEvents = map[string]plan.RuleEvent{"2": plan.RuleOnUpdate, "3": plan.RuleOnInsert, "4": plan.RuleOnDelete}
+
+// readRules fills in the rules of the tables that the catalogs mark as having
+// rules, in one query, which needs no privilege: pg_rewrite is readable by
+// every role. A rule counts when it rewrites a statement that writes rows
+// and fires in a session whose session_replication_role is origin, as an
+// apply's is (ADR-0026): its pg_rewrite.ev_enabled is O, the default, or A,
+// for ENABLE ALWAYS. A rule that is disabled, D, or that fires only on a
+// replica, R, cannot rewrite a statement of an apply (ADR-0038).
+func (s *Session) readRules(ctx context.Context, byOID map[uint32]*tableMeta) error {
+	var oids []uint32
+	for oid, m := range byOID {
+		if m.hasRules {
+			oids = append(oids, oid)
+		}
+	}
+	if len(oids) == 0 {
+		return nil
+	}
+	rows, err := s.tx.Query(ctx, `SELECT r.ev_class, r.rulename::pg_catalog.text, r.ev_type::pg_catalog.text
+		FROM pg_catalog.pg_rewrite AS r
+		WHERE r.ev_class = ANY ($1::pg_catalog.oid[]) AND r.ev_type IN ('2', '3', '4') AND r.ev_enabled IN ('O', 'A')
+		ORDER BY r.ev_class, r.rulename COLLATE pg_catalog."C"`, oids)
+	if err != nil {
+		return fmt.Errorf("read the rules of the tables: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var oid uint32
+		var name, event string
+		if err := rows.Scan(&oid, &name, &event); err != nil {
+			return fmt.Errorf("read the rules of the tables: %w", err)
+		}
+		m := byOID[oid]
+		m.rules = append(m.rules, plan.Rule{Name: name, Event: ruleEvents[event]})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the rules of the tables: %w", err)
+	}
+	return nil
 }
 
 // readColumns fills in the relations and columns of metas, and returns the
@@ -215,7 +275,8 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 				JOIN pg_catalog.pg_class AS pc ON pc.oid = pt.relid
 				JOIN pg_catalog.pg_namespace AS partns ON partns.oid = pc.relnamespace
 				WHERE c.relkind = 'p' AND pt.relid <> c.oid
-				ORDER BY pt.level, partns.nspname COLLATE pg_catalog."C", pc.relname COLLATE pg_catalog."C")
+				ORDER BY pt.level, partns.nspname COLLATE pg_catalog."C", pc.relname COLLATE pg_catalog."C"),
+			c.relhasrules
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 		JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 		JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
@@ -232,7 +293,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 	for rows.Next() {
 		var schema, table, kind string
 		var oid uint32
-		var rowSecurity, schemaUsage, selectable, insertable, updatable, deletable bool
+		var rowSecurity, schemaUsage, selectable, insertable, updatable, deletable, hasRules bool
 		var column *string
 		var notNull, generated, identityAlways, hasDefault *bool
 		var typeName []string
@@ -240,7 +301,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		var typ *uint32
 		var partitionOf, partitions [][]string
 		if err := rows.Scan(&schema, &table, &oid, &kind, &rowSecurity, &schemaUsage, &column, &notNull, &generated, &identityAlways, &typ, &hasDefault, &typeName, &collatable,
-			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions); err != nil {
+			&selectable, &insertable, &updatable, &deletable, &partitionOf, &partitions, &hasRules); err != nil {
 			return nil, fmt.Errorf("read the columns of the tables: %w", err)
 		}
 		m := metas[declaration.TableName{Schema: schema, Name: table}]
@@ -261,6 +322,7 @@ func (s *Session) readColumns(ctx context.Context, metas map[declaration.TableNa
 		m.rowSecurity = rowSecurity
 		m.schemaUsage = schemaUsage
 		m.deletable = deletable
+		m.hasRules = hasRules
 		m.oid = oid
 		m.partitionOf, m.partitions = tableNames(partitionOf), tableNames(partitions)
 		byOID[oid] = m
@@ -551,6 +613,13 @@ LEFT JOIN LATERAL (
 // compares its values as jsonb.
 const jsonType = 114
 
+// intervalType is the OID of the type interval. Its equality takes a month
+// for 30 days and a day for 24 hours, so a plan compares its values, and the
+// values of every type that holds one, by their text: under the pinned
+// IntervalStyle postgres, the text of an interval tells its months, its
+// days, and its time apart (ADR-0040).
+const intervalType = 1186
+
 // readEqualities decides for every column of the tables how its values are
 // compared.
 func (s *Session) readEqualities(ctx context.Context, byOID map[uint32]*tableMeta) error {
@@ -590,6 +659,7 @@ func (s *Session) readEqualities(ctx context.Context, byOID map[uint32]*tableMet
 	for _, m := range byOID {
 		for i := range m.columns {
 			m.columns[i].eq = r.comparison(m.columns[i].typ)
+			m.columns[i].interval = r.holdsInterval(m.columns[i].typ)
 			m.columns[i].ordered = r.ordered(m.columns[i].typ)
 			m.columns[i].dateTime = r.dateTime(m.columns[i].typ)
 		}
@@ -601,6 +671,8 @@ func (s *Session) readEqualities(ctx context.Context, byOID map[uint32]*tableMet
 type resolver struct {
 	types map[uint32]*typeMeta
 	done  map[uint32]*equality
+	// intervals holds what holdsInterval found for each type.
+	intervals map[uint32]bool
 }
 
 // comparison returns how the values of type oid are compared: with the
@@ -613,6 +685,39 @@ func (r *resolver) comparison(oid uint32) equality {
 		return equality{kind: compareJSONB}
 	}
 	return textEquality
+}
+
+// holdsInterval reports whether type oid is interval or holds one: as the
+// base type of a domain, the element type of an array, a column of a
+// composite type, or the subtype of a range or of the range of a
+// multirange.
+func (r *resolver) holdsInterval(oid uint32) bool {
+	oid = r.baseType(oid)
+	if oid == intervalType {
+		return true
+	}
+	if found, ok := r.intervals[oid]; ok {
+		return found
+	}
+	if r.intervals == nil {
+		r.intervals = make(map[uint32]bool)
+	}
+	// Mark the type before looking inside it, so that a cycle ends.
+	r.intervals[oid] = false
+	t, ok := r.types[oid]
+	if !ok {
+		return false
+	}
+	inner := slices.Clone(t.fields)
+	if t.elem != 0 {
+		inner = append(inner, t.elem)
+	}
+	if t.inner != 0 {
+		inner = append(inner, t.inner)
+	}
+	found := slices.ContainsFunc(inner, r.holdsInterval)
+	r.intervals[oid] = found
+	return found
 }
 
 // baseType returns the type under the domains of oid.
