@@ -60,6 +60,24 @@ const keyCascade = `CREATE SCHEMA m; CREATE SCHEMA sales;
 const keyCascadeRows = `SELECT 'currency ' || string_agg(iso, ' ' ORDER BY id) FROM m.currency
 	UNION ALL SELECT 'price ' || string_agg(currency_iso || '/' || product, ' ' ORDER BY product) FROM sales.price`
 
+// partitionedPrice holds the tables of issue 26 with sales.price partitioned
+// by the cascaded column: a change of JPY moves a row of sales.price_a to
+// sales.price_b.
+const partitionedPrice = `CREATE SCHEMA m; CREATE SCHEMA sales;
+	CREATE TABLE m.currency (id int PRIMARY KEY, iso text NOT NULL UNIQUE, name text);
+	CREATE TABLE sales.price (currency_iso text NOT NULL, product text NOT NULL, amount numeric(10,2),
+		PRIMARY KEY (currency_iso, product)) PARTITION BY LIST (currency_iso);
+	CREATE TABLE sales.price_a PARTITION OF sales.price FOR VALUES IN ('JPY', 'USD');
+	CREATE TABLE sales.price_b PARTITION OF sales.price FOR VALUES IN ('JPN');
+	ALTER TABLE sales.price ADD FOREIGN KEY (currency_iso) REFERENCES m.currency (iso) ON UPDATE CASCADE;
+	INSERT INTO m.currency VALUES (1, 'JPY', 'Yen'), (2, 'USD', 'Dollar');
+	INSERT INTO sales.price VALUES ('USD', 'p2', 1.50), ('JPY', 'p9', 5);`
+
+// partitionedPriceRows reads the tables of partitionedPrice, with the
+// partition of each price.
+const partitionedPriceRows = `SELECT 'currency ' || string_agg(iso, ' ' ORDER BY id) FROM m.currency
+	UNION ALL SELECT 'price ' || string_agg(tableoid::regclass || ':' || currency_iso || '/' || product, ' ' ORDER BY product DESC) FROM sales.price`
+
 // labelSchema is the table of issue 27, whose trigger rewrites the declared
 // label of every row that a write gives it.
 const labelSchema = `CREATE SCHEMA o;
@@ -103,10 +121,12 @@ func currencySchema(price, currency string) string {
 //   - a table of mode insert is compared by its key alone;
 //   - in mode sync, a row that the writes add, or a left-out deletion that
 //     they take away, stops the apply, also a row that a trigger of a
-//     deletion adds, which the check after the deletions does not see. A
-//     left-out deletion whose key a cascade changes is counted, and passes. A
+//     deletion adds, which the check after the deletions does not see, and a
+//     left-out deletion that a cascade moves out of a declared partition. A
+//     left-out deletion whose key a cascade changes is counted, and passes,
+//     also when the change moves it within a declared partitioned table. A
 //     trigger that deletes a row that the plan deletes stops the deletion on
-//     its count;
+//     the count of its pick;
 //   - an interval is compared by its text;
 //   - a role with SELECT on the declared columns alone applies.
 //
@@ -438,10 +458,48 @@ func TestApplyChecksTheResult(t *testing.T) {
 					modes:  map[declaration.TableName]config.Mode{{Schema: "app", Name: "t"}: config.ModeSync},
 					rows:   "SELECT string_agg(id || '=' || v, ' ' ORDER BY id) FROM app.t",
 					wantErr: "{dir}/app/t.csv: after the writes of the apply, table app.t holds 0 rows that the declaration lacks, 1 fewer than the plan shows to delete, " +
-						"which an apply without --allow-delete leaves in place, so the writes deleted rows, which such an apply never does: " +
-						"change the trigger, the rule, or the foreign key that deletes rows of table app.t while the apply writes, " +
-						"or delete those rows first, in an apply with --allow-delete whose declaration changes nothing else\n" +
+						"which an apply without --allow-delete leaves in place, so the writes deleted rows of the table or moved them out of it, " +
+						"as a change of a partition key does, which such an apply never does: " +
+						"change the trigger, the rule, or the foreign key that deletes or moves rows of table app.t while the apply writes, " +
+						"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, " +
+						"or, when the rows should move, make the change that moves them first, with a statement of your own\n" +
 						resultCauses,
+				},
+				{
+					// The cascade changes the partition key of the row that
+					// the declaration lacks, which moves it to the other
+					// partition: the declared partition lost it.
+					name:   "mode sync without --allow-delete, and a left-out deletion that a cascade moves out of a declared partition",
+					schema: partitionedPrice,
+					files: map[string]string{
+						"m/currency.csv":    "id,iso,name\n1,JPN,Yen\n2,USD,Dollar\n",
+						"sales/price_a.csv": "currency_iso,product,amount\nUSD,p2,1.50\n",
+					},
+					tables: []declaration.Table{csvTable("m", "currency", "id", "iso", "name"), csvTable("sales", "price_a", "currency_iso", "product", "amount")},
+					modes:  map[declaration.TableName]config.Mode{{Schema: "sales", Name: "price_a"}: config.ModeSync},
+					rows:   partitionedPriceRows,
+					wantErr: "{dir}/sales/price_a.csv: after the writes of the apply, table sales.price_a holds 0 rows that the declaration lacks, 1 fewer than the plan shows to delete, " +
+						"which an apply without --allow-delete leaves in place, so the writes deleted rows of the table or moved them out of it, " +
+						"as a change of a partition key does, which such an apply never does: " +
+						"change the trigger, the rule, or the foreign key that deletes or moves rows of table sales.price_a while the apply writes, " +
+						"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, " +
+						"or, when the rows should move, make the change that moves them first, with a statement of your own\n" +
+						resultCauses,
+				},
+				{
+					// The row moves within the declared table, which still
+					// holds it.
+					name:   "mode sync without --allow-delete, and a left-out deletion that a cascade moves within the declared partitioned table",
+					schema: partitionedPrice,
+					files: map[string]string{
+						"m/currency.csv":  "id,iso,name\n1,JPN,Yen\n2,USD,Dollar\n",
+						"sales/price.csv": "currency_iso,product,amount\nUSD,p2,1.50\n",
+					},
+					tables:     []declaration.Table{csvTable("m", "currency", "id", "iso", "name"), csvTable("sales", "price", "currency_iso", "product", "amount")},
+					modes:      map[declaration.TableName]config.Mode{{Schema: "sales", Name: "price"}: config.ModeSync},
+					rows:       partitionedPriceRows,
+					wantRows:   []string{"currency JPN USD", "price sales.price_b:JPN/p9 sales.price_a:USD/p2"},
+					wantResult: "0 inserted, 1 updated, 0 deleted, []",
 				},
 				{
 					name: "mode sync without --allow-delete, as declared",

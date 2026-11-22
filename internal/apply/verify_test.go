@@ -128,9 +128,11 @@ func TestRunChecksTheResult(t *testing.T) {
 			left: map[declaration.TableName]plan.TableDiff{parent: {}},
 			want: slices.Concat(planned, writes, again),
 			wantErr: "z/parent.csv: after the writes of the apply, table z.parent holds 0 rows that the declaration lacks, 1 fewer than the plan shows to delete, " +
-				"which an apply without --allow-delete leaves in place, so the writes deleted rows, which such an apply never does: " +
-				"change the trigger, the rule, or the foreign key that deletes rows of table z.parent while the apply writes, " +
-				"or delete those rows first, in an apply with --allow-delete whose declaration changes nothing else\n" +
+				"which an apply without --allow-delete leaves in place, so the writes deleted rows of the table or moved them out of it, " +
+				"as a change of a partition key does, which such an apply never does: " +
+				"change the trigger, the rule, or the foreign key that deletes or moves rows of table z.parent while the apply writes, " +
+				"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, " +
+				"or, when the rows should move, make the change that moves them first, with a statement of your own\n" +
 				causes,
 		},
 		{

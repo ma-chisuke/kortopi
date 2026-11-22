@@ -128,9 +128,11 @@ func leftLines(file, settingsFile string, t *plan.Table, left plan.TableDiff, al
 			file, t.Name, rows(now), now-planned, listRows(listed, now), config.ModeUpsert, table, settingsFile))
 	case now < planned:
 		lines = append(lines, fmt.Sprintf("%s: after the writes of the apply, table %s holds %s that the declaration lacks, %d fewer than the plan shows to delete, "+
-			"which an apply without --allow-delete leaves in place, so the writes deleted rows, which such an apply never does: "+
-			"change the trigger, the rule, or the foreign key that deletes rows of table %s while the apply writes, "+
-			"or delete those rows first, in an apply with --allow-delete whose declaration changes nothing else",
+			"which an apply without --allow-delete leaves in place, so the writes deleted rows of the table or moved them out of it, "+
+			"as a change of a partition key does, which such an apply never does: "+
+			"change the trigger, the rule, or the foreign key that deletes or moves rows of table %s while the apply writes, "+
+			"delete those rows first, in an apply with --allow-delete whose declaration changes nothing else, "+
+			"or, when the rows should move, make the change that moves them first, with a statement of your own",
 			file, t.Name, rows(now), planned-now, t.Name))
 	}
 	return lines, nil
