@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,58 @@ func TestDiffAgainCountsNothing(t *testing.T) {
 			again, err := s.DiffAgain(t.Context(), req)
 			if err != nil || again.Undeclared != 0 {
 				t.Errorf("DiffAgain = %+v, %v, want no count", again, err)
+			}
+		})
+	}
+}
+
+// The count reads the stored rows as the comparison reads them (ADR-0024,
+// ADR-0046): an ordinary table with ONLY, so the rows of a table that
+// inherits from it do not count; a partitioned table as a whole, and a
+// declared partition by its own rows; and the rows of a key of two columns
+// by both columns.
+func TestCountRowsOfInheritanceAndPartitionsAndKeys(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `CREATE SCHEMA app;
+				CREATE TABLE app.parent (id int PRIMARY KEY, v text);
+				CREATE TABLE app.heir () INHERITS (app.parent);
+				INSERT INTO app.parent VALUES (1, 'a'), (2, 'b');
+				INSERT INTO app.heir VALUES (3, 'c'), (4, 'd'), (5, 'e');
+				CREATE TABLE app.parted (id int PRIMARY KEY, v text) PARTITION BY RANGE (id);
+				CREATE TABLE app.low PARTITION OF app.parted FOR VALUES FROM (1) TO (100);
+				CREATE TABLE app.high PARTITION OF app.parted FOR VALUES FROM (100) TO (200);
+				INSERT INTO app.parted VALUES (1, 'a'), (50, 'b'), (150, 'c'), (160, 'd');
+				CREATE TABLE app.pair (a text, b int, v text, PRIMARY KEY (a, b));
+				INSERT INTO app.pair VALUES ('x', 1, 'a'), ('x', 2, 'b'), ('y', 1, 'c');`)
+			dir := writeFiles(t, map[string]string{
+				"app/parent.csv": "id,v\n1,a\n",
+				"app/parted.csv": "id,v\n1,a\n",
+				"app/low.csv":    "id,v\n1,a\n",
+				"app/high.csv":   "id,v\n150,c\n160,d\n",
+				"app/pair.csv":   "a,b,v\nx,1,a\ny,2,c\n",
+			})
+			s := db.session(t, dir)
+			for _, tt := range []struct {
+				table   declaration.Table
+				want    []string
+				because string
+			}{
+				{csvTable("app", "parent", "id", "v"), []string{"? 1 not declared"}, "the rows of app.heir are not rows of app.parent"},
+				{csvTable("app", "parted", "id", "v"), []string{"? 3 not declared"}, "the rows of every partition are rows of app.parted"},
+				{csvTable("app", "low", "id", "v"), []string{"? 1 not declared"}, "a partition holds its own rows"},
+				{csvTable("app", "high", "id", "v"), nil, "the declaration holds every row of the partition"},
+				{csvTable("app", "pair", "a", "b", "v"), []string{`+ "y" "2" | "c"`, "? 2 not declared"}, "a row matches by both columns of the key"},
+			} {
+				req := request(t, s, tt.table, nil, config.ModeUpsert)
+				got, err := s.Diff(t.Context(), req)
+				if err != nil {
+					t.Fatalf("Diff of %s: %v", tt.table.Name, err)
+				}
+				if lines := diffLines(got); !slices.Equal(lines, tt.want) {
+					t.Errorf("Diff of %s = %q, want %q: %s", tt.table.Name, lines, tt.want, tt.because)
+				}
 			}
 		})
 	}
