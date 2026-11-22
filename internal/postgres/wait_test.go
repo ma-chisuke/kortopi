@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -30,13 +31,19 @@ func TestExplainWait(t *testing.T) {
 		{
 			name: "lock timeout in a plan", s: &Session{}, ctx: t.Context(), err: wrap(lock),
 			want: "create the temporary table of table s.t: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
-				"another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: " +
-				"nothing was changed: run the plan again once that session has released the lock",
+				"another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout of the session allows: " +
+				"nothing was changed: run the plan again once that session has released the lock, or allow the wait more time with --lock-timeout",
 		},
 		{
 			name: "lock timeout in an apply, whose last line says that nothing was changed", s: &Session{apply: true}, ctx: t.Context(), err: wrap(lock),
 			want: "create the temporary table of table s.t: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
-				"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as lock_timeout allows: " +
+				"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as lock_timeout of the session allows: " +
+				"run the apply again once that session has released the lock, or allow the wait more time with --lock-timeout",
+		},
+		{
+			name: "lock timeout of --lock-timeout", s: &Session{apply: true, lockTimeout: 1500 * time.Millisecond}, ctx: t.Context(), err: wrap(lock),
+			want: "create the temporary table of table s.t: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
+				"another session holds a lock on a table or on rows that the apply needs, and the apply waited for it as long as --lock-timeout 1.5s allows: " +
 				"run the apply again once that session has released the lock",
 		},
 		{
@@ -71,10 +78,29 @@ func TestExplainWait(t *testing.T) {
 		t.Errorf("explainWait of no error = %v", none)
 	}
 
-	err := waitForLockError("app", lock)
-	want := `wait for another apply on database "app": ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): ` +
-		"the other apply held the lock of kortopi longer than lock_timeout or statement_timeout allows: run the apply again once the other apply has ended"
-	if err.Error() != want || !errors.Is(err, lock) {
-		t.Errorf("waitForLockError = %s, want %s", err, want)
+	stopped := "run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, " +
+		"as an apply that was stopped may leave it, and end it with pg_terminate_backend"
+	// The error names the limit that ended the wait: a lock timeout, of the
+	// flag or of the session, or a cancel, by statement_timeout or by another
+	// session, which the flag does not set.
+	cancelled := "the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session: "
+	for _, tt := range []struct {
+		s    *Session
+		err  *pgconn.PgError
+		what string
+	}{
+		{&Session{apply: true}, lock, "the other apply held the lock of kortopi longer than lock_timeout of the session allows: "},
+		{&Session{apply: true, lockTimeout: 3 * time.Second}, lock, "the other apply held the lock of kortopi longer than --lock-timeout 3s allows: "},
+		{&Session{apply: true}, cancel, cancelled},
+		{&Session{apply: true, lockTimeout: 10 * time.Second}, cancel, cancelled},
+	} {
+		err := tt.s.waitForLockError("app", tt.err)
+		want := `wait for another apply on database "app": ` + tt.err.Error() + ": " + tt.what + stopped
+		if err.Error() != want || !errors.Is(err, tt.err) {
+			t.Errorf("waitForLockError with --lock-timeout %v =\n%s\nwant\n%s", tt.s.lockTimeout, err, want)
+		}
+	}
+	if err := (&Session{apply: true}).waitForLockError("app", other); err.Error() != `wait for another apply on database "app": `+other.Error() {
+		t.Errorf("waitForLockError of another error = %s", err)
 	}
 }

@@ -26,6 +26,10 @@ flags:
   --exit-code       exit with status 2 when the plan is not empty
   --no-pending      fail on a table or a column that the database lacks,
                     instead of showing it as waiting for the schema change
+  --lock-timeout <duration>
+                    stop when a statement waits longer than this for a lock
+                    that another session holds, such as 10s, 500ms, or
+                    1m30s (default: the lock_timeout of the session)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -50,6 +54,8 @@ exit status:
 `--format sql` は、計画をテキストのかわりに SQL の文として出力する（[計画を SQL として出力する](#計画を-sql-として出力する)）。
 
 `--no-pending` は、データベースにない宣言済みのテーブルと列をすべてエラーにする。スキーマをすでに適用した実行のためのフラグである（[スキーマの変更を待つテーブルと列](#スキーマの変更を待つテーブルと列)）。
+
+`--lock-timeout` は、ほかのセッションが持つロックを待つ時間に上限を設ける（[ロックを待つとき](#ロックを待つとき)）。
 
 `kortopi plan --help` と `kortopi plan -h` も、同じヘルプを標準出力に出す。
 
@@ -114,27 +120,43 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 | `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。 |
 | `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。 |
 | `PGAPPNAME` | セッションの `application_name`。`pg_stat_activity` に表示される。既定は `kortopi` である。 |
-| `PGOPTIONS` | セッションの設定。`-c lock_timeout=10s` や `-c statement_timeout=5min` のように `-c name=value` の形で書く。 |
+| `PGOPTIONS` | セッションの設定。`-c statement_timeout=5min` のように `-c name=value` の形で書く。後で述べるとおり、トランザクションモードのコネクションプーラーの後ろでは届かない。 |
 
 `PGOPTIONS` の設定は、kortopi が固定する設定を変えない（[値の比べ方](comparison.ja.md#セッションの設定)）。
 kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
 apply も固定した設定で読み、比べる。ただし書き込みは、`PGOPTIONS` の設定も含めたセッションの設定で行う（[kortopi apply](apply.ja.md#書き込みの設定)）。
 
-`ALTER TABLE` を実行するスキーマの変更のように、ほかのセッションが、計画や apply の読み書きするテーブルのロックを持っている間、計画と apply は際限なく、何も言わずに待つ。
-kortopi にはこのための独自の設定がない。`PGOPTIONS` で `lock_timeout` を設定する。
+トランザクションモードのコネクションプーラーの後ろでは、`PGOPTIONS` のような接続の起動パラメータはサーバーに届かない。プーラーはそれを拒んで実行が接続できなくなるか、何も言わずに捨てる。
+セッションの設定も、全般にそこでは保たれない。トランザクションごとに、別のサーバーとの接続で動くことがあるからである。
+kortopi が自分で設定するものは、どれも自分のトランザクションの中に限られるので、そこでも保たれる。固定する設定と、`--lock-timeout` のロック待ちの上限である。
+ロールの設定（`ALTER ROLE ... SET`）は、その後にプーラーが開くサーバーとの接続に、ロールのすべてのセッションについて届く。
+
+kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で接続を落とす。そのため、応答しなくなったサーバーには約 30 秒の沈黙のあとに気付く。コミットの応答を待つ間も同じである。
+プローブを送るのは、サーバーの確認応答を待つデータのない接続だけである。kortopi が文や `COMMIT` を送った直後、サーバーが確認応答する前に切れたときは、待つのは TCP の再送に委ねられ、何分もかかることがある。その待ちも、2度目の割り込みで終わらせられる。
+サービスファイルでは、そのための libpq の設定でこれを変えられる。これらの設定に環境変数はない。`keepalives=0` はプローブを止める。`keepalives_idle`・`keepalives_interval`・`keepalives_count` は、待つ秒数・間隔の秒数・プローブの回数を設定する。libpq と同じく、0 と負の値はシステムの値を保つ。
+
+### ロックを待つとき
+
+計画・apply・書き出しは、読み書きするテーブルのロックをほかのセッションが持っている間は待つ。`ALTER TABLE` を実行するスキーマの変更がその例であり、apply が更新か削除をする行のロックでも待つ。
+ロック待ちの上限がなければ、際限なく、何も言わずに待つ。
+`--lock-timeout` は、実行にその上限を与える。値は `10s`・`500ms`・`1m30s` のような時間の長さで、`1ms` から `24h` までである。
 
 ```sh
-PGOPTIONS='-c lock_timeout=10s' kortopi apply --dir data
+kortopi apply --dir data --lock-timeout 10s
 ```
 
-待ちが上限に達すると、実行は止まり、何も変わらない。起きたことはエラーが示す。
+kortopi は、自分の各トランザクションの初めに、そのトランザクションに限って `lock_timeout` をこの値にする。そのため、計画、書き出し、そして書き込みとコミットを含む apply のどの段階でも、実行のすべての待ちに効き、トランザクションモードのコネクションプーラーの後ろでも効く。
+フラグがなければ、サーバー・データベース・ロール・`PGOPTIONS` が設定した、セッションの `lock_timeout` が効く。
+
+待ちが上限に達すると、実行は止まり、何も変わらない。起きたことと、どの上限が待ちを終わらせたかは、エラーが示す。
 
 ```text
-kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: nothing was changed: run the plan again once that session has released the lock
+kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as --lock-timeout 10s allows: nothing was changed: run the plan again once that session has released the lock
 ```
 
-`statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、同じ種類のエラーを出す。
-デプロイのときの実行には、毎回ロックのタイムアウトを設定する。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
+セッションが設定した上限のときは `as long as lock_timeout of the session allows` となる。そして `or allow the wait more time with --lock-timeout` が足される。
+セッションの `statement_timeout` は、理由を問わず長くかかりすぎる文を終わらせ、ロックを待つ文も終わらせる。そのときのエラーは、`statement_timeout` かほかのセッションが文をキャンセルしたと伝え、フラグを挙げない。kortopi にはそのためのフラグがない。
+デプロイのときの実行には、毎回ロック待ちの上限を与える。そこでは、待っている実行がデプロイ全体を止めてしまうからである（[スクリプトから kortopi を実行する](automation.ja.md#デプロイのとき)）。
 
 ## セッションに要るもの
 
@@ -186,19 +208,22 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 計画がデータベースの中ですることは、次のことだけである。
 
 - 接続を1つ開く。`PGAPPNAME` が別の値を設定しない限り、`application_name` は `kortopi` にする。
-- すべてを分離レベル `REPEATABLE READ` の1つのトランザクションで実行し、最後にロールバックする。そのため、どのテーブルも1つのスナップショットと比べる。
+- すべてを分離レベル `REPEATABLE READ` の1つのトランザクションで実行し、最後にロールバックする。そのため、どのテーブルも1つのスナップショットと比べる。`--lock-timeout` があれば、トランザクションは `SET LOCAL lock_timeout` で始まる。
 - 値の読み方を変える設定を固定する（[値の比べ方](comparison.ja.md#セッションの設定)）。
 - どの行を読み込むよりも前に、存在するテーブルの `on_insert` の値ごとに、セーブポイントの中でその列だけの一時テーブルを作って値を挿入する。そのあと、セーブポイントをロールバックする（[挿入のときだけ設定する値](#挿入のときだけ設定する値)）。
 - 宣言したテーブルごとに、セーブポイントの中で一時テーブルを作って宣言の行を読み込み、本物のテーブルと比べる。削除の波及は、すべてのテーブルの宣言の行を読むので、一時テーブルは計画が終わるまで残る。
 - 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
 
-計画を止めるには Ctrl-C を押す。
-kortopi はトランザクションをロールバックし、接続を閉じ、終了コード 1 で終わる。
+計画を止めるには Ctrl-C を押すか、SIGTERM を送る。
+kortopi は動いている文のキャンセルをサーバーに求め、トランザクションをロールバックし、接続を閉じ、終了コード 1 で終わる。
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
 ```
+
+セッションが終わったという応答が5秒以内にサーバーからないときは、apply と同じく1行が続く（[kortopi apply](apply.ja.md#apply-に割り込む)）。その行は、文がまだ動いてロックを持っているかもしれないことと、それを `pg_stat_activity` で見つけて終わらせる方法を伝える。
+2度目の割り込みは、待つのをその場で終える。
 
 ### スキーマごとのロール
 
@@ -641,4 +666,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:01b72cb4e164f0fa83fdb2674db026f92ebb38ae1e9bd0f6974d70ab783a74d0 -->
+<!-- i18n-source: plan.md sha256:8164d23ceb32ae9bc92ba261c3e76fc7b4c2b04403d0e7bba5f1adf414e4d1ce -->

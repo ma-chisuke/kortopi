@@ -47,5 +47,7 @@
 | [ADR-0039](ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) | 外部キーを通じた削除の波及を計画ですべて求め、行から離して示し、安全策でそのすべてを数える | accepted | 2026-11-21 |
 | [ADR-0040](ADR-0040-compare-an-interval-by-its-months-days-and-time.ja.md) | 期間は月数・日数・時間で比べる | accepted | 2026-11-21 |
 | [ADR-0041](ADR-0041-write-issues-through-forms-with-required-fields.ja.md) | issue は、必須の欄を持つフォームで書く | accepted | 2026-11-21 |
+| [ADR-0043](ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md) | 割り込まれた実行の文はサーバーでキャンセルし、コミットの応答を待つのをやめるのは2度目の割り込みか接続が死んだときだけにする | accepted | 2026-11-22 |
+| [ADR-0044](ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) | 実行のロック待ちの上限は `--lock-timeout` で与え、kortopi の各トランザクションのローカルな設定にする | accepted | 2026-11-22 |
 
-<!-- i18n-source: README.md sha256:0bb6d883a751b0351e183d583dc851986d90504d623465f813084a5c304dc39e -->
+<!-- i18n-source: README.md sha256:1b41d8a7bee01230ff842a9d2dedf5ea0f50813850af3a9e86b7224ffdfd798a -->

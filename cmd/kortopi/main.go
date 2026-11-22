@@ -38,6 +38,7 @@ var usage = "kortopi manages the rows of PostgreSQL master tables declaratively.
 	"\n" +
 	"flags of plan, apply, and export:\n" +
 	usageDirFlag +
+	lockTimeoutFlag +
 	connectionFlags +
 	"\n" +
 	"flags of plan and apply:\n" +
@@ -69,16 +70,35 @@ func main() {
 		printError(os.Stderr, err)
 		os.Exit(exitError)
 	}
-	// An interrupt cancels the context, so that the transaction is rolled back
-	// and the connection closed. A second interrupt ends the process at once.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-ctx.Done()
-		stop()
-	}()
-	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, dialects: dialects})
-	stop()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	ctx, again := watchInterrupts(signals, func() { signal.Stop(signals) })
+	code := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr, dialects: dialects, again: again})
+	signal.Stop(signals)
 	os.Exit(code)
+}
+
+// watchInterrupts returns a context that the first interrupt, SIGINT or
+// SIGTERM, cancels, and a channel that the second one closes (ADR-0043).
+//
+// The first interrupt stops the run: the session asks the server to cancel
+// its statement and rolls back, unless the commit has started, which goes
+// on so that its outcome is known. The second gives up the wait for the
+// server, and kortopi says what it does not know. kortopi never dies from
+// these two. After the second, stop is called, which lets a third end the
+// process at once, as the signal does by default, for a run that does not
+// end.
+func watchInterrupts(signals <-chan os.Signal, stop func()) (context.Context, <-chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	again := make(chan struct{})
+	go func() {
+		<-signals
+		cancel()
+		<-signals
+		stop()
+		close(again)
+	}()
+	return ctx, again
 }
 
 // newRegistry returns the registry of the databases that this build
@@ -92,12 +112,16 @@ func newRegistry() (*dialect.Registry, error) {
 	)...)
 }
 
-// env is what a command takes from outside: where it writes, and the
-// dialects through which it reaches a database. Tests replace dialects.
+// env is what a command takes from outside: where it writes, the dialects
+// through which it reaches a database, and the second interrupt. Tests
+// replace dialects.
 type env struct {
 	stdout   io.Writer
 	stderr   io.Writer
 	dialects *dialect.Registry
+	// again is closed by the second interrupt, after the first cancelled the
+	// context of the run (watchInterrupts). It may be nil.
+	again <-chan struct{}
 }
 
 // run executes one command and returns the exit status.

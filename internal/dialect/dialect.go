@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
@@ -61,6 +62,18 @@ type Options struct {
 	// Wait gets one line when an apply waits for another apply to finish. It
 	// may be nil.
 	Wait io.Writer
+	// LockTimeout is the longest time that a statement of the session waits
+	// for a lock that another session holds, from --lock-timeout: the wait
+	// for another apply, the reads, the writes, and the commit (ADR-0044).
+	// Zero leaves the waits to the settings of the session.
+	LockTimeout time.Duration
+	// GiveUp is closed by a second interrupt. The first interrupt cancels
+	// the context of Open: the session then asks the database to stop the
+	// statement that runs, and waits a short time for it to confirm that the
+	// work of the session ended. GiveUp ends that wait at once, and the wait
+	// for the answer of a commit, which the first interrupt does not stop
+	// (ADR-0043). It may be nil.
+	GiveUp <-chan struct{}
 }
 
 // Session is a session on the target database, for any command: each
@@ -76,8 +89,24 @@ type Session interface {
 	DatabaseName() string
 
 	// Close rolls back the transaction of the session, unless it was
-	// committed, and closes it.
+	// committed, and closes it. After an interrupt, when the database did not
+	// confirm that the work of the session ended, its error holds a
+	// *NotEndedError.
 	Close(ctx context.Context) error
+}
+
+// NotEndedError is the error of a session that an interrupt stopped before
+// its commit, when the database did not confirm in time that the work of the
+// session ended: its statement may still run, and hold its locks, although
+// its transaction can no longer commit. Open and Close return it, also
+// joined to the error that ended the session. The message says how to find
+// the session in the database and how to end it (ADR-0043).
+type NotEndedError struct {
+	Message string
+}
+
+func (e *NotEndedError) Error() string {
+	return e.Message
 }
 
 // ErrNoDialect is the error of Choose when the build holds no dialect: its

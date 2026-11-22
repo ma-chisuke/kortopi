@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ma-chisuke/kortopi/internal/dialect"
 )
@@ -46,19 +47,20 @@ func TestDialectOptions(t *testing.T) {
 	t.Parallel()
 
 	wait := &bytes.Buffer{}
+	giveUp := make(chan struct{})
 	got := options(dialect.Options{
 		Host: "db.example.test", Port: "6543", User: "deployer", Database: "shop",
-		Dir: "data", Apply: true, Export: true, Wait: wait,
+		Dir: "data", Apply: true, Export: true, Wait: wait, LockTimeout: 1500 * time.Millisecond, GiveUp: giveUp,
 	})
 	want := Options{
 		Host: "db.example.test", Port: "6543", User: "deployer", Database: "shop",
-		Dir: "data", Apply: true, Export: true, Wait: wait,
+		Dir: "data", Apply: true, Export: true, Wait: wait, LockTimeout: 1500 * time.Millisecond, GiveUp: giveUp,
 	}
 	if got != want {
 		t.Errorf("options() = %+v, want %+v", got, want)
 	}
 	// A new field of dialect.Options has to be passed on, and set above.
-	if n := reflect.TypeFor[dialect.Options]().NumField(); n != 8 {
-		t.Errorf("dialect.Options has %d fields, and this test sets 8: pass the new field on in options, and set it here", n)
+	if n := reflect.TypeFor[dialect.Options]().NumField(); n != 10 {
+		t.Errorf("dialect.Options has %d fields, and this test sets 10: pass the new field on in options, and set it here", n)
 	}
 }

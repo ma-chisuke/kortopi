@@ -24,6 +24,7 @@ const exportOnlyFlags = "  --schema <name>   export every table of this schema; 
 const exportFlags = "  --dir <path>      the data directory to write into, created if it is\n" +
 	"                    missing (default: the current directory)\n" +
 	exportOnlyFlags +
+	lockTimeoutFlag +
 	connectionFlags
 
 // exportUsage is the short help of export, which follows an error in its
@@ -155,13 +156,16 @@ func makeExport(ctx context.Context, o exportOptions, e env) (err error) {
 	if err := export.Check(decl, opts); err != nil {
 		return err
 	}
-	db, err := o.conn.open(ctx, d, dialect.Options{Dir: decl.Dir, Export: true})
+	db, err := o.open(ctx, d, dialect.Options{Dir: decl.Dir, Export: true}, e)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if closeErr := closeSession(ctx, db); closeErr != nil && err == nil {
+		switch closeErr := closeSession(ctx, db); {
+		case closeErr != nil && err == nil:
 			err = closeErr
+		case closeErr != nil:
+			err = withNotEnded(err, closeErr)
 		}
 	}()
 	_, err = export.Run(ctx, decl, settings, db, opts, e.stdout)

@@ -26,6 +26,10 @@ flags:
   --exit-code       exit with status 2 when the plan is not empty
   --no-pending      fail on a table or a column that the database lacks,
                     instead of showing it as waiting for the schema change
+  --lock-timeout <duration>
+                    stop when a statement waits longer than this for a lock
+                    that another session holds, such as 10s, 500ms, or
+                    1m30s (default: the lock_timeout of the session)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -50,6 +54,8 @@ A plan cannot be narrowed to one table: `--table` is a flag of `kortopi export`,
 `--format sql` prints the plan as SQL statements instead of text ([Print the plan as SQL](#print-the-plan-as-sql)).
 
 `--no-pending` makes every declared table and column that the database lacks an error, for a run in which the schema is applied already ([Tables and columns that wait for a schema change](#tables-and-columns-that-wait-for-a-schema-change)).
+
+`--lock-timeout` limits the waits for a lock that another session holds ([Wait for a lock](#wait-for-a-lock)).
 
 `kortopi plan --help` and `kortopi plan -h` print the same help on standard output.
 
@@ -114,27 +120,43 @@ Besides the host, the port, the user, the database, and the password, kortopi ta
 | `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. |
 | `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it. |
 | `PGAPPNAME` | The `application_name` of the session, which `pg_stat_activity` shows: `kortopi` by default. |
-| `PGOPTIONS` | Settings of the session, written as `-c name=value`, such as `-c lock_timeout=10s` and `-c statement_timeout=5min`. |
+| `PGOPTIONS` | Settings of the session, written as `-c name=value`, such as `-c statement_timeout=5min`. Not behind a connection pooler in transaction mode, as below. |
 
 A setting in `PGOPTIONS` does not change a setting that kortopi pins ([How values are compared](comparison.md#the-settings-of-the-session)).
 kortopi pins them inside its transaction, after the session has started, so `-c TimeZone=Asia/Tokyo` or `-c search_path=app` changes nothing in a plan.
 An apply reads and compares in the pinned settings too, but writes with the settings of the session, those of `PGOPTIONS` included ([kortopi apply](apply.md#the-settings-of-the-writes)).
 
-A plan and an apply wait without limit, and without a word, while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`.
-kortopi has no setting of its own for this: set `lock_timeout` in `PGOPTIONS`.
+Behind a connection pooler in transaction mode, the start-up parameters of a connection, such as `PGOPTIONS`, do not reach the server: the pooler refuses them, and the run cannot connect, or drops them without a word.
+The settings of a session in general do not hold there, because each transaction may run on another server connection.
+What kortopi sets itself is local to each of its transactions, so it holds there: the pinned settings, and the lock timeout of `--lock-timeout`.
+A setting of the role, `ALTER ROLE ... SET`, reaches the server connections that the pooler opens after it, for every session of the role.
+
+kortopi probes an idle connection after 10 seconds, every 5 seconds, and drops it after 4 probes without an answer, so it notices a server that no longer answers after about 30 seconds of silence, also while it waits for the answer of a commit.
+The probes go only on a connection with no data that waits for the server to acknowledge it: when the cut comes just after kortopi sent a statement or `COMMIT`, before the server acknowledged it, the wait is left to the retransmissions of TCP, which can take many minutes. The second interrupt ends that wait too.
+A service file can change this with the settings of libpq for it, which have no environment variables: `keepalives=0` turns the probes off, and `keepalives_idle`, `keepalives_interval`, and `keepalives_count` set the idle time in seconds, the interval in seconds, and the number of probes, where 0, or a negative value, keeps the value of the system, as in libpq.
+
+### Wait for a lock
+
+A plan, an apply, and an export wait while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`, or on rows that an apply updates or deletes.
+Without a lock timeout, they wait without limit, and without a word.
+`--lock-timeout` gives the run one, as a duration such as `10s`, `500ms`, or `1m30s`, from `1ms` to `24h`:
 
 ```sh
-PGOPTIONS='-c lock_timeout=10s' kortopi apply --dir data
+kortopi apply --dir data --lock-timeout 10s
 ```
 
-When the wait reaches the limit, the run stops, nothing is changed, and the error says what happened:
+kortopi sets `lock_timeout` to it at the start of each of its transactions, local to the transaction, so it holds for every wait of the run, in a plan, an export, and every phase of an apply, the writes and the commit included, and behind a connection pooler in transaction mode too.
+Without the flag, the `lock_timeout` of the session holds, as the server, the database, the role, or `PGOPTIONS` set it.
+
+When the wait reaches the limit, the run stops, nothing is changed, and the error says what happened, and which limit ended it:
 
 ```text
-kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as lock_timeout allows: nothing was changed: run the plan again once that session has released the lock
+kortopi: create the temporary table of table facility.room_types: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session holds a lock on a table or on rows that the plan needs, and the plan waited for it as long as --lock-timeout 10s allows: nothing was changed: run the plan again once that session has released the lock
 ```
 
-`statement_timeout` ends a statement that runs too long, for whatever reason, with an error of the same kind.
-Set a lock timeout for every run at deploy time, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
+A limit that the session set says `as long as lock_timeout of the session allows`, and adds `or allow the wait more time with --lock-timeout`.
+`statement_timeout` of the session ends a statement that runs too long, for whatever reason, a wait for a lock among them. The error then says that the statement was cancelled, by `statement_timeout` or by another session, and names no flag: kortopi has no flag for it.
+Give every run at deploy time a lock timeout, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
 
 ## What the session needs
 
@@ -186,19 +208,22 @@ Where the role lacks `USAGE` on the schema of such a table or `SELECT` on the ta
 In the database, a plan does the following and nothing else:
 
 - It opens one connection, with `application_name` set to `kortopi` unless `PGAPPNAME` sets another.
-- It runs everything in one transaction at the isolation level `REPEATABLE READ`, so all tables are compared against one snapshot, and rolls the transaction back at the end.
+- It runs everything in one transaction at the isolation level `REPEATABLE READ`, so all tables are compared against one snapshot, and rolls the transaction back at the end. With `--lock-timeout`, the transaction starts with `SET LOCAL lock_timeout`.
 - It pins the settings that change how values are read ([How values are compared](comparison.md#the-settings-of-the-session)).
 - For each value of `on_insert` of a table that exists, before it loads any row, it creates a temporary table of that column alone inside a savepoint, inserts the value into it, and rolls the savepoint back ([Values that only an insert sets](#values-that-only-an-insert-sets)).
 - For each declared table, it creates a temporary table inside a savepoint, loads the declared rows into it, and compares them with the real table. The temporary tables stay until the plan ends, because the effect of the deletions reads the declared rows of every table.
 - When rows are to be deleted, it follows the foreign keys that reference them with queries, and keeps the rows that it reaches, by their identities, in one more temporary table. It deletes no row.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
 
-Press Ctrl-C to stop a plan.
-kortopi rolls the transaction back, closes the connection, and exits with status 1:
+Press Ctrl-C to stop a plan, or send it SIGTERM.
+kortopi asks the server to cancel the statement that runs, rolls the transaction back, closes the connection, and exits with status 1:
 
 ```text
 kortopi: interrupted: the plan was stopped, and the database is as it was
 ```
+
+When the server does not confirm within 5 seconds that the session ended, a line follows that says that its statement may still run and hold its locks, and how to find it in `pg_stat_activity` and end it, as for an apply ([kortopi apply](apply.md#interrupt-an-apply)).
+A second interrupt ends that wait at once.
 
 ### One role for each schema
 

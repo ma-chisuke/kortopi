@@ -29,6 +29,10 @@ flags:
                     would delete or change more than n rows, counting the
                     rows that foreign keys delete or change with them, at
                     every depth (default: 100)
+  --lock-timeout <duration>
+                    stop when a statement waits longer than this for a lock
+                    that another session holds, such as 10s, 500ms, or
+                    1m30s (default: the lock_timeout of the session)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -45,7 +49,8 @@ exit status:
       the outcome of the commit is not known
 ```
 
-`--dir`・`--schema`・接続のフラグは、[kortopi plan](plan.ja.md#データベースへの接続) と同じように働く。
+`--dir`・`--schema`・`--lock-timeout`・接続のフラグは、[kortopi plan](plan.ja.md#データベースへの接続) と同じように働く。
+`--lock-timeout` は、apply がロックを待つすべての場面に効く。別の apply を待つこと、読み取り、書き込みとそれが発火させるトリガー、そしてコミットである（[ロックを待つとき](plan.ja.md#ロックを待つとき)）。
 `--max-delete` は 0 以上の整数を受け取り、`--allow-delete` がなければ誤りである。
 apply は何も尋ねない。実行する前に、`kortopi plan` で計画をレビューする。
 
@@ -106,6 +111,7 @@ kortopi はシーケンスを読みも動かしもしない。
 
 apply は、計画が固定する設定で読み、比べる（[値の比べ方](comparison.ja.md#セッションの設定)）。そのため、宣言した値と `on_insert` の値は、どの環境でも同じ意味になる。
 一方、挿入・更新・削除とコミットは、kortopi が固定する前にセッションが持っていた設定で動く。`client_encoding` だけは固定したままである。セッションが持っていた設定とは、サーバー・`ALTER DATABASE ... SET`・`ALTER ROLE ... SET`・`PGOPTIONS` が設定したものである。
+`--lock-timeout` があれば、そこでも `lock_timeout` はフラグの値である。
 そのため、書き込みが発火させる既定値、トリガー、外部キーの動作、遅らせた検査は、アプリケーションの文と同じ設定を見る。
 
 - `timestamp` の列への既定値 `now()` や `current_date` は、データベースの `TimeZone` での時刻と日付になる。値をテキストにする既定値は、その `DateStyle` と `IntervalStyle` の形になる。
@@ -121,7 +127,7 @@ apply は、計画が固定する設定で読み、比べる（[値の比べ方]
 apply はデータベースの中で、次のことをこの順に行い、それ以外は何もしない。
 
 1. 接続した直後に、どのトランザクションの外でも、書き込みが使うセッションの設定を1つの問い合わせで読む。
-2. 分離レベル `REPEATABLE READ` のトランザクションを1つ開き、`pg_try_advisory_xact_lock` で kortopi のロックを取り、値の読み方を変える設定を固定する。
+2. 分離レベル `REPEATABLE READ` のトランザクションを1つ開く。`--lock-timeout` があれば、その `lock_timeout` で開く。そして `pg_try_advisory_xact_lock` で kortopi のロックを取り、値の読み方を変える設定を固定する。
 3. カタログを読み、計画と同じく、`on_insert` の各値をその列だけの一時テーブルで確かめる。これはロールバックするセーブポイントの中で行う。
 4. 宣言した各テーブルについて、計画と同じく一時テーブルを作り、宣言した行を読み込み、テーブルと比べる。その一時テーブルはコミットまで残す。削除する行があるときは、削除の外部キーを問い合わせでたどり、着いた行をもう1つの一時テーブルに控える（[削除の安全策](#削除の安全策)）。
 5. 外部キーの循環が必要とすれば、`SET CONSTRAINTS` でその検査を遅らせる。
@@ -274,14 +280,50 @@ Applied: 0 inserted, 0 updated, 1 deleted.
 
   データベースに対して `kortopi plan` を実行して、どちらの状態かを確かめ、必要ならもう一度 apply する。すでに適用した宣言の apply は、何も変えない。
 
-検査や書き込みの間の Ctrl-C は、トランザクションをロールバックする。
+## apply に割り込む
+
+Ctrl-C や、ジョブの実行役がジョブをキャンセルするときに送る SIGTERM は、コミットの前の apply を止める。
+kortopi は、`psql` と同じくプロトコルのキャンセル要求で、動いている文のキャンセルをサーバーに求める。そしてトランザクションをロールバックして接続を閉じる。
+サーバーは数ミリ秒のうちに文を終え、トランザクションとともにそのロックもなくなる。2つの apply を分けておく kortopi のロックもその1つである。
 
 ```text
 kortopi: interrupted: the apply was stopped
 kortopi: nothing was changed
 ```
 
-コミットが始まったら、Ctrl-C ではそれを止めない。結果を知るためである。
+kortopi は、これを済ませたというサーバーの応答を、割り込みから最長5秒待つ。
+サーバーが届かないところにあるか、文が止まらないために応答がないときは、何がまだ動いているかもしれないかとその終わらせ方を kortopi が伝え、終了コード 1 で終わる。
+
+```text
+kortopi: interrupted: the apply was stopped
+kortopi: the server did not confirm within 5s that the session of the apply ended: its statement may still run on the server and hold its locks until the server notices that kortopi has gone, although its transaction can no longer commit: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 386, and end it with pg_cancel_backend(386), or with pg_terminate_backend(386) if it does not end
+kortopi: nothing was changed
+```
+
+それでも何も変わっていない。トランザクションはコミットしておらず、セッションが終わるときにサーバーがロールバックする。
+2度目の割り込みは待つのをその場で終え、そのとき行は `kortopi stopped waiting for the server to end the session of the apply` で始まる。
+この割り込みがあっても、キャンセル要求は送られる。kortopi は終了する前に、ドライバーがそれを送るのを最長1秒待つ。
+apply が別の apply を待っている間も同じである。
+
+コミットが始まったら、割り込みではそれを止めない。結果を知るためであり、kortopi はその場でそう伝える。
+
+```text
+kortopi: the commit has started, so the interrupt does not stop it: waiting for the answer of the database, so that the outcome is known: interrupt again to give up the wait
+```
+
+応答が来れば、apply は割り込みがなかったときと同じように終わる。書いたものを出力して終わるか、データベースがコミットを拒んだときは、コミットのエラーと `kortopi: nothing was changed` を出力して終わる。遅らせた制約や、遅らせたトリガーの中のロック待ちの上限が、コミットを拒ませることがある。
+2度目の割り込みは応答を待つのをやめ、kortopi は応答のないコミットのメッセージとともに終了コード 1 で終わる。
+
+```text
+kortopi: commit the apply: the commit got no answer from the database, so it is not known whether the changes were made: run kortopi plan to see the state of the database (cause: a second interrupt gave up the wait for the answer)
+```
+
+kortopi はコミットをキャンセルしないので、サーバーはコミットを済ませるか、遅らせた制約が失敗すればロールバックする。どちらだったかは `kortopi plan` を実行して確かめる。
+2度目の割り込みのあと、kortopi はシグナルを受け取らなくなり、3度目の割り込みを受けるとすぐに終わる。
+
+サーバーに届かなくなった接続は、コミットの応答を待つことも含め、kortopi の待ちをすべて終わらせる。kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で待つのをやめる。つまり、約 30 秒の沈黙のあとである（[接続の設定](plan.ja.md#接続の設定)）。
+プローブを送るのは、サーバーの確認応答を待つデータのない接続だけである。kortopi が文や `COMMIT` を送った直後、サーバーが確認応答する前に切れたときは、待つのは TCP の再送に委ねられ、何分もかかることがある。その待ちも、2度目の割り込みで終わらせられる。
+応答する接続で遅いコミットには上限がない。同期スタンバイを待つときがそうである。そこから抜け出す手段は2度目の割り込みである。
 
 ## 終了コード
 
@@ -297,8 +339,23 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 1つのデータベースの2つの apply は、順に動く。2つ目は待つことを1行で示し、1つ目が終わってから始まる。
 そして、1つ目が書いた行と宣言を比べる。
 
-ロックは接続ではなくトランザクションに属する。そのため、トランザクションモードのコネクションプーラーを通しても働き、kortopi が強制終了されてもトランザクションとともに終わる。
+ロックは接続ではなくトランザクションに属する。そのため、トランザクションモードのコネクションプーラーを通しても働き、トランザクションとともに終わる。
+割り込まれた apply は、終了する前にトランザクションを終える（[apply に割り込む](#apply-に割り込む)）。
+kortopi が強制終了されたときや接続が切れたときは、接続がなくなったことにサーバーが気付いたときにトランザクションが終わる。セッションが待っているか文を実行しているときは、それに長くかかることがある。
 これはサーバーのロックであり、データベースのオブジェクトではない。
+
+別の apply を待つのが `--lock-timeout` かセッションの `lock_timeout` の上限に達すると、apply は止まる。
+
+```text
+kortopi: wait for another apply on database "app": ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): the other apply held the lock of kortopi longer than --lock-timeout 10s allows: run the apply again once the other apply has ended, or, when no other apply runs, find the session that holds the lock in pg_stat_activity, as an apply that was stopped may leave it, and end it with pg_terminate_backend
+kortopi: nothing was changed
+```
+
+セッションの `statement_timeout` かほかのセッションが待ちをキャンセルしたときは、エラーはそのことを次のように伝え、フラグを挙げない。
+
+```text
+the wait for the lock of kortopi, which the other apply held, was cancelled, by statement_timeout of the session or by another session
+```
 
 ## デプロイでの使い方
 
@@ -308,7 +365,7 @@ apply が 2 で終わることはない。apply のあとでデータベース�
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
-- `PGOPTIONS='-c lock_timeout=10s'` のようにロックのタイムアウトを設定する。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[kortopi plan](plan.ja.md#接続の設定)）。接続の設定は計画と同じであり、書き込みもその設定で動く（[書き込みの設定](#書き込みの設定)）。
+- `--lock-timeout 10s` のように、`--lock-timeout` で apply にロック待ちの上限を与える。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[ロックを待つとき](plan.ja.md#ロックを待つとき)）。kortopi はそれを各トランザクションの中で設定するので、トランザクションモードのコネクションプーラーの後ろでも効く。そこでは `PGOPTIONS` はサーバーに届かない。
 - 失敗した apply は何も変えない。宣言かデータベースを直して、もう一度実行する。
 
 ### スキーマごとの apply
@@ -336,7 +393,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
 - コミットのあと、PostgreSQL 自身の一時スキーマ `pg_temp_N` と `pg_toast_temp_N` が、空のままカタログに残る。これらは kortopi のオブジェクトではない。
-- テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。
+- テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。プーラーを通しても、`--lock-timeout` は効き、キャンセル要求は転送される設計である。ネットワークを切るテストもない。
 
 ## よくあるエラー
 
@@ -519,6 +576,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:e9694ad88a996df3e579b1226f206bba5bed688a37dc726dffe212c361e00912 -->
+<!-- i18n-source: apply.md sha256:69104af8bb6a30b67f229d577a5b569d9ed1465a11d81f505b73a40608e45920 -->

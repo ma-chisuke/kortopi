@@ -37,6 +37,10 @@ flags:
                     the flag for more tables
   --format <name>   csv (the default), or sql: the format of a new file
   --overwrite       replace the files that declare the exported tables
+  --lock-timeout <duration>
+                    stop when a statement waits longer than this for a lock
+                    that another session holds, such as 10s, 500ms, or
+                    1m30s (default: the lock_timeout of the session)
   --host <host>     the host of the database server
   --port <port>     the port of the database server
   --user <user>     the user to connect as
@@ -59,6 +63,7 @@ exit status:
 - `--dir` は、書き込むデータのディレクトリである。既定はカレントディレクトリで、ないときは作る。そこに `kortopi.toml` があれば、書き出しはテーブルのキーをそこから読む。
 - `--format` は、新しいファイルの形式である。すでにテーブルを宣言しているファイルは、その形式を保つ。
 - `--overwrite` は、指定したテーブルを宣言しているファイルを置き換えることを許す（[宣言したテーブルを書き出し直す](#宣言したテーブルを書き出し直す)）。
+- `--lock-timeout` は、読むテーブルのロックをほかのセッションが持っているとき、それより長く待つ書き出しを止める。[kortopi plan](plan.ja.md#ロックを待つとき) と同じである。
 
 接続は [kortopi plan](plan.ja.md#データベースへの接続) と同じである。libpq の環境変数・パスワードファイル・フラグ `--host`・`--port`・`--user`・`--dbname` を使う。
 kortopi はフラグ以外の引数を取らない。
@@ -390,8 +395,10 @@ kortopi: data/facility/types.csv: a file appeared there while the export ran, an
 kortopi: these files were written before the error, and they stay as written: data/facility/room_types.csv, data/facility/rooms.csv
 ```
 
-書き出しを止めるには Ctrl-C を押す。
+書き出しを止めるには Ctrl-C を押すか、SIGTERM を送る。
+kortopi は、計画と同じく、動いている文のキャンセルをサーバーに求める（[kortopi plan](plan.ja.md#セッションに要るもの)）。
 そのとき、エラーは `kortopi: interrupted: the export was stopped` で始まり、それでも書いたファイルを示す。
+セッションが終わったという応答が5秒以内にサーバーからないときは、最後の行が、その文がまだ動いているかもしれないことと、それを `pg_stat_activity` で見つけて終わらせる方法を伝える（[kortopi apply](apply.ja.md#apply-に割り込む)）。
 
 | 終了コード | 意味 |
 |---|---|
@@ -467,6 +474,6 @@ kortopi: invalid value for flag --table: write the table as <schema>.<table>, wi
 kortopi: invalid value for flag --format: give csv or sql
 ```
 
-この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md) と [ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md) にある。
+この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:2d75d70a8ec57b301a41d98a32e3b9ab47d6eed20583ee51b2b0e664e4cc3293 -->
+<!-- i18n-source: export.md sha256:40005713965d3ecaa69fd68851b16e6ff7cf80100875de8f0bd2977c5f2ff756 -->

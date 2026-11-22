@@ -206,6 +206,15 @@
 | set-based statement | 集合単位の文 |
 | phase（apply の） | 段階 |
 | outcome（コミットの） | 結果 |
+| cancel request（PostgreSQL のプロトコルの） | キャンセル要求 |
+| lock timeout（`lock_timeout`、`--lock-timeout`） | ロック待ちの上限 |
+| keepalive, probe（TCP の） | キープアライブ、プローブ |
+| signal（OS の） | シグナル |
+| process ID | プロセス ID |
+| start-up parameter（接続の） | 起動パラメータ |
+| give up（待つことを） | 待つのをやめる |
+| job runner（パイプラインを動かすもの） | ジョブの実行役 |
+| synchronous standby | 同期スタンバイ |
 | script（SQL として出力した計画） | スクリプト |
 | statement, keyword（SQL の） | 文、キーワード |
 | string literal, standard string, escape string（`E'...'`） | 文字列リテラル、標準の文字列、エスケープ文字列 |
@@ -259,4 +268,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:6be8ee5d436d936053da4f620e66450a1787d5f6b537c9f23f6eb07252f69bf2 -->
+<!-- i18n-source: translation.md sha256:2919a37495c6e2767b52a73358b84ca9c52e685e66ecab60da42450a714ea327 -->

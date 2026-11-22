@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/ma-chisuke/kortopi/internal/apply"
@@ -21,7 +22,7 @@ var applyOnlyFlags = "  --allow-delete    delete the rows that the declaration l
 	"                    every depth (default: " + strconv.Itoa(apply.DefaultMaxDelete) + ")\n"
 
 // applyFlags lists the flags of apply, for its help.
-var applyFlags = sourceFlags("apply") + applyOnlyFlags + connectionFlags
+var applyFlags = sourceFlags("apply") + applyOnlyFlags + lockTimeoutFlag + connectionFlags
 
 // applyUsage is the short help of apply, which follows an error in its
 // flags.
@@ -64,6 +65,10 @@ var (
 	errApplyInterrupted = errors.New("interrupted: the apply was stopped")
 	// errNothingChanged is the last line of a failed apply.
 	errNothingChanged = errors.New("nothing was changed")
+	// errCommitStarted is the line of an interrupt that comes after the
+	// commit has started, which it does not stop (ADR-0043).
+	errCommitStarted = errors.New("the commit has started, so the interrupt does not stop it: " +
+		"waiting for the answer of the database, so that the outcome is known: interrupt again to give up the wait")
 )
 
 // runApply runs `kortopi apply`.
@@ -80,7 +85,14 @@ func runApply(ctx context.Context, args []string, e env) int {
 		printError(e.stderr, err)
 		return exitError
 	case err != nil:
-		printError(e.stderr, interrupted(ctx, err, errApplyInterrupted))
+		// An interrupt does not stop a commit that has started, so the error
+		// of the commit is what happened, also after an interrupt.
+		var commitErr *commitFailure
+		if errors.As(err, &commitErr) {
+			printError(e.stderr, err)
+		} else {
+			printError(e.stderr, interrupted(ctx, err, errApplyInterrupted))
+		}
 		printError(e.stderr, errNothingChanged)
 		return exitError
 	}
@@ -144,11 +156,11 @@ func makeApply(ctx context.Context, o applyOptions, e env) (r *apply.Result, clo
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := o.conn.open(ctx, d, dialect.Options{Dir: decl.Dir, Apply: true, Wait: e.stderr})
+	db, err := o.open(ctx, d, dialect.Options{Dir: decl.Dir, Apply: true, Wait: e.stderr}, e)
 	if err != nil {
 		return nil, nil, err
 	}
-	r, err = apply.Run(ctx, decl, settings, db, apply.Options{
+	r, err = apply.Run(ctx, decl, settings, committing{Session: db, run: ctx, stderr: e.stderr}, apply.Options{
 		AllowDelete: o.allowDelete,
 		MaxDelete:   o.maxDelete,
 		Planned: func(p *plan.Plan) error {
@@ -161,11 +173,64 @@ func makeApply(ctx context.Context, o applyOptions, e env) (r *apply.Result, clo
 	closeErr = closeSession(ctx, db)
 	switch {
 	case err != nil:
-		return nil, nil, err
+		return nil, nil, withNotEnded(err, closeErr)
 	case closeErr != nil && !committed(r):
 		return nil, nil, closeErr
 	}
 	return r, closeErr, nil
+}
+
+// committing is the session of an apply, whose commit says on standard error
+// when an interrupt comes while it runs. The commit goes on, so that its
+// outcome is known, and the second interrupt gives up the wait for its
+// answer (ADR-0043).
+type committing struct {
+	dialect.Session
+	// run is the context of the run, which the first interrupt cancels.
+	run    context.Context
+	stderr io.Writer
+}
+
+// Commit commits, and writes errCommitStarted as soon as the first
+// interrupt comes, also when it came just before the commit started.
+func (c committing) Commit(ctx context.Context) error {
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		select {
+		case <-c.run.Done():
+			select {
+			case <-done:
+				// The commit had returned.
+			default:
+				printError(c.stderr, errCommitStarted)
+			}
+		case <-done:
+		}
+	}()
+	err := c.Session.Commit(ctx)
+	close(done)
+	// Nothing writes to stderr until the line has been written.
+	<-exited
+	if err != nil {
+		return &commitFailure{err: err}
+	}
+	return nil
+}
+
+// commitFailure is the error of a commit that started. An interrupt did not
+// stop it, so this error, and not the interrupt, is what the apply reports.
+type commitFailure struct {
+	err error
+}
+
+func (e *commitFailure) Error() string {
+	return e.err.Error()
+}
+
+func (e *commitFailure) Unwrap() error {
+	return e.err
 }
 
 // committed reports whether an apply committed: it does when it wrote a row
