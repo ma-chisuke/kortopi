@@ -407,6 +407,12 @@ billing.fees (upsert, key: id)
   sequence billing.fees_id_seq of column id: could not be read: PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence: an apply reads it again, and moves it if it can
   ```
 
+- 計画が始まったあとで、ほかのセッションがシーケンスを削除するか、名前を変えて同じ名前の別のシーケンスに置き換えても、計画は止まらない。計画はシーケンスを名前で指すので、そのとき名前は別のシーケンスを指すか、何も指さない。その行は次のように伝える。
+
+  ```text
+  could not be read: another session dropped or replaced the sequence after the run began: plan again, which reads the sequence that the column owns then
+  ```
+
 ### 削除がほかの行にすること
 
 削除する行をほかの行が参照するテーブルには、件数の行のあとに、削除する行から離して、まとまりを置く。そのまとまりは、削除が外部キーを通じてほかにすることを示す。
@@ -544,7 +550,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
 - 削除はそのあとに、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
 - 最後にシーケンスが来る。その前には、文がすることを伝えるコメント行が並ぶ（[シーケンス](#シーケンス)）。各シーケンスには計画の行をコメントで置き、その下に apply が実行するのと同じ文を置く。スクリプトが動くとき、文はスクリプトの挿入と更新のあとで列の最大の値とシーケンスを読み、`nextval` で、100,000 個を超えて進めるときは `setval` で、シーケンスを列の先へ進める。すでに列の先にあるシーケンスは、そのままにする。計画より遅れてスクリプトが動き、その間にアプリケーションが値を取った場合がそうである。
-- スクリプトは、計画したロールによる apply と同じことをし、シーケンスで失敗しない。文が実行されるのは、apply が進めると計画が示したシーケンス、つまり計画したロールが読めて進められるシーケンスだけである。値を取れるがシーケンスを設定できないロールの文は `setval` を持たず、100,000 個を超える値が要るシーケンスはそのままにする。進める必要を示すほかの行と、計画が読めなかったシーケンスの行の下では、文をコメントにする。それは実行を許されたロールのためであり、上の行が計画と同じく理由を伝える。循環するシーケンスと上限が先に来るシーケンスには、コメントの行だけを置き、文は置かない。
+- スクリプトは、計画したロールによる apply と同じことをし、シーケンスで失敗しない。文が実行されるのは、apply が進めると計画が示したシーケンス、つまり計画したロールが読めて進められるシーケンスだけである。値を取れるがシーケンスを設定できないロールの文は `setval` を持たず、100,000 個を超える値が要るシーケンスはそのままにする。そのときの行は、列 `how` で `left: it needs setval, which the role of the plan may not run` と伝える。進める必要を示すほかの行と、計画が読めなかったシーケンスの行の下では、文をコメントにする。それは実行を許されたロールのためであり、上の行が計画と同じく理由を伝える。循環するシーケンスと上限が先に来るシーケンスには、コメントの行だけを置き、文は置かない。
 - 名前はすべて二重引用符で囲む。PostgreSQL のある版でそのまま書ける名前が、別の版ではキーワードでありうるからである。ふつうのテーブルには適用と同じく `ONLY` を付け、パーティションテーブルには付けない。
 - スキーマの変更を待つテーブルには文を書かない。スキーマの変更を待つ列は、そのテーブルの文から除く。
 - `on_insert` の値を持つテーブルの `INSERT` は、宣言した列のあとにその列を挙げ、すべての行にその値を与える。文の前には、2行のコメントを置く。
@@ -703,4 +709,4 @@ esac
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:b6f58a4cab93425118900b74f683856098c0cedf39979af1713234d1b3736fcc -->
+<!-- i18n-source: plan.md sha256:67a062dc445488df67d2b14ef4bab20b467f6c05ae81f57bc0106d413763887d -->

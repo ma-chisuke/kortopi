@@ -108,7 +108,7 @@ GRANT SELECT, UPDATE ON SEQUENCE catalog.plans_id_seq TO deployer;
 7. 参照されるテーブルから参照するテーブルへの順に、各テーブルの足りない行を挿入し、それから違う行を更新する。
 8. `--allow-delete` があれば、挿入と更新のあとで削除の外部キーをもう一度たどり、計画が数えたのと違う行に着けば止まる。それから、宣言にない行を削除する。順番は、参照するテーブルから参照されるテーブルへであり、削除する行に別のテーブルからのカスケードが着くテーブルは、そのテーブルより先にする。削除が計画の数えたとおりにしたことを確かめる。
 9. その実行の宣言したすべてのテーブルを、計画と同じ比べ方でデータベースともう一度比べ、残った違いが、自分が省いた削除のほかにあれば止まる。`--allow-delete` がなければ、削除する行を残すテーブルの行を書き込みが削除したときや、自分の挿入と違う行をそこに挿入したときにも止まる（[コミット前の比較](#コミット前の比較)）。
-10. 明示的な値を書いた識別列や `serial` の列ごとに、そのシーケンスを書いた値の先へ進め、読み直す（[シーケンス](#シーケンス)）。
+10. 進めるシーケンスがあるときは、コミットを待つ制約をコミットと同じく実行し、失敗すれば止まる。それから、明示的な値を書いた識別列や `serial` の列ごとに、そのシーケンスを書いた値の先へ進め、読み直す（[シーケンス](#シーケンス)）。
 11. コミットし、書いたものとシーケンスの位置を出力する。手前に残したシーケンスごとの注記は、標準エラー出力へ出す。
 
 各書き込みは、実行時に計画の条件で行を選び、それを書く。apply はその両方の数を計画と照らし合わせる。apply が書くのは、計画が示す行を、計画が示す値でだけだからである（[書き込みの行数](#書き込みの行数)）。
@@ -217,9 +217,10 @@ Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
 
 進め方と、なお起こりうること：
 
-- 100,000 個以下の値で済むときは、apply はその値を `nextval` で取る。`nextval` は、ほかのセッションがシーケンスから値を取っていても、決してシーケンスを戻さない。ほかのセッションが取った値は、進めるのにもう要らない値である。値を1,000個取るのにおよそ0.5ミリ秒かかる。
+- 最初にシーケンスを進める直前に、apply はコミットを待つ制約を `SET CONSTRAINTS ALL IMMEDIATE` で、コミットと同じく実行する。対象は、apply が遅らせた外部キーと、`INITIALLY DEFERRED` の制約である。失敗した制約は、どのシーケンスも進める前に apply を止め、何も変わらない（[コミットで失敗する遅らせた外部キー](#コミットで失敗する遅らせた外部キー)）。シーケンスを進めない apply は、制約をコミットに任せる。
+- 100,000 個以下の値で済むときは、apply はその値を `nextval` で取る。`nextval` は、ほかのセッションがシーケンスから値を取っていても、決してシーケンスを戻さない。ほかのセッションが取った値は、進めるのにもう要らない値である。apply は、`nextval` の返す値が列の先に出るまで値を取り続ける。シーケンスの値を既定値に取る列へ apply が挿入すると、最初の値は apply のセッションのキャッシュから来る。そのときも同じである。`nextval` を呼ぶのは、進める値の数にシーケンスの `CACHE` を足した回数までである。値を1,000個取るのにおよそ0.5ミリ秒かかる。
 - それより長く進めるときは、列を読んだあとでシーケンスの位置を読んだ1つの文の中で、`setval` で設定する。これがシーケンスを戻すのは、その1つの文の中で位置を読んでから `setval` を呼ぶまでに、ほかのセッションが 100,000 個を超える値をシーケンスから取った場合だけである。
-- 進める作業は、シーケンスを読み、進め、読み直す。どの文もそれぞれのセーブポイントの中で動く。コミットのあとの行は、進めたあとに読んだシーケンスの位置を伝える。それは、シーケンスがどのセッションにも次に返す値である。
+- 進める作業は、シーケンスを読み、進め、読み直す。どの文もそれぞれのセーブポイントの中で動く。コミットのあとの行が伝えることは、進めたあとの読み取りから来る。列の先にあるシーケンスは進んだものとし、どのセッションにも次に返す値を伝える。まだ列の手前にあるシーケンスは手前に残ったものとし、残りの進め方を伝える。apply が進める間にほかのセッションが戻したシーケンスは、戻されたものとして伝える。進めたあとの読み取りが失敗したときは、シーケンスが分からない値まで進んだと伝える。
 - `CACHE` が 1 を超えるシーケンスは、各セッションに値をまとめて渡す。apply が値を順に取るときもひとまとまりを取るので、目標より最大でひとまとまり分だけ多く値を飛ばす。`CACHE 20` のとき、計画は `next value 3 -> 4` と伝え、apply は `next value 3 -> 23` と伝える。進める前にひとまとまりを受け取ったセッションは、進めたあとでその値を渡し、それは apply が書いた値でありうる。
 - 進めたことは、トランザクションとともにロールバックされない。進めたあとでコミットが失敗したとき、または割り込みが来たときは、行は書かれず、シーケンスは進んだまま残る。値を飛ばすだけであり、最後の行がそう伝える。
 
@@ -227,7 +228,7 @@ Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
   kortopi: nothing was changed but the sequences that the apply had moved before its commit, which a rollback does not move back, so they only skip values: billing.fees_id_seq to next value 4
   ```
 
-  進める間の割り込みや接続の切断は、シーケンスを読み直す前に apply を止める。最後の行は、そのシーケンスを前に進んだかもしれないものとして挙げる。`billing.fees_id_seq, which may have moved forward` のような形である。コミットの結果が分からないときは（[出力の読み方](#出力の読み方)）、エラーのあとの行が、それでも進んだシーケンスを挙げる。
+  進める間や、そのあとの読み直しの間の割り込み、接続の切断は、シーケンスを読み直す前に apply を止める。最後の行は、そのシーケンスを前に進んだかもしれないものとして挙げる。`billing.fees_id_seq, which may have moved forward` のような形である。コミットの結果が分からないときは（[出力の読み方](#出力の読み方)）、エラーのあとの行が、それでも進んだシーケンスを挙げる。apply が手前に残した各シーケンスについては、コミットされた場合に要る進め方を注記で伝える。
 - 進める前の割り込みは、どのシーケンスももとのままにする。
 - PostgreSQL が進める文を終えても、apply は止まらない。ほかのセッションが持つシーケンスのロックで `lock_timeout` が終える場合や、値を長く順に取る途中で `statement_timeout` が終える場合は、その例である。`nextval` は取った値を返さないので、シーケンスはもとのままか、目標の途中まで進んでいる。apply はシーケンスを読み直して行をコミットし、シーケンスの位置と理由、残りを進める方法を伝える。
 
@@ -237,7 +238,9 @@ Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
 
 - 明示的な値を書いてから進め終えるまでの間に、シーケンスから値を取ったセッションは、apply が書いた値を得ることがある。その挿入は apply のコミットを待ち、そのあとキーで失敗する。`nextval` で値を順に取る間なら、この時間は最大でおよそ 50 ミリ秒である。
 
-ほかのセッションが持つシーケンスのロックは、計画も apply も最大 5 秒しか止めない。`--lock-timeout` がそれより短ければ、その時間である。シーケンスに対する文は、計画の読み取りも進める作業の各文も、その `lock_timeout` で自分のセーブポイントの中で動き、そのあと `lock_timeout` はもとの値に戻る。読み取りを PostgreSQL が終えた計画は、シーケンスを読めなかったと伝えて先へ進む。apply はそれでも進めようとする（[kortopi plan](plan.ja.md#シーケンス)）。
+ほかのセッションが持つシーケンスのロックは、そのシーケンスへの各文を最大 5 秒しか止めない。`--lock-timeout` がそれより短ければ、その時間である。計画は各シーケンスを1回読み、apply は進める各シーケンスに3つの文を実行する。そのため実行は、ロックされたシーケンスへのそうした文ごとに、最大でその時間だけ待つ。どの文もその `lock_timeout` で自分のセーブポイントの中で動く。セーブポイントはロールバックして解放し、そのあと `lock_timeout` はもとの値に戻る。読み取りを PostgreSQL が終えた計画は、シーケンスを読めなかったと伝えて先へ進む。apply はそれでも進めようとする（[kortopi plan](plan.ja.md#シーケンス)）。apply が `nextval` で値を1つ取ったあとは、`nextval` のロックをコミットまでシーケンスに持つ。
+
+実行が始まったあとで、ほかのセッションがシーケンスを削除するか、名前を変えて同じ名前の別のシーケンスに置き換えても、どちらも止まらない。文はシーケンスを名前で指すので、その名前は別のシーケンスを指すか、何も指さなくなる。計画はシーケンスを読めなかったと伝え、apply はそのシーケンスを残す。その注記は、列がいま所有するシーケンスを `pg_get_serial_sequence` で見つける方法と、それを進める文を伝える。
 
 権限：
 
@@ -249,15 +252,18 @@ Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
   ```
 
 - 値を取れるロールが 100,000 個を超えて進める必要に出会うと、`UPDATE` を付与するか、許されたロールが `setval` を実行するよう助言を受ける。計画が値を順に取ると示したのに、apply の書き込みがそうした進め方を求めたときは、進める文が `UPDATE` の不足でセーブポイントの中で失敗する。書き込んだ行はコミットされ、コミットのあとの出力がそう伝える。
+- 計画の `setval` はロールに許されないが、apply の書き込みのあとでは、許される値を順に取る進め方で足りることがある。そのとき apply は計画が示すとおりシーケンスを残し、取るべき値を添える。理由は `the plan showed a move that the role may not make, and an apply makes only the moves that its plan shows` である。
 - 助言は、シーケンスとそのスキーマを SQL の識別子で挙げ、必要なところは引用符で囲む。助言の文は、進めるのと同じ数の値を取り、シーケンスを決して戻さない。100,000 個を超えて進めるときは `setval` になり、ほかに値を取るものがない間に実行する。
 
-コミットのあと、apply が列の値より手前に残したシーケンスと、読めなかったシーケンスごとに、標準エラー出力にも注記を出す。注記は、apply が書き込みのあとに読んだ位置から、すべきことを伝える。
+コミットのあと、apply が列の値より手前に残したシーケンスと、位置の分からないシーケンスごとに、標準エラー出力にも注記を出す。注記は、apply が書き込みのあとに読んだ位置から、すべきことを伝える。
 
 ```text
 note: sequence billing.fees_id_seq of column id of table billing.fees: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
 ```
 
-上限が目標より手前に来るシーケンスは、それがどれかを伝える。上げ下げできる `MAXVALUE` や `MINVALUE` か、その先の値がない型の最大や最小の値である。
+apply が位置を知らないシーケンスには、SQL としての計画がそのシーケンスに書く文を1行にして添える。その文は `move it once it can be read, as a role that may read and update it, with` のあとに置く。進める前か後の読み取りが失敗したときや、ロールがシーケンスを読めないときがこれに当たる。その文は動くときに列とシーケンスを読み、列が求める分だけシーケンスを進める。そのため、位置がどこであっても実行してよい文である。
+
+上限が目標より手前に来るシーケンスは、それがどれかを伝える。上げ下げできる `MAXVALUE` や `MINVALUE` か、その先の値がない型の最大や最小の値である。そのときの助言は次のとおりである。`serial` 列を `bigint` に変えたときのように、列がすでに大きな値を取るなら、シーケンスに列の型を `ALTER SEQUENCE ... AS bigint` で与える。そうでなければ、列とシーケンスに型 `bigint` を与える。`bigint` には助言を出さない。
 
 apply が進めないもの：
 
@@ -292,7 +298,7 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 5. 外部キーの循環が必要とすれば、`SET CONSTRAINTS` でその検査を遅らせる。
 6. 書き込みごとに、1回の往復で次を行う。固定した設定のもとで1つの文が行を選び、もう1つの一時テーブルに入れる。`on_insert` の値を持つ挿入では、列のとおりに型を付けた別の一時テーブルにその値を読む。`set_config` でセッションの設定にする。挿入・更新・削除が、選んだ行を取る。そして `set_config` で設定を再び固定する。最初の削除の前に、固定した設定のもとで、削除の外部キーをもう一度たどる。削除のあとで、たどった行と、トランザクションが削除し更新した行の数を `pg_stat_xact_user_tables` から読む。
 7. 固定した設定のもとで、実行の宣言した各テーブルの比較の問い合わせをもう一度実行する。
-8. 進める各シーケンスについて、3つの文を実行する。どの文も、`set_config` がシーケンスに対する文の上限を `lock_timeout` に設定したあとで、それぞれのセーブポイントの中で動き、そのセーブポイントはロールバックする。1つ目は列とシーケンスを読む。2つ目はそれをもう一度読み、`nextval` か `setval` でシーケンスを進める。3つ目は進めたあとでそれを読み直す。ロールバックは `lock_timeout` をもとの値に戻し、`nextval` と `setval` がしたことは残す。権限の不足で計画が残すと示したシーケンスは、助言のために1回だけ読む（[シーケンス](#シーケンス)）。
+8. 最初にシーケンスを進める前に、1回の往復で次を行う。`set_config` でセッションの設定にし、`SET CONSTRAINTS ALL IMMEDIATE` でコミットを待つ制約を確かめ、`set_config` で設定を再び固定する。進める各シーケンスについて、3つの文を実行する。どの文も、`set_config` がシーケンスに対する文の上限を `lock_timeout` に設定したあとで、それぞれのセーブポイントの中で動き、そのセーブポイントはロールバックして解放する。1つ目は列とシーケンスを読む。2つ目はそれをもう一度読み、`nextval` か `setval` でシーケンスを進める。3つ目は進めたあとでそれを読み直す。ロールバックは `lock_timeout` をもとの値に戻し、`nextval` と `setval` がしたことは残す。権限の不足で計画が残すと示したシーケンスは、助言のために1回だけ読む（[シーケンス](#シーケンス)）。
 9. セッションの設定と `COMMIT` を、1つのメッセージで送る。
 
 どの一時テーブルもコミットで消え、どの設定もトランザクションとともに終わる。
@@ -463,7 +469,9 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   kortopi: whether or not the commit was made, the sequences that the apply had moved before it stay moved, which only skips values: billing.fees_id_seq to next value 4
   ```
 
-- コミットのあと、apply が列の値より手前に残したシーケンスと、読めなかったシーケンスごとに、標準出力の行のあとで標準エラー出力に注記を出す。`note: sequence ...` の形で、シーケンスの位置・理由・すべきことを伝える（[シーケンス](#シーケンス)）。
+  続けて、apply が手前に残した各シーケンスについて、コミットされた場合に要る進め方を注記で伝える。`note: if the commit was made, sequence ...` の形である。
+
+- コミットのあと、apply が列の値より手前に残したシーケンスと、位置の分からないシーケンスごとに、標準出力の行のあとで標準エラー出力に注記を出す。`note: sequence ...` の形で、シーケンスの位置・理由・すべきことを伝える（[シーケンス](#シーケンス)）。
 
 ## apply に割り込む
 
@@ -583,7 +591,8 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - apply が列のシーケンスを進めるのは、その実行で列に明示的な値を書くときだけであり、列が所有するシーケンスだけである（[シーケンス](#シーケンス)）。以前の apply が遅れたままにしたシーケンス、複数のテーブルが共有するシーケンス、宣言が持たないテーブルのシーケンスは、そのままである。
 - 進めたことはロールバックされない。進めたあとでコミットが失敗した apply は、シーケンスを進めたまま残し、その値は飛ぶ。値を順に取る作業を `statement_timeout` が終えた場合のように、PostgreSQL が途中で終えた進め方も同じである。
 - 100,000 個を超えて進めるときは `setval` でシーケンスを設定する。その1つの文の中で、ほかのセッションが 100,000 個を超える値を取れば、シーケンスは戻る。書き込みから進めるまでの間にほかのセッションが取った値と、`CACHE` が 1 を超えるシーケンスでほかのセッションがキャッシュに持つ値は、やはり apply が書いた値でありうる。`CACHE` が 1 を超えるシーケンスを値を順に取って進めると、目標より最大でひとまとまり分だけ多く値を飛ばす。
-- ほかのセッションが 5 秒を超えて、または短い `--lock-timeout` を超えてシーケンスのロックを持つと、apply はそのシーケンスを残して注記を出す。コミットの前にロックがなくなっても、あとで進めることはない。
+- ほかのセッションが 5 秒を超えて、または短い `--lock-timeout` を超えてシーケンスのロックを持つと、apply はそのシーケンスを残して注記を出す。コミットの前にロックがなくなっても、あとで進めることはない。ロックされたシーケンスへの各文が、それだけ待つ。
+- シーケンスを進める apply は、コミットまで遅らせた制約トリガーを、コミットのときではなく、進める前にトランザクションの中で実行する。
 - 更新は、値の変わらない列も含め、比べるすべての列について `UPDATE OF` のトリガーを発火させる。
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
 - コミットのあと、PostgreSQL 自身の一時スキーマ `pg_temp_N` と `pg_toast_temp_N` が、空のままカタログに残る。これらは kortopi のオブジェクトではない。
@@ -707,6 +716,13 @@ kortopi: tables a.a and a.b reference each other through foreign keys that are n
 
 ```text
 kortopi: commit: insert or update on table "x" violates foreign key constraint "x_y" (detail: ...) (constraint: x_y): a deferred foreign key failed at the commit: a row refers to a row that does not exist, or a deleted row is still referenced
+kortopi: nothing was changed
+```
+
+シーケンスを進める apply は、これらの制約を、最初に進める直前で確かめる。失敗する apply のためにシーケンスを進めないためであり、そこでそう伝える（[シーケンス](#シーケンス)）。
+
+```text
+kortopi: check the deferred constraints before the moves of the sequences: insert or update on table "x" violates foreign key constraint "x_y" (detail: ...) (constraint: x_y): a deferred foreign key failed before the moves of the sequences, as it would at the commit: a row refers to a row that does not exist, or a deleted row is still referenced
 kortopi: nothing was changed
 ```
 
@@ -863,4 +879,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:25f5e1253a9fdf06ee7ea96c4dda19caec9ea0f7f7e2a4600aae8650eb1862dc -->
+<!-- i18n-source: apply.md sha256:089ee8ec30f81b71bec5b11e4c8c8cc618649a07424ff39a0fca1fe9f78ae25f -->
