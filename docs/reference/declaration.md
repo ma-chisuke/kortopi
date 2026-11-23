@@ -263,6 +263,29 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
 - Any other setting is an error, and so is `key = []`.
 - Settings for a table that no file declares are an error, so that a misspelled name does not leave the table on the defaults. [kortopi export](export.md) does not check this, so that a `key` can sort the rows of a table at its first export.
 
+### Tables that may change beyond the plan
+
+`allow_unplanned_changes` names the tables whose rows the deletions of an apply may delete, update, or insert beyond what its plan shows, through a trigger, a rule, or a constraint trigger deferred to the commit, which a plan cannot follow:
+
+```toml
+allow_unplanned_changes = ["shop.category_labels", "shop.totals"]
+
+[tables."shop.categories"]
+mode = "sync"
+```
+
+An apply that deletes stops before its commit when a table lost or changed rows that its plan did not count ([kortopi apply](apply.md#the-guards-on-deletions)), so a table whose trigger keeps other tables in step, as one that deletes the labels of a category and counts the categories, could never delete a row.
+For a table of the setting, the apply does not stop on rows beyond the plan, counts the rows that it deleted against `--max-delete`, and says after its commit what it did there ([Tables that may change beyond the plan](apply.md#tables-that-may-change-beyond-the-plan)).
+Every other table stops the apply as before.
+
+- The key stands at the top of the file, before the first section: a key after a section belongs to that section, and is an unknown setting of the table there.
+- Each name is `<schema>.<table>`, with the case of the database, once. An array names no table when it is empty.
+- A table of the setting needs no file that declares it, and no section of its own. A declared table may be named too: the apply still compares it again before its commit, so it must still end as declared.
+- A partitioned table covers its partitions at every depth. A partition named alone covers nothing, since the apply counts the rows of a partition with its partitioned table at the top of the tree; a plan says so, and names the table to name instead.
+- A name that the database has no table of is no error, so the setting can name a table that a schema change will add, or that one environment lacks. A plan with rows to delete says so.
+
+A plan with rows to delete names the tables of the setting ([kortopi plan](plan.md#what-the-deletions-also-do)). The setting changes nothing in an apply without `--allow-delete`, or without rows to delete.
+
 ## Common mistakes
 
 ### A CSV file in the wrong place
@@ -373,6 +396,16 @@ kortopi: data/kortopi.toml:1: unknown setting tables.facility.room_types: write 
 kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": write "insert", "upsert", or "sync"
 kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key, mode, and on_insert
 ```
+
+### A table of allow_unplanned_changes that is written wrong
+
+```text
+kortopi: data/kortopi.toml: allow_unplanned_changes: table "category_labels": write the name of the table with its schema, as <schema>.<table>
+kortopi: data/kortopi.toml: allow_unplanned_changes names table "shop.totals" twice: name each table once
+kortopi: data/kortopi.toml:4: unknown setting tables."shop.categories".allow_unplanned_changes: allow_unplanned_changes names tables for the whole file, so write it at the top of the file, before the first section
+```
+
+Write each name with its schema, once, and the key at the top of the file ([Tables that may change beyond the plan](#tables-that-may-change-beyond-the-plan)).
 
 ### A value of on_insert that is not a string
 

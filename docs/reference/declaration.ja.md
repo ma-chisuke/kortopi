@@ -264,6 +264,29 @@ mode = "insert"
 - ほかの設定はエラーであり、`key = []` もエラーである。
 - どのファイルも宣言していないテーブルの設定はエラーである。綴りを誤った名前のテーブルが、既定の設定のまま残らないようにするためである。[kortopi export](export.ja.md) はこれを検査しない。最初の書き出しで、`key` がテーブルの行を並べられるようにするためである。
 
+### 計画を超えて変わってよいテーブル
+
+`allow_unplanned_changes` は、apply の削除が計画の示すものを超えて行を削除・更新・挿入してよいテーブルを挙げる。そうするのはトリガー・ルール・コミットまで遅らせた制約トリガーであり、計画はそれらをたどれない。次のように書く。
+
+```toml
+allow_unplanned_changes = ["shop.category_labels", "shop.totals"]
+
+[tables."shop.categories"]
+mode = "sync"
+```
+
+削除をする apply は、計画が数えなかった行をテーブルが失ったか変えたとき、コミットの前に止まる（[kortopi apply](apply.ja.md#削除の安全策)）。そのため、カテゴリのラベルを消してカテゴリを数えるトリガーのように、ほかのテーブルを揃えるトリガーを持つテーブルは、行を1つも削除できないことになる。
+この設定のテーブルについては、apply は計画を超えた行で止まらず、削除した行を `--max-delete` に数え、そこでしたことをコミットのあとに伝える（[計画を超えて変わってよいテーブル](apply.ja.md#計画を超えて変わってよいテーブル)）。
+ほかのテーブルは、今までどおり apply を止める。
+
+- このキーは、ファイルの先頭、最初の節より前に書く。節のあとのキーはその節に属し、そこではテーブルの知らない設定になる。
+- 各名前は `<schema>.<table>` と書き、大小はデータベースのとおりにし、1回だけ挙げる。空の配列はどのテーブルも挙げない。
+- この設定のテーブルは、それを宣言するファイルも、自分の節も要らない。宣言したテーブルを挙げてもよい。apply は今までどおりコミットの前にそれをもう一度比べるので、そのテーブルは宣言のとおりに終わらなければならない。
+- パーティションテーブルは、すべての段のパーティションを含む。パーティションだけを挙げても何も含まない。apply はパーティションの行を、そのツリーの最上位のパーティションテーブルと一緒に数えるからである。計画はそれを伝え、代わりに挙げるテーブルを挙げる。
+- データベースにその名前のテーブルがないことは、誤りではない。そのため、スキーマの変更が足すテーブルや、ある環境にないテーブルも挙げられる。削除する行を持つ計画はそれを伝える。
+
+削除する行を持つ計画は、この設定のテーブルを挙げる（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。`--allow-delete` のない apply や、削除する行のない apply では、この設定は何も変えない。
+
 ## よくある誤り
 
 ### 置き場所を誤った CSV ファイル
@@ -374,6 +397,16 @@ kortopi: data/kortopi.toml:1: unknown setting tables.facility.room_types: write 
 kortopi: data/kortopi.toml: table "facility.room_types": unknown mode "synk": write "insert", "upsert", or "sync"
 kortopi: data/kortopi.toml:2: unknown setting tables."facility.room_types".mood: the settings of a table are key, mode, and on_insert
 ```
+
+### 書き方を誤った allow_unplanned_changes のテーブル
+
+```text
+kortopi: data/kortopi.toml: allow_unplanned_changes: table "category_labels": write the name of the table with its schema, as <schema>.<table>
+kortopi: data/kortopi.toml: allow_unplanned_changes names table "shop.totals" twice: name each table once
+kortopi: data/kortopi.toml:4: unknown setting tables."shop.categories".allow_unplanned_changes: allow_unplanned_changes names tables for the whole file, so write it at the top of the file, before the first section
+```
+
+各名前をスキーマ付きで1回だけ書き、キーはファイルの先頭に書く（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。
 
 ### 文字列でない on_insert の値
 
@@ -509,4 +542,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列と、削除が消すか変える宣言した行は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:59ca761e012de50ab4dcd60d1a2616d6523dfb271a05a12efbec8d6edd531a26 -->
+<!-- i18n-source: declaration.md sha256:78205b76c8a06e3af2877f94885ae64ec653bf3838553d6785602331e47a9498 -->
