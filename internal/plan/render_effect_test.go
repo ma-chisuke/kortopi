@@ -356,6 +356,37 @@ func TestEffectTree(t *testing.T) {
 			want: []string{"1 cat_root_fkey 1", "2 cat_parent_fkey 2 3 4", "3 zzz_cat_fkey 3", "3 note_cat_fkey 5"},
 		},
 		{
+			// The key of the chain at level 4 is not known, so it says
+			// another thing than the line of the chain, and gets a line.
+			name:  "a key that repeats with what is not known",
+			steps: append(chain(3), notKnown(step(4, name("app", "steps"), "steps_after_id_fkey", name("app", "steps"), "CASCADE", 0, "after_id"), ReferencedUnreadable)),
+			want:  []string{"1 steps_plan_code_fkey 1", "2 steps_after_id_fkey 2 3", "3 steps_after_id_fkey 4"},
+		},
+		{
+			// Steps of one key that differ only in what is not known, in the
+			// key ON UPDATE that follows, or in its table, under one line,
+			// get a line each.
+			name: "steps that differ only in what is not known",
+			steps: append(chain(4),
+				step(3, name("app", "tags"), "tags_step_fkey", name("app", "steps"), "SET NULL", 1, "step_id"),
+				notKnown(step(4, name("app", "tags"), "tags_step_fkey", name("app", "steps"), "SET NULL", 0, "step_id"), NoTableSelect)),
+			want: []string{"1 steps_plan_code_fkey 1", "2 steps_after_id_fkey 2 3 4", "3 tags_step_fkey 3", "3 tags_step_fkey 4"},
+		},
+		{
+			name: "steps that differ only in the key ON UPDATE that follows",
+			steps: append(chain(4),
+				onUpdate(step(3, name("app", "tags"), "tags_step_fkey", name("app", "steps"), "SET NULL", 1, "step_id"), "labels_tag_fkey", name("app", "labels")),
+				onUpdate(step(4, name("app", "tags"), "tags_step_fkey", name("app", "steps"), "SET NULL", 1, "step_id"), "marks_tag_fkey", name("app", "labels"))),
+			want: []string{"1 steps_plan_code_fkey 1", "2 steps_after_id_fkey 2 3 4", "3 tags_step_fkey 3", "3 tags_step_fkey 4"},
+		},
+		{
+			name: "steps that differ only in the table of the key ON UPDATE that follows",
+			steps: append(chain(4),
+				onUpdate(step(3, name("app", "tags"), "tags_step_fkey", name("app", "steps"), "SET NULL", 1, "step_id"), "labels_tag_fkey", name("app", "labels")),
+				onUpdate(step(4, name("app", "tags"), "tags_step_fkey", name("app", "steps"), "SET NULL", 1, "step_id"), "labels_tag_fkey", name("app", "marks"))),
+			want: []string{"1 steps_plan_code_fkey 1", "2 steps_after_id_fkey 2 3 4", "3 tags_step_fkey 3", "3 tags_step_fkey 4"},
+		},
+		{
 			// The names of the steps of a key on a partition, and of a key to
 			// one, do not tell their parents, which the walk gives them.
 			name:  "a key on a partition",
