@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
@@ -50,8 +53,16 @@ func (s *Session) writtenRows(ctx context.Context, byTop bool) (map[uint32]writt
 }
 
 // CheckEffect checks, after the deletions of an apply and before its
-// commit, that they did what the last call of Effects counted (ADR-0039):
+// commit, that they did what the last call of Effects counted (ADR-0039).
+// It first runs the constraints deferred to the commit, with SET CONSTRAINTS
+// ALL IMMEDIATE (runDeferred), so that every check of a foreign key and every
+// constraint trigger has run when it compares the schema, and none is left
+// for the commit (ADR-0048). Then it checks:
 //
+//   - the foreign keys, the partitions, the triggers, and the rules of the
+//     tables that the deletions reach are those that the catalogs of the
+//     snapshot show, by the newest catalogs, which a second session reads
+//     (ADR-0048);
 //   - every row that Effects counted as deleted or changed through a
 //     foreign key is gone from the snapshot of the transaction, which its
 //     deletion, or the new version that its change wrote, takes away;
@@ -66,15 +77,16 @@ func (s *Session) writtenRows(ctx context.Context, byTop bool) (map[uint32]writt
 //     changed row that moves to another partition counts as one deletion
 //     and one insertion instead of an update.
 //
-// The first finds a row that another transaction deleted, or pointed at
-// another row, after the snapshot, or that a trigger BEFORE DELETE, a rule of
-// a table that the deletions reach, or disabled triggers kept. The second
-// finds rows that a foreign key or a partition that another transaction
-// added after the snapshot, which a query of the catalogs in the snapshot
-// cannot see, a trigger, or a rule of a table that the deletions reach made
-// the deletions delete or change. A plan stops on the rules of the declared
-// tables that its apply would fire (ADR-0038), but not on those of the other
-// tables that a cascade reaches.
+// The first finds a foreign key, a partition, a trigger, or a rule that
+// another session added, removed, or changed after the snapshot, which a
+// query of the catalogs in the snapshot cannot see, and comes first, since
+// such a change explains what the others find. The second finds a row that
+// another transaction deleted, or pointed at another row, after the
+// snapshot, or that a trigger BEFORE DELETE or a rule of a table that the
+// deletions reach kept. The third finds rows that a trigger or a rule of a
+// table that the deletions reach made the deletions delete or change. A plan
+// stops on the rules of the declared tables that its apply would fire
+// (ADR-0038), but not on those of the other tables that a cascade reaches.
 func (s *Session) CheckEffect(ctx context.Context) (err error) {
 	defer s.explainWait(ctx, &err)
 	if !s.apply {
@@ -83,11 +95,77 @@ func (s *Session) CheckEffect(ctx context.Context) (err error) {
 	if s.effect == "" || !s.deletesChecked {
 		return nil
 	}
+	if err := s.runDeferred(ctx); err != nil {
+		return err
+	}
+	if err := s.checkSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.checkReachedRows(ctx); err != nil {
 		return err
 	}
 	return s.checkWrittenRows(ctx)
 }
+
+// deferredWhat says what the statement of runDeferred does, in its errors.
+const deferredWhat = "run the constraints deferred to the commit"
+
+// runDeferred runs, after the deletions, the constraints and the constraint
+// triggers that the writes of the apply deferred to the commit, with SET
+// CONSTRAINTS ALL IMMEDIATE, as a write runs: with the settings of the
+// session, as the commit would run them, and the pinned settings again after
+// it (ADR-0037). An apply writes nothing after it, so nothing is left to
+// defer to the commit. A constraint that fails is the error of a write,
+// with its advice, and nothing was changed.
+func (s *Session) runDeferred(ctx context.Context) error {
+	_, _, failed, _, err := s.execWrite(ctx, nil, batchStatement{what: deferredWhat, sql: "SET CONSTRAINTS ALL IMMEDIATE"})
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return fmt.Errorf("%s: %w", failed, err)
+	}
+	return deferredError(failed, pgErr)
+}
+
+// deferredError is the error of the statement failed of the batch of
+// runDeferred. A constraint that fails at SET CONSTRAINTS gets advice that
+// holds there, where every write of the apply has run, its deletions among
+// them, and the advice of a write, which can assume that a later write of
+// the apply changes the rows, would not: a foreign key, a unique key or a
+// primary key, an exclusion constraint, and a constraint trigger, which
+// raises any error. The other statements of the batch set the settings.
+func deferredError(failed string, pgErr *pgconn.PgError) error {
+	if failed != deferredWhat {
+		return &writeError{statement: failed, err: pgErr}
+	}
+	after := "deferred to the commit failed when the apply checked it after every write, its deletions among them: "
+	var advice string
+	switch pgErr.Code {
+	case "40001", "40P01":
+		advice = ErrConflict.Error()
+	case foreignKeyViolation:
+		advice = "a foreign key " + after + "a row refers to a row that does not exist, or a row that the apply deleted is still referenced: " +
+			"declare the referenced row, or keep in the declaration a row that other rows reference"
+	case uniqueViolation:
+		advice = "a unique key or a primary key " + after + "two rows hold the same value of the key: change the declared value, or the row of the database that holds it"
+	case exclusionViolation:
+		advice = "an exclusion constraint " + after + "two rows conflict on it: change the declared values, or the row of the database that conflicts with them"
+	default:
+		advice = "a constraint trigger deferred to the commit failed when the apply ran it after every write, its deletions among them: " +
+			"check the constraint triggers of the tables that the apply writes, and what their functions read and write"
+	}
+	return &writeError{statement: failed, err: pgErr, advice: advice}
+}
+
+// The SQLSTATE of PostgreSQL for a foreign key, a unique key, and an
+// exclusion constraint that a statement breaks.
+const (
+	foreignKeyViolation = "23503"
+	uniqueViolation     = "23505"
+	exclusionViolation  = "23P01"
+)
 
 // PrepareDeletes returns an error, before the first write of an apply that
 // deletes, when the session cannot count the rows that its transaction
@@ -167,7 +245,7 @@ func (s *Session) checkReachedRows(ctx context.Context) error {
 		if left > 0 {
 			return fmt.Errorf("the deletions did not delete or change %d %s of table %s that the plan counted: "+
 				"another transaction deleted %s or pointed %s at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE "+
-				"that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept %s, so nothing was written: "+
+				"that returns NULL or a rule of a table that the deletions reach kept %s, so nothing was written: "+
 				"run the apply again, and if this happens again, check the triggers and the rules of table %s",
 				left, plural(left, "row", "rows"), t.name, plural(left, "it", "them"), plural(left, "it", "them"), plural(left, "it", "them"), t.name)
 		}
@@ -270,9 +348,9 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			// or rows that the deletions reached beyond the plan.
 		case changes < want.updated || changes > most:
 			// Rows that the actions SET NULL and SET DEFAULT that the plan
-			// counted did not change, or changes beyond them: of a key or a
-			// partition that the catalogs of the snapshot do not show, a
-			// trigger, or a rule.
+			// counted did not change, or changes beyond them: of a trigger,
+			// or a rule. A key or a partition that the catalogs of the
+			// snapshot do not show stopped the apply before, in checkSchema.
 		default:
 			continue
 		}
@@ -301,9 +379,18 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 		default:
 			what = fmt.Sprintf("updated rows of table %s %d %s, and the plan allows %s", name, got.updated, plural(got.updated, "time", "times"), allows)
 		}
-		return fmt.Errorf("the deletions %s: a foreign key or a partition that another transaction added while the apply ran, "+
-			"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: "+
-			"run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table %s", what, name)
+		// A foreign key, a partition, or disabled triggers that another
+		// session added after the snapshot stopped the apply already, in
+		// checkSchema (ADR-0048). The counts are those of the transaction
+		// since its first deletion, which hold what the constraint triggers
+		// deferred to the commit did too, of any write of the apply, since
+		// runDeferred ran them first. The trigger or the rule that changed the
+		// table can belong to another table, so the advice names where to
+		// look for it.
+		return fmt.Errorf("after its first deletion, the apply %s: a trigger or a rule of a table that the deletions reach, "+
+			"or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, "+
+			"so nothing was written: check the triggers and the rules of the tables that the deletions reach, "+
+			"and the constraint triggers of the tables that the apply writes, for one that changes table %s", what, name)
 	}
 	return nil
 }

@@ -93,6 +93,7 @@
 | catalog（データベースの） | カタログ |
 | decision record（ADR） | 記録、ADR |
 | check | チェック |
+| check after the deletions（apply の） | 削除のあとの検査 |
 | translation（文書の） | 対訳 |
 | source（対訳の） | 原文 |
 | source（生成ファイルの元になるファイル）、authority（2つの文章が食い違うときに決め手になる文章） | 正 |
@@ -214,6 +215,9 @@
 | cancel request（PostgreSQL のプロトコルの） | キャンセル要求 |
 | lock timeout（`lock_timeout`、`--lock-timeout`） | ロック待ちの上限 |
 | keepalive, probe（TCP の） | キープアライブ、プローブ |
+| second connection（apply の）、connection slot | 2つ目の接続、接続枠 |
+| system cache（PostgreSQL の）、transition table（トリガーの） | システムキャッシュ、遷移テーブル |
+| proxy（kortopi とサーバーの間の） | プロキシ |
 | signal（OS の） | シグナル |
 | process ID | プロセス ID |
 | start-up parameter（接続の） | 起動パラメータ |
@@ -273,4 +277,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:42fa303d8bd2a5ee4fbae7dbcf0cf9244998fc017222de91842523f6cf5846c0 -->
+<!-- i18n-source: translation.md sha256:10f4b05185fb903d57c3831f6f74cc44264a6d7f28b540f4f9d8565dc4b579a9 -->

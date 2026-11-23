@@ -56,6 +56,13 @@ type Options struct {
 	// cancelWait, when it is not zero, replaces the constant of the same
 	// name, so that a test can wait less.
 	cancelWait time.Duration
+	// newest opens the second session of an apply, which reads the newest
+	// catalogs for the check after the deletions (ADR-0048): a READ ONLY
+	// transaction at READ COMMITTED, which creates nothing and takes no lock
+	// of kortopi. pinned is the address of TCP that its connection reaches:
+	// that of the connection of the apply.
+	newest bool
+	pinned string
 }
 
 // settings are the settings that change how PostgreSQL reads and prints a
@@ -108,9 +115,40 @@ type Session struct {
 	// Commit.
 	apply  bool
 	loaded map[declaration.TableName]*loadedTable
-	// export is true for a session of an export, which only reads.
+	// export is true for a session of an export, which only reads, and
+	// newest for the second session of an apply (Options.newest).
 	export    bool
+	newest    bool
 	committed bool
+	// config is the configuration of the connection as Connect got it, and
+	// giveUp Options.GiveUp: an apply opens its second session with them.
+	config *pgx.ConnConfig
+	giveUp <-chan struct{}
+	// peek is the second session of an apply, when an interrupt came while
+	// it read the catalogs: Close closes it after the session itself.
+	// newestNotEnded is the error of a second session that the interrupt
+	// stopped as it connected, which closed itself. waitFromClose is true
+	// for a session whose connection was idle while another session of the
+	// run waited for the server after the interrupt, and for a second
+	// session that Close closes after the session of the apply: its wait
+	// starts as its close starts, not at the interrupt.
+	peek           *Session
+	newestNotEnded error
+	waitFromClose  bool
+	// reading is the read of a second session that an interrupt stopped,
+	// which its close waits for: the cancel request of the interrupt, or the
+	// second interrupt, ends it.
+	reading <-chan newestRead
+	// beforeNewestRead, when it is not empty, is a statement that the second
+	// session runs before it reads the catalogs, so that a test can hold it.
+	beforeNewestRead string
+	// beforeNewestClose, when it is not nil, runs as the second session is
+	// about to close after a read that ended, so that a test can interrupt
+	// it there. adjustNewest, when it is not nil, changes the configuration
+	// of the second session and returns the address of TCP that it reaches,
+	// so that a test can send it elsewhere.
+	beforeNewestClose func(peek *Session)
+	adjustNewest      func(cfg *pgx.ConnConfig, pinned string) string
 	// deletesChecked is true after the privileges of the deletions were
 	// checked, and writtenBefore holds the counters of the rows that the
 	// transaction had deleted and updated then, by the partitioned table at
@@ -134,6 +172,10 @@ type Session struct {
 	// and effectGone the pairs of updates that go when rows go first.
 	effectMoves map[uint32]bool
 	effectGone  []goneFirst
+	// effectRelations holds the tables whose schema decides what the
+	// deletions do, as Effects found them last, which CheckEffect compares
+	// with the newest catalogs (ADR-0048).
+	effectRelations []uint32
 	// deleted holds the order of the tables whose rows Delete deleted.
 	deleted map[declaration.TableName]int
 	// references holds the table that each foreign key of the loaded tables
@@ -450,6 +492,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	if opts.LockTimeout < 0 {
 		return nil, errors.New("the lock timeout is negative")
 	}
+	config := cfg.Copy()
 	cfg = cfg.Copy()
 	// Describe each query in an unnamed statement, so the session prepares
 	// no statement that outlives a query.
@@ -457,7 +500,7 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	if _, ok := cfg.RuntimeParams["application_name"]; !ok {
 		cfg.RuntimeParams["application_name"] = applicationName
 	}
-	g := &guard{wait: cmp.Or(opts.cancelWait, cancelWait)}
+	g := &guard{wait: cmp.Or(opts.cancelWait, cancelWait), pinned: opts.pinned}
 	var err error
 	if g.keepAlive, err = keepAliveConfig(cfg.RuntimeParams); err != nil {
 		return nil, err
@@ -472,8 +515,9 @@ func ConnectConfig(ctx context.Context, cfg *pgx.ConnConfig, opts Options) (*Ses
 	}
 	s := &Session{
 		conn: conn, dir: opts.Dir, tables: make(map[declaration.TableName]*tableMeta), major: serverMajor(conn),
-		apply: opts.Apply, export: opts.Export, loaded: make(map[declaration.TableName]*loadedTable),
+		apply: opts.Apply, export: opts.Export, newest: opts.newest, loaded: make(map[declaration.TableName]*loadedTable),
 		lockTimeout: opts.LockTimeout, guard: g, application: cfg.RuntimeParams["application_name"],
+		config: config, giveUp: opts.GiveUp,
 	}
 	s.watchInterrupt(ctx, opts.GiveUp)
 	if s.apply {
@@ -522,7 +566,7 @@ const lockKey = 0x6b6f72746f7069
 func (s *Session) begin(ctx context.Context, wait io.Writer) error {
 	waited := false
 	for {
-		tx, err := s.beginTx(ctx, s.beginSQL(s.export), s.commitSQL)
+		tx, err := s.beginTx(ctx, s.beginSQL(s.export || s.newest), s.commitSQL)
 		if err != nil {
 			return fmt.Errorf("begin the transaction of the %s: %w", s.work(), err)
 		}
@@ -598,13 +642,17 @@ func (s *Session) beginTx(ctx context.Context, begin, commit string) (pgx.Tx, er
 }
 
 // beginSQL returns the statements that begin a transaction of the session:
-// at the isolation level REPEATABLE READ, and READ ONLY when readOnly is
-// true, with the lock_timeout of --lock-timeout, local to the transaction
-// (ADR-0044). Both go in one message, as pgx sends a begin. SET takes no
-// snapshot, so the snapshot of REPEATABLE READ is still taken by the first
-// query of the transaction.
+// at the isolation level REPEATABLE READ, or READ COMMITTED for the second
+// session of an apply, which reads the newest catalogs (ADR-0048), and READ
+// ONLY when readOnly is true, with the lock_timeout of --lock-timeout, local
+// to the transaction (ADR-0044). Both go in one message, as pgx sends a
+// begin. SET takes no snapshot, so the snapshot of REPEATABLE READ is still
+// taken by the first query of the transaction.
 func (s *Session) beginSQL(readOnly bool) string {
 	sql := "BEGIN ISOLATION LEVEL REPEATABLE READ"
+	if s.newest {
+		sql = "BEGIN ISOLATION LEVEL READ COMMITTED"
+	}
 	if readOnly {
 		sql += " READ ONLY"
 	}
@@ -670,13 +718,16 @@ func (s *Session) DatabaseName() string {
 }
 
 // work returns what the session is for, plan, apply, or export, for
-// messages.
+// messages, or check for the second session of an apply, which reads the
+// catalogs for the check after the deletions.
 func (s *Session) work() string {
 	switch {
 	case s.apply:
 		return "apply"
 	case s.export:
 		return "export"
+	case s.newest:
+		return "check"
 	}
 	return "plan"
 }
@@ -704,12 +755,39 @@ func (s *Session) needs() string {
 // the statement may still run on the server, and Close returns a
 // *dialect.NotEndedError that says how to find and end it; a session whose
 // commit was sent never does, because its outcome is the error of Commit.
+//
+// An apply whose check after the deletions was interrupted while its second
+// session read the catalogs closes that session after its own, each with a
+// wait of its own, and names the second session in a line of its own after
+// its own (ADR-0048).
 func (s *Session) Close(ctx context.Context) error {
+	err := s.closeOwn(ctx)
+	check := s.newestNotEnded
+	if s.peek != nil {
+		check = s.peek.Close(ctx)
+		s.peek = nil
+	}
+	return joinNotEnded(err, check)
+}
+
+// closeOwn rolls back and closes the connection of the session itself, as
+// Close says.
+func (s *Session) closeOwn(ctx context.Context) error {
 	if s.closed {
 		return nil
 	}
 	s.closed = true
+	if s.reading != nil {
+		<-s.reading
+		s.reading = nil
+	}
 	interrupted, endBy := s.interrupted()
+	if interrupted && s.waitFromClose {
+		// The connection was idle while another session of the run waited
+		// for the server after the interrupt: the wait of this one starts
+		// now.
+		endBy = time.Now().Add(s.guard.wait)
+	}
 	if interrupted {
 		// The rollback waits until endBy, and a done context ends the wait
 		// at once, without a cancel request. The second interrupt ends it

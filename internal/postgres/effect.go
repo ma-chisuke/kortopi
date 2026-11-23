@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -108,6 +109,22 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 		}
 		out.Conflicts = w.conflicts
 		s.effect, s.effectUpdates, s.effectMoves, s.effectGone = w.table, w.updates, w.moves, w.gone
+		// The tables whose schema decides what the deletions do: those with
+		// rows to delete, and the referencing tables of every foreign key that
+		// the walk met, at every level (ADR-0048).
+		relations := make(map[uint32]bool)
+		for i, lt := range roots {
+			if lt.deletes == 0 {
+				continue
+			}
+			relations[lt.meta.oid] = true
+			for _, l := range levels[i] {
+				for _, e := range l.edges {
+					relations[e.fromOID] = true
+				}
+			}
+		}
+		s.effectRelations = slices.Sorted(maps.Keys(relations))
 		return nil
 	})
 	// The walk read referencing tables that the declaration does not hold,

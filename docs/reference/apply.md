@@ -74,6 +74,11 @@ To count what the deletions do to other tables, an apply reads those tables as a
 This holds for a declared table that references rows to delete too, such as a table that references itself, although the role needs only its declared columns otherwise. A table whose rows to delete other rows reference needs `SELECT` on the referenced columns as well.
 With `--allow-delete`, a table that the role may not read stops the apply when the deletions would delete or change its rows ([The guards on deletions](#the-guards-on-deletions)).
 
+An apply with `--allow-delete` that has rows to delete opens a second connection to the database after its deletions, to the address that its own connection reached and with the same settings, to compare the schema of the tables that the deletions reach with what it is now ([The guards on deletions](#the-guards-on-deletions)).
+It needs a free connection slot for it, within `max_connections`, the connection limit of the role, and the pool of a connection pooler, and the connection must reach the same server and database.
+The second connection waits 10 seconds at most to connect, or `connect_timeout` when that is shorter, and 5 seconds at most for a lock on a system catalog, or `--lock-timeout` when that is shorter, whatever the settings of the session say.
+A connection that cannot be made, a wait that reaches its bound, and another server stop the apply before its commit, and nothing is changed.
+
 ```sql
 GRANT CONNECT, TEMPORARY ON DATABASE app TO deployer;
 GRANT USAGE ON SCHEMA catalog TO deployer;
@@ -342,8 +347,13 @@ What stops an apply with `--allow-delete`, and what to do:
 
 After its inserts and updates, just before the first deletion, the apply follows the foreign keys again and compares what they reach with the plan, step by step.
 A row that it wrote and that the plan could not see, because a default of a column, a value of `on_insert`, a trigger, or a rule created after the plan gave it a reference, stops it then ([The deletions reach other rows after the inserts and updates](#the-deletions-reach-other-rows-after-the-inserts-and-updates)).
-After the deletions and before the commit, it checks that every row that the plan counted is gone or changed, and, by the counts of the rows that its transaction deleted and updated, that every table lost the rows that the plan counted, that its rows were updated no fewer times than the plan counted rows that they change, and no more than the actions of the deletions can update, and that a table that the plan did not reach lost or changed none ([Rows that the deletions did not delete, or other rows that they deleted](#rows-that-the-deletions-did-not-delete-or-other-rows-that-they-deleted)).
-That finds a trigger or a rule that deletes rows of other tables or updates more rows than the plan allows, and a foreign key or a partition that another transaction added while the apply ran, unless its updates fit in the room that the bounds leave ([Known limits](#known-limits)). Apply schema changes before kortopi, not while an apply runs ([In a deployment](#in-a-deployment)).
+After the deletions and before the commit, it first runs the constraints and the constraint triggers that its writes deferred to the commit, with the settings of the session, as the commit would run them, so that every check of a foreign key has run.
+It then compares the schema that decides what the deletions do, as its snapshot saw it, with what it is now, which a second connection reads: the foreign keys that reference or that are held by the tables with rows to delete and the tables that the deletions reach, the partitions of these tables, and whether a detach of one has begun, their triggers, their rules, and their unique keys, primary keys, and exclusion constraints that are deferrable.
+A foreign key, a trigger, a rule, or a partition that another session added, dropped, or changed after the apply began, a partition that it began to detach with `DETACH PARTITION ... CONCURRENTLY`, which the checks of foreign keys leave out at once, or the triggers of a foreign key that it enabled or disabled, stops the apply, with an error that names it ([The schema changed while the apply ran](#the-schema-changed-while-the-apply-ran)).
+From then on, no check of a foreign key and no write of the apply is left, so a schema change that commits after the comparison cannot act on what the deletions did.
+Apply schema changes before kortopi, not while an apply runs ([In a deployment](#in-a-deployment)).
+It then checks that every row that the plan counted is gone or changed, and, by the counts of the rows that its transaction deleted and updated, that every table lost the rows that the plan counted, that its rows were updated no fewer times than the plan counted rows that they change, and no more than the actions of the deletions can update, and that a table that the plan did not reach lost or changed none ([Rows that the deletions did not delete, or other rows that they deleted](#rows-that-the-deletions-did-not-delete-or-other-rows-that-they-deleted)).
+That finds a trigger or a rule that deletes rows of other tables or updates more rows than the plan allows ([Known limits](#known-limits)).
 The check before the commit then compares the declared tables, and finds a row that a trigger of a deletion adds to a declared table of mode `sync`, or a declared value that it changes ([The check before the commit](#the-check-before-the-commit)).
 A plan stops on a rule of a declared table that the apply would fire ([Declaration files](declaration.md#a-table-with-a-rule)), but a cascade also fires the rules of the tables that it reaches, those of tables that the declaration does not hold among them.
 
@@ -493,6 +503,19 @@ kortopi: nothing was changed
 
 Nothing was changed all the same: the transaction never committed, and the server rolls it back when the session ends.
 A second interrupt ends the wait at once, and the line then starts with `kortopi stopped waiting for the server to end the session of the apply`.
+
+An interrupt that comes while the second connection of the check after the deletions reads the catalogs ([The guards on deletions](#the-guards-on-deletions)) asks the server to cancel that read, and ends the session of the apply first, which holds the locks and the deleted rows.
+The second session ends after it, once its read has ended, each with a wait of its own of up to 5 seconds, so kortopi exits within 10 seconds when the server answers neither.
+The session of the apply is named first when the server did not confirm its end, and the second session in a line of its own after it, also when the interrupt comes as the second session closes after its read:
+
+```text
+kortopi: interrupted: the apply was stopped
+kortopi: the server did not confirm within 5s that the read-only session of the check after the deletions ended: its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 391, and end it with pg_cancel_backend(391), or with pg_terminate_backend(391) if it does not end
+kortopi: nothing was changed
+```
+
+An interrupt while the second connection connects, or begins its transaction, ends that connection first, with a wait of its own when the server started a session for it, and the session of the apply after it; the lines still name the session of the apply first.
+
 It does not keep the cancel request from going out: kortopi waits up to 1 second for the driver to send it before it exits.
 The same holds while an apply waits for another apply.
 
@@ -523,7 +546,7 @@ A commit that is slow on a connection that answers, as when it waits for a synch
 | 0 | The apply committed its changes, or there was nothing to change. Deletions that it left out without `--allow-delete` do not change the status. |
 | 1 | The apply failed, and nothing was changed, unless the error says that the outcome of the commit is not known. |
 
-An apply never exits with 2. An apply that committed checked before its commit that the declared tables are as declared, but for the deletions that it left out ([The check before the commit](#the-check-before-the-commit)). To check that nothing is left, those deletions included, and to see what a constraint trigger deferred to the commit changed, run `kortopi plan --exit-code` after it ([kortopi plan](plan.md#exit-status-and-drift)).
+An apply never exits with 2. An apply that committed checked before its commit that the declared tables are as declared, but for the deletions that it left out ([The check before the commit](#the-check-before-the-commit)). To check that nothing is left, those deletions included, and, after an apply without deletions, to see what a constraint trigger deferred to the commit changed, run `kortopi plan --exit-code` after it ([kortopi plan](plan.md#exit-status-and-drift)).
 
 ## Two applies at once
 
@@ -557,6 +580,7 @@ Apply the schema first, with the tool that changes your schema, and the rows sec
 - A change that needs both, such as a new `NOT NULL` column with a value for every row, takes two deployments, as the [README](../../README.md#use-it-with-a-schema-tool) describes: first add the column as nullable and let kortopi fill it, then make it `NOT NULL`.
 - Run `kortopi plan` in the pull request, and `kortopi apply` after the merge, against the same declaration.
 - Pass `--allow-delete` only to the runs that should delete, and keep `--max-delete` as low as your deletions allow.
+- Start an apply that deletes once the schema change has committed. A foreign key, a trigger, a rule, or a partition that another session adds or changes, on a table that the deletions reach, while the apply runs stops the apply before its commit ([The schema changed while the apply ran](#the-schema-changed-while-the-apply-ran)).
 - Give the apply a lock timeout with `--lock-timeout`, such as `--lock-timeout 10s`, so that it does not wait without limit for a lock that another session holds ([Wait for a lock](plan.md#wait-for-a-lock)). kortopi sets it in each of its transactions, so it holds behind a connection pooler in transaction mode too, where `PGOPTIONS` does not reach the server.
 - A failed apply changes nothing. Fix the declaration or the database, and run it again.
 
@@ -580,8 +604,8 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - To count what the deletions do to a table, the role needs `SELECT` on the whole table, not only on the columns of the foreign key.
 - The plan and the apply read every table that the deletions reach, to the end of every cascade, on the database that serves the application. A foreign key without an index on its referencing columns costs a scan of the referencing table at each level where the walk follows it, and PostgreSQL's own deletion scans such a table once for each deleted row: index the referencing columns of the foreign keys of the tables that lose rows.
 - A plan keeps its temporary tables and the locks on the declared tables until it ends, as an apply does. A declaration of very many tables can need a higher `max_locks_per_transaction` on the server.
-- Triggers, and the rules of the tables that the deletions reach, act out of sight of the plan. A row that a trigger or a rule inserts during the deletions is not counted, but in a table where a change of the deletions can move a row to another partition: there each insertion must match a row that moves, so such an insertion stops the apply. The apply checks the updates of every table against what the actions of the deletions can update: at least once for each row that the plan shows as changed, and at most once for each row and foreign key whose action can reach it, also of a row that a cascade deletes too, which PostgreSQL may update first. A row that `SET NULL` or `SET DEFAULT` moves to another partition, when the action sets a column of the partition key, counts as one such update; PostgreSQL deletes and inserts it, and each further deletion must come with an insertion. An update by a trigger or a rule beyond that stops the apply. PostgreSQL never updates a row to delete that the same statement deletes, or that an earlier statement of the apply deleted, so such a row leaves no room. Updates within the bounds are not seen, whether a trigger, a rule, or a foreign key `SET NULL` or `SET DEFAULT` or a partition that another transaction adds while the apply runs makes them: there is room only where a row that an action would change is also deleted, by a cascade or by the plan in a later statement, with PostgreSQL's order deciding whether the action runs first, and where two keys set a column in common. The values that an update writes are not seen either. A trigger that empties a table that the deletions do not reach with `TRUNCATE` is not seen either, since PostgreSQL does not count those rows as deleted. A constraint trigger deferred to the commit fires after the check, so what it deletes or changes is not checked. In the declared tables, the check before the commit sees what the counts cannot: the values that an update writes, and, in a table of mode `sync`, the rows that a trigger inserts, by the number of the rows to delete.
-- The check before the commit compares what the declaration of the run holds, and nothing else: not a column that the declaration does not name, a value of `on_insert`, a table that it does not declare, a declared table outside the schemas of a run with `--schema`, a value of a table of mode `insert` beyond its key, or a stored row that it does not hold, but the rows to delete of a table of mode `sync`, which it counts, and, without `--allow-delete`, checks by the counts of the transaction. A constraint trigger deferred to the commit fires after the check, so what it changes is not compared either.
+- Triggers, and the rules of the tables that the deletions reach, act out of sight of the plan. A row that a trigger or a rule inserts during the deletions is not counted, but in a table where a change of the deletions can move a row to another partition: there each insertion must match a row that moves, so such an insertion stops the apply. The apply checks the updates of every table against what the actions of the deletions can update: at least once for each row that the plan shows as changed, and at most once for each row and foreign key whose action can reach it, also of a row that a cascade deletes too, which PostgreSQL may update first. A row that `SET NULL` or `SET DEFAULT` moves to another partition, when the action sets a column of the partition key, counts as one such update; PostgreSQL deletes and inserts it, and each further deletion must come with an insertion. An update by a trigger or a rule beyond that stops the apply. PostgreSQL never updates a row to delete that the same statement deletes, or that an earlier statement of the apply deleted, so such a row leaves no room. Updates within the bounds that a trigger or a rule makes are not seen: there is room only where a row that an action would change is also deleted, by a cascade or by the plan in a later statement, with PostgreSQL's order deciding whether the action runs first, and where two keys set a column in common. The values that an update writes are not seen either. A trigger that empties a table that the deletions do not reach with `TRUNCATE` is not seen either, since PostgreSQL does not count those rows as deleted. The constraint triggers deferred to the commit run before the check, and what they delete or change is counted with the rest. In the declared tables, the check before the commit sees what the counts cannot: the values that an update writes, and, in a table of mode `sync`, the rows that a trigger inserts, by the number of the rows to delete.
+- The check before the commit compares what the declaration of the run holds, and nothing else: not a column that the declaration does not name, a value of `on_insert`, a table that it does not declare, a declared table outside the schemas of a run with `--schema`, a value of a table of mode `insert` beyond its key, or a stored row that it does not hold, but the rows to delete of a table of mode `sync`, which it counts, and, without `--allow-delete`, checks by the counts of the transaction. In an apply without deletions, a constraint trigger deferred to the commit fires after the check, so what it changes is not compared either; an apply that deletes runs such triggers before the check after its deletions, and the comparison sees what they did.
 - Without `--allow-delete`, a partitioned table of mode `sync` whose rows to delete the apply leaves in place is checked by the number of those rows alone: a trigger that deletes such a row and adds another passes. PostgreSQL counts a row that moves between the partitions of the table as a deletion and an insertion, so its counts cannot tell the two apart, and a row that a cascade moves within the table must not stop the apply. A declared partition has counts of its own, and is checked by them.
 - Two declared tables that a foreign key `ON UPDATE CASCADE` links change together only when the cascaded column is not in the match key of the referencing table. When it is, change the referenced key first: with an apply of its schema alone when the tables are in two schemas, or with an `UPDATE` of your own ([The check before the commit](#the-check-before-the-commit)).
 - The check before the commit reads every declared table of the run a second time, also the tables without changes. It costs less than the comparison of the plan, which loads and checks the declared rows too; [ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md) records a measurement.
@@ -841,15 +865,66 @@ When the second walk counts other rows than the plan, the error names the first 
 kortopi: after the inserts and updates, the deletion of rows of z.parent reaches 3 rows of b.orders through foreign key "orders_parent", ON DELETE CASCADE, at level 1, and the plan counted 2: a row that this apply wrote through a default of a column, a value of on_insert, a trigger, or a rule created after the plan is now reached, or another transaction changed the rows: declare the rows so that the deletions do not reach them, or delete the rows in a run of their own, and apply again
 ```
 
+### The schema changed while the apply ran
+
+```text
+kortopi: another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+kortopi: nothing was changed
+```
+
+Another session added the foreign key after the snapshot of the apply, and before its deletions, so the plan did not show what it does, while PostgreSQL ran it with the deletions.
+The error names the first change that the apply found among the foreign keys, the partitions, the triggers, the rules, and the deferrable unique keys, primary keys, and exclusion constraints of the tables that the deletions reach, and counts the others.
+An attach or a detach of a partition comes before the objects that the partition brings or takes away, its own partitions among them, which are counted, not named.
+The apply compares these objects by their names, so one that another session renamed shows as one that it dropped and one that it added: the error says `added or renamed`, `created or renamed`, or `dropped or renamed`.
+A deferrable unique key, primary key, or exclusion constraint is named as a constraint, by its own name, not by the triggers that check it.
+Run the apply again once the schema change has committed: the next apply plans with the new schema.
+
+A partition that `DETACH PARTITION ... CONCURRENTLY` began to detach stops the apply as well, since the checks of foreign keys leave it out at once, and a deletion that its rows should make fail succeeds:
+
+```text
+kortopi: another session changed the schema while the apply ran: it began to detach partition app.orders_1 of table app.orders after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+```
+
+A constraint deferred to the commit that fails when the apply runs it, after its deletions, stops the apply as a write that fails does, with advice that holds once every write of the apply has run, its deletions among them:
+
+```text
+kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: a row refers to a row that does not exist, or a row that the apply deleted is still referenced: declare the referenced row, or keep in the declaration a row that other rows reference
+kortopi: nothing was changed
+```
+
+A unique key or a primary key says `two rows hold the same value of the key: change the declared value, or the row of the database that holds it`, an exclusion constraint `two rows conflict on it: change the declared values, or the row of the database that conflicts with them`, and a constraint trigger, which can raise any error, `check the constraint triggers of the tables that the apply writes, and what their functions read and write`.
+
+The comparison reads the schema as it is now through a second connection, with the settings of the apply, to the address that its own connection reached. When that connection cannot be made, when its query fails, when a wait of it reaches its bound, or when it reaches another server or database than the apply, as a proxy or a connection pooler can send it, the apply stops too, before its commit, with an error that says so:
+
+```text
+kortopi: the check after the deletions, which reads the schema of the tables that they reach through a second connection, could not open it, so the apply stops, and nothing was changed: cannot connect to database "app" as user "deployer":
+kortopi:   10.0.0.5:5432 (db.example.test): server error: FATAL: too many connections for role "deployer" (SQLSTATE 53300)
+kortopi: nothing was changed
+```
+
+```text
+kortopi: the check after the deletions reads the schema of the tables that they reach through a second connection, and its read waited 5s, the most that the check waits, for a lock on a system catalog, so the apply stops before its commit, and nothing was changed: another session holds such a lock, or waits for one behind the apply itself, as VACUUM FULL of a catalog waits for the lock of the apply on it: run the apply again once that session has ended: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)
+kortopi: nothing was changed
+```
+
+The read of the second connection waits 5 seconds at most, or as long as `--lock-timeout` allows when that is shorter, and its connection 10 seconds at most, or as long as `connect_timeout` allows when that is shorter: a session that waits for a lock on a system catalog behind the apply itself, which holds its locks until it ends, would otherwise make both wait for each other without end, which PostgreSQL cannot see, since the cycle goes through kortopi.
+A connection that the bound ends says `could not open its second connection within 10s, the most that the check waits`, and that the server, or a connection pooler whose pool is full, did not accept a new connection in time.
+Another server or database says to connect kortopi to the server itself, with one host rather than a list of hosts, and not through a proxy or a connection pooler that may send a new connection to another server, or to apply without deleting rows.
+These errors are those of the second connection, so they do not advise `--lock-timeout`, as an error of a wait of the apply itself does: the flag can only make the bound of the second connection shorter.
+
 ### Rows that the deletions did not delete, or other rows that they deleted
 
 ```text
-kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-kortopi: the deletions deleted 2 rows of table t.audit, and the plan counted 0: a foreign key or a partition that another transaction added while the apply ran, a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table t.audit
-kortopi: the deletions updated rows of table t.events 2 times, and the plan allows 1: a foreign key or a partition that another transaction added while the apply ran, a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table t.events
+kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
+kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
+kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.events
 ```
 
+The counts are those of the transaction since its first deletion, so they hold what the constraint triggers deferred to the commit did too, also those that an insert or an update of the apply deferred: the apply runs them before these checks.
+The trigger or the rule that changed a table can belong to another table, such as a constraint trigger of a table that the apply wrote, so the advice says where to look for it.
+
 A cause that another transaction made goes away when the apply runs again; a trigger or a rule comes back every time.
+A foreign key, a partition, or disabled triggers of a foreign key that another session added after the apply began stop the apply before these checks ([The schema changed while the apply ran](#the-schema-changed-while-the-apply-ran)).
 A referencing row that another transaction inserted while the apply ran makes the deletion fail with the error of a concurrent change instead, and PostgreSQL itself stops a cascade whose query a rule turns into nothing, as `DO INSTEAD NOTHING` does.
 
 ### `track_counts`

@@ -23,19 +23,21 @@ import (
 //     still there after the deletions, and PostgreSQL refuses a rule that
 //     keeps them;
 //   - a foreign key or a partition that another transaction adds after the
-//     snapshot, which no query of the catalogs in the snapshot sees, and a
-//     trigger that deletes rows of another table, make the deletions delete
-//     rows that the plan did not count.
+//     snapshot, which no query of the catalogs in the snapshot sees, stops
+//     the apply on the comparison of the schema (ADR-0048);
+//   - a trigger that deletes rows of another table makes the deletions
+//     delete rows that the plan did not count.
 func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			t.Parallel()
 			keptCauses := "another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE " +
-				"that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept it, so nothing was written: " +
+				"that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: " +
 				"run the apply again, and if this happens again, check the triggers and the rules of table t.lines"
-			beyondCauses := ": a foreign key or a partition that another transaction added while the apply ran, " +
-				"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: " +
-				"run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table "
+			beyondCauses := ": a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, " +
+				"which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables " +
+				"that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table "
+			schemaChanged := "another session changed the schema while the apply ran: "
 			for _, tt := range []struct {
 				name       string
 				setUp      string
@@ -74,19 +76,22 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 				{
 					name:       "a foreign key that another transaction added",
 					concurrent: "ALTER TABLE t.audit ADD FOREIGN KEY (plan_id) REFERENCES m.plan ON DELETE CASCADE",
-					wantErr:    "the deletions deleted 2 rows of table t.audit, and the plan counted 0" + beyondCauses + "t.audit",
+					wantErr: schemaChanged + `it added or renamed foreign key "audit_plan_id_fkey" of table t.audit, which references table m.plan, after the apply began, ` +
+						"so the deletions may have done other than the plan shows",
 				},
 				{
 					name:       "a partition that another transaction attached",
 					concurrent: "ALTER TABLE t.events ATTACH PARTITION t.events_2 FOR VALUES FROM (10) TO (20)",
-					wantErr:    "the deletions deleted 2 rows of table t.events, and the plan counted 1" + beyondCauses + "t.events",
+					wantErr: schemaChanged + "it attached or created partition t.events_2 of table t.events after the apply began, " +
+						"and made 1 more change to the schema of the tables that the deletions reach, " +
+						"so the deletions may have done other than the plan shows",
 				},
 				{
 					name: "a trigger that deletes rows of another table",
 					setUp: `CREATE FUNCTION t.forget() RETURNS trigger LANGUAGE plpgsql AS $$
 						BEGIN DELETE FROM t.archive WHERE order_id = OLD.id; RETURN OLD; END $$;
 						CREATE TRIGGER forget AFTER DELETE ON t.orders FOR EACH ROW EXECUTE FUNCTION t.forget();`,
-					wantErr: "the deletions deleted 1 row of table t.archive, and the plan counted 0" + beyondCauses + "t.archive",
+					wantErr: "after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0" + beyondCauses + "t.archive",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
@@ -170,15 +175,14 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 // snapshot, from a table that a cascade of the same deletion reaches, and a
 // partition that another transaction attaches below a table that SET NULL
 // reaches, make the deletions update rows that the plan does not show,
-// which no query of the catalogs in the snapshot sees: the counts of the
-// updates go beyond what the effect allows, and the apply stops.
+// which no query of the catalogs in the snapshot sees: the comparison of the
+// schema after the deletions finds them, before the counts of the updates
+// (ADR-0048), and the apply stops.
 func TestApplyEffectAfterConcurrentChangesOfUpdates(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			t.Parallel()
-			causes := ": a foreign key or a partition that another transaction added while the apply ran, " +
-				"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, " +
-				"so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table "
+			schemaChanged := "another session changed the schema while the apply ran: "
 			for _, tt := range []struct {
 				name       string
 				concurrent string
@@ -188,12 +192,13 @@ func TestApplyEffectAfterConcurrentChangesOfUpdates(t *testing.T) {
 				{
 					name:       "a foreign key ON DELETE SET NULL that another transaction added",
 					concurrent: "ALTER TABLE t.orders ADD CONSTRAINT orders_alt_fkey FOREIGN KEY (alt_plan_id) REFERENCES m.plan ON DELETE SET NULL",
-					wantErr:    "the deletions changed 3 rows of table t.orders, which the plan did not count" + causes + "t.orders",
+					wantErr: schemaChanged + `it added or renamed foreign key "orders_alt_fkey" of table t.orders, which references table m.plan, after the apply began, ` +
+						"so the deletions may have done other than the plan shows",
 				},
 				{
 					name:       "a partition that another transaction attached below SET NULL",
 					concurrent: "ALTER TABLE t.events ATTACH PARTITION t.events_2 FOR VALUES FROM (10) TO (20)",
-					wantErr:    "the deletions updated rows of table t.events 2 times, and the plan allows 1" + causes + "t.events",
+					wantErr:    schemaChanged + "it attached or created partition t.events_2 of table t.events after the apply began, and made 1 more change",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
@@ -297,15 +302,13 @@ func TestApplyEffectOfActionsThatMeetOnARow(t *testing.T) {
 // never update (ADR-0039): a row to delete that the same statement deletes
 // with the row that it references, and a row to delete of a table that the
 // apply deleted before the table of the row that it references. A foreign
-// key SET NULL that another transaction adds after the snapshot then finds
-// no room between the bounds for the rows that it changes, and the apply
-// stops.
+// key SET NULL that another transaction adds after the snapshot would find
+// no room between the bounds for the rows that it changes; the comparison of
+// the schema, which comes first, names it, and the apply stops (ADR-0048).
 func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			causes := ": a foreign key or a partition that another transaction added while the apply ran, " +
-				"a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, " +
-				"so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table "
+			schemaChanged := "another session changed the schema while the apply ran: "
 			for _, tt := range []struct {
 				name       string
 				schema     string
@@ -324,7 +327,7 @@ func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
 					files:      map[string]string{"m/plan.csv": "id,code\n1,basic\n"},
 					tables:     []declaration.Table{csvTable("m", "plan", "id", "code")},
 					concurrent: "ALTER TABLE m.plan ADD CONSTRAINT plan_fallback_fkey FOREIGN KEY (fallback_id) REFERENCES m.plan ON DELETE SET NULL",
-					wantErr:    "the deletions changed 1 row of table m.plan, which the plan did not count" + causes + "m.plan",
+					wantErr:    schemaChanged + `it added or renamed foreign key "plan_fallback_fkey" of table m.plan, which references table m.plan, after the apply began, so`,
 					dump:       []string{"m.plan"},
 				},
 				{
@@ -337,7 +340,7 @@ func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
 					files:      map[string]string{"m/item.csv": "id,kind_id\n2,1\n", "m/kind.csv": "id,code\n1,keep\n"},
 					tables:     []declaration.Table{csvTable("m", "item", "id", "kind_id"), csvTable("m", "kind", "id", "code")},
 					concurrent: "ALTER TABLE m.item ADD CONSTRAINT item_other_fkey FOREIGN KEY (other_kind) REFERENCES m.kind ON DELETE SET NULL",
-					wantErr:    "the deletions changed 1 row of table m.item, which the plan did not count" + causes + "m.item",
+					wantErr:    schemaChanged + `it added or renamed foreign key "item_other_fkey" of table m.item, which references table m.kind, after the apply began, so`,
 					dump:       []string{"m.item", "m.kind"},
 				},
 			} {

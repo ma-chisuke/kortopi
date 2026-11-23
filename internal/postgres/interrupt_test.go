@@ -113,16 +113,20 @@ func TestBeginSQL(t *testing.T) {
 	tests := []struct {
 		timeout  time.Duration
 		readOnly bool
-		want     string
+		// newest is the second session of an apply (ADR-0048).
+		newest bool
+		want   string
 	}{
 		{want: "BEGIN ISOLATION LEVEL REPEATABLE READ"},
 		{readOnly: true, want: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"},
 		{timeout: 10 * time.Second, want: "BEGIN ISOLATION LEVEL REPEATABLE READ; SET LOCAL lock_timeout = 10000"},
 		{timeout: 1500 * time.Millisecond, readOnly: true, want: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL lock_timeout = 1500"},
 		{timeout: 1999 * time.Microsecond, want: "BEGIN ISOLATION LEVEL REPEATABLE READ; SET LOCAL lock_timeout = 1"},
+		{newest: true, readOnly: true, want: "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"},
+		{newest: true, readOnly: true, timeout: time.Second, want: "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SET LOCAL lock_timeout = 1000"},
 	}
 	for _, tt := range tests {
-		s := &Session{lockTimeout: tt.timeout}
+		s := &Session{lockTimeout: tt.timeout, newest: tt.newest}
 		if got := s.beginSQL(tt.readOnly); got != tt.want {
 			t.Errorf("beginSQL(%v) with --lock-timeout %v = %q, want %q", tt.readOnly, tt.timeout, got, tt.want)
 		}

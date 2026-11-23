@@ -59,7 +59,7 @@ func TestEffectsThroughAGeneratedColumn(t *testing.T) {
 			if err == nil {
 				err = s.CheckEffect(t.Context())
 			}
-			if want := "the deletions changed 2 rows of table t.usage, which the plan did not count"; err == nil || !strings.HasPrefix(err.Error(), want) {
+			if want := "after its first deletion, the apply changed 2 rows of table t.usage, which the plan did not count"; err == nil || !strings.HasPrefix(err.Error(), want) {
 				t.Errorf("apply: %v\nwant %s", err, want)
 			}
 			if err := s.Close(t.Context()); err != nil {

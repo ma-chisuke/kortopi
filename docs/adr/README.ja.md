@@ -53,5 +53,6 @@
 | [ADR-0045](ADR-0045-move-the-sequence-of-a-column-beyond-the-values-that-an-apply-writes.ja.md) | apply が列に書いた値の先へ、その列のシーケンスをコミットの直前に進め、決して戻さない | accepted | 2026-11-22 |
 | [ADR-0046](ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) | 行を削除しないモードのテーブルで宣言にない保存された行を数え、それがある間は一致を主張しない | accepted | 2026-11-22 |
 | [ADR-0047](ADR-0047-stop-a-run-that-read-a-table-that-another-session-changed-after-its-snapshot.ja.md) | スナップショットのあとにほかのセッションが書き換え、置き換え、パーティションを変えたテーブルを読んだ実行は止める | accepted | 2026-11-22 |
+| [ADR-0048](ADR-0048-compare-the-schema-that-decides-what-the-deletions-do-after-the-deletions-of-an-apply.ja.md) | apply の削除のあとに、削除のすることを決めるスキーマを、スナップショットが見たものと今のものとで比べる | accepted | 2026-11-22 |
 
-<!-- i18n-source: README.md sha256:27f151b1b6b47d9285b1d10fb55d65dc3bb3730947b08a88f108b384632953aa -->
+<!-- i18n-source: README.md sha256:a1a7b834773eb214cd442663b3d70982216de9a8e48fef72b872e701d65a2d9e -->

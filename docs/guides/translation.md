@@ -93,6 +93,7 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | catalog (of the database) | カタログ |
 | decision record (ADR) | 記録、ADR |
 | check | チェック |
+| check after the deletions (of an apply) | 削除のあとの検査 |
 | translation (of a document) | 対訳 |
 | source (of a translation) | 原文 |
 | source (the file that generated files come from), authority (the text that decides when two texts disagree) | 正 |
@@ -214,6 +215,9 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | cancel request (of the protocol of PostgreSQL) | キャンセル要求 |
 | lock timeout (`lock_timeout`, `--lock-timeout`) | ロック待ちの上限 |
 | keepalive, probe (of TCP) | キープアライブ、プローブ |
+| second connection (of an apply), connection slot | 2つ目の接続、接続枠 |
+| system cache (of PostgreSQL), transition table (of a trigger) | システムキャッシュ、遷移テーブル |
+| proxy (between kortopi and the server) | プロキシ |
 | signal (of the operating system) | シグナル |
 | process ID | プロセス ID |
 | start-up parameter (of a connection) | 起動パラメータ |

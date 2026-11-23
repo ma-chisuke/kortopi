@@ -358,9 +358,6 @@ func (s *Session) referencedChange(ctx context.Context, err error, ended bool) e
 	}
 }
 
-// foreignKeyViolation is the SQLSTATE of a foreign key that refuses a write.
-const foreignKeyViolation = "23503"
-
 // storageChange says what another session did to table t after the
 // snapshot, as st shows it, or returns nothing when the table is the one
 // that the snapshot shows.

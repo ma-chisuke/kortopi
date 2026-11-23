@@ -75,6 +75,11 @@ apply には、計画に要るものがすべて要る（[kortopi plan](plan.ja.
 削除する行を参照する宣言したテーブル（自分自身を参照するテーブルなど）でも同じである。ほかの点では、ロールに要るのはその宣言した列だけであっても変わらない。ほかの行が参照する削除する行のテーブルには、参照される列に対する `SELECT` も要る。
 `--allow-delete` があるとき、削除がロールの読めないテーブルの行を消すか変えるなら、apply は止まる（[削除の安全策](#削除の安全策)）。
 
+削除する行を持つ `--allow-delete` 付きの apply は、削除のあとに、データベースへの2つ目の接続を開く。接続先は自分の接続が届いたアドレスであり、設定も同じである。削除が着くテーブルのスキーマを、今のものと比べるためである（[削除の安全策](#削除の安全策)）。
+そのため、`max_connections`・ロールの接続数の上限・コネクションプーラーのプールの範囲で、空いた接続枠が要る。しかも、その接続は同じサーバーとデータベースに届かなければならない。
+2つ目の接続は、セッションの設定によらず、接続を最大 10 秒待ち、システムカタログのロックを最大 5 秒待つ。`connect_timeout` や `--lock-timeout` のほうが短ければ、そちらに従う。
+接続できないとき、待ちが上限に達したとき、別のサーバーに届いたときは、apply はコミットの前に止まり、何も変わらない。
+
 ```sql
 GRANT CONNECT, TEMPORARY ON DATABASE app TO deployer;
 GRANT USAGE ON SCHEMA catalog TO deployer;
@@ -344,9 +349,14 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 
 挿入と更新のあと、最初の削除の直前に、apply は外部キーをもう一度たどり、着いたものを計画とステップごとに比べる。
 apply の書いた行に、計画から見えない参照があれば、そこで止まる。列の既定値・`on_insert` の値・トリガー・計画のあとに作られたルールが与えた参照である（[挿入と更新のあとで削除がほかの行に着く](#挿入と更新のあとで削除がほかの行に着く)）。
-削除のあとコミットの前に、計画の数えた行がすべて消えたか変わったことを確かめる。
+削除のあとコミットの前に、apply はまず、書き込みがコミットまで遅らせた制約と制約トリガーを動かす。コミットと同じくセッションの設定で動かすので、外部キーの検査はこれですべて済む。
+次に、削除のすることを決めるスキーマを、スナップショットが見たものと今のものとで比べる。今のものは2つ目の接続が読む。比べるのは、削除する行を持つテーブルと削除が着くテーブルを参照する外部キーとそれらのテーブルが持つ外部キー、それらのテーブルのパーティションとそのデタッチが始まったか、トリガー、ルール、遅らせられる一意キー・主キー・排他制約である。
+apply が始まったあとにほかのセッションが外部キー・トリガー・ルール・パーティションを足すか削除するか変えていれば、apply は止まり、エラーがそれを挙げる。外部キーのトリガーを有効や無効にした場合も同じである。`DETACH PARTITION ... CONCURRENTLY` がデタッチを始めたパーティションも同じであり、外部キーの検査はそれをすぐに外す（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
+そこから先には、外部キーの検査も apply の書き込みも残らない。そのため、比較のあとにコミットしたスキーマの変更は、削除がしたことに働けない。
+スキーマの変更は kortopi の前にし、apply の間にはしない（[デプロイでの使い方](#デプロイでの使い方)）。
+比べたあとは、計画の数えた行がすべて消えたか変わったことを確かめる。
 さらに、トランザクションが削除し更新した行の数を確かめる。どのテーブルも計画が数えた行を失ったはずである。その行の更新は、計画が変わると数えた行の数を下回らず、削除の動作が更新しうる回数を上回らないはずである。計画が着かなかったテーブルは、行を失いも変えもしなかったはずである（[削除が消さなかった行と、削除が消したほかの行](#削除が消さなかった行と削除が消したほかの行)）。
-これで、ほかのテーブルの行を消すか、計画が許すより多くの行を更新するトリガーやルールが見つかる。apply の間に別のトランザクションが足した外部キーやパーティションも見つかる。ただし、その更新が範囲の残す幅に収まるときは除く（[分かっている制限](#分かっている制限)）。スキーマの変更は kortopi の前にし、apply の間にはしない（[デプロイでの使い方](#デプロイでの使い方)）。
+これで、ほかのテーブルの行を消すか、計画が許すより多くの行を更新するトリガーやルールが見つかる（[分かっている制限](#分かっている制限)）。
 そのあとコミット前の比較が宣言したテーブルを比べ、削除のトリガーがモード `sync` の宣言したテーブルに加えた行や、そのトリガーが変えた宣言した値を見つける（[コミット前の比較](#コミット前の比較)）。
 計画は、apply が働かせる宣言したテーブルのルールで止まる（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。しかし、カスケードは、それが着くテーブルのルールも働かせる。宣言が持たないテーブルのルールも含む。
 
@@ -496,6 +506,19 @@ kortopi: nothing was changed
 
 それでも何も変わっていない。トランザクションはコミットしておらず、セッションが終わるときにサーバーがロールバックする。
 2度目の割り込みは待つのをその場で終え、そのとき行は `kortopi stopped waiting for the server to end the session of the apply` で始まる。
+
+削除のあとの検査の2つ目の接続がカタログを読んでいる間に割り込みが来ると（[削除の安全策](#削除の安全策)）、その読み取りのキャンセルをサーバーに求め、まず apply のセッションを終える。ロックと削除した行を持つのはこのセッションである。
+2つ目のセッションは、読み取りが終わってからそのあとに終える。それぞれが最大 5 秒の自分の待ちを持つので、サーバーがどちらにも答えなければ、kortopi は 10 秒以内に終わる。
+サーバーがその終わりを確かめなかったとき、apply のセッションは最初に挙げる。2つ目のセッションは、そのあとの自分の行で挙げる。読み取りのあと、2つ目のセッションが閉じるところに割り込みが来たときも同じである。
+
+```text
+kortopi: interrupted: the apply was stopped
+kortopi: the server did not confirm within 5s that the read-only session of the check after the deletions ended: its query may still run on the server, and hold or wait for a lock on a system catalog, until the server notices that kortopi has gone: find the session in pg_stat_activity, where application_name is "kortopi" and pid is 391, and end it with pg_cancel_backend(391), or with pg_terminate_backend(391) if it does not end
+kortopi: nothing was changed
+```
+
+2つ目の接続がつなぐ最中や、そのトランザクションを始める最中の割り込みは、まずその接続を終わらせる。サーバーがそのためのセッションを始めていれば、それは自分の待ちを持つ。apply のセッションはそのあとに終える。それでも、行は apply のセッションを先に挙げる。
+
 この割り込みがあっても、キャンセル要求は送られる。kortopi は終了する前に、ドライバーがそれを送るのを最長1秒待つ。
 apply が別の apply を待っている間も同じである。
 
@@ -526,7 +549,7 @@ kortopi はコミットをキャンセルしないので、サーバーはコミ
 | 0 | apply が変更をコミットしたか、変えるものがなかった。`--allow-delete` がなくて見送った削除は、終了コードを変えない。 |
 | 1 | apply が失敗し、何も変わっていない。ただし、コミットの結果が不明だとエラーが伝える場合は除く。 |
 
-apply が 2 で終わることはない。コミットした apply は、省いた削除を除いて、宣言したテーブルが宣言のとおりであることをコミットの前に確かめている（[コミット前の比較](#コミット前の比較)）。省いた削除も含めて何も残っていないことを確かめ、コミットまで遅らせた制約トリガーが変えたものを見るには、apply のあとで `kortopi plan --exit-code` を実行する（[kortopi plan](plan.ja.md#終了コードとずれ)）。
+apply が 2 で終わることはない。コミットした apply は、省いた削除を除いて、宣言したテーブルが宣言のとおりであることをコミットの前に確かめている（[コミット前の比較](#コミット前の比較)）。省いた削除も含めて何も残っていないことを確かめるには、apply のあとで `kortopi plan --exit-code` を実行する。削除のない apply のあとでは、コミットまで遅らせた制約トリガーが変えたものもこれで見る（[kortopi plan](plan.ja.md#終了コードとずれ)）。
 
 ## 2つの apply を同時に動かす
 
@@ -560,6 +583,7 @@ the wait for the lock of kortopi, which the other apply held, was cancelled, by 
 - すべての行に値が要る新しい `NOT NULL` の列のように、両方に関わる変更には、[README](../../README.ja.md#スキーマの道具と一緒に使う) のとおり2回のデプロイが要る。まず列を NULL 可で足して kortopi で値を入れ、それから `NOT NULL` にする。
 - プルリクエストでは `kortopi plan` を、マージのあとでは `kortopi apply` を、同じ宣言に対して実行する。
 - `--allow-delete` は削除すべき実行にだけ渡し、`--max-delete` は削除が許す範囲でできるだけ低く保つ。
+- 削除をする apply は、スキーマの変更がコミットしてから始める。apply の実行中に、削除が着くテーブルの外部キー・トリガー・ルール・パーティションをほかのセッションが足すか変えると、apply はコミットの前に止まる（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
 - `--lock-timeout 10s` のように、`--lock-timeout` で apply にロック待ちの上限を与える。そうすれば、apply がほかのセッションの持つロックを際限なく待つことはない（[ロックを待つとき](plan.ja.md#ロックを待つとき)）。kortopi はそれを各トランザクションの中で設定するので、トランザクションモードのコネクションプーラーの後ろでも効く。そこでは `PGOPTIONS` はサーバーに届かない。
 - 失敗した apply は何も変えない。宣言かデータベースを直して、もう一度実行する。
 
@@ -583,8 +607,8 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 削除がテーブルにすることを数えるには、ロールに、外部キーの列だけでなくテーブル全体に対する `SELECT` が要る。
 - 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。
 - 計画は、apply と同じく、一時テーブルと宣言したテーブルのロックを終わるまで持つ。テーブルの数がとても多い宣言では、サーバーの `max_locks_per_transaction` を上げる必要がありうる。
-- トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。範囲の中の更新は見えない。トリガー・ルール、または apply の間に別のトランザクションが足す `SET NULL` か `SET DEFAULT` の外部キーかパーティションのどれがしても同じである。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査のあとに働くので、それが消すか変える行は確かめない。宣言したテーブルについては、件数では見えないものをコミット前の比較が見る。更新の書く値と、モード `sync` のテーブルでは、削除する行の数として見る、トリガーが挿入する行である。
-- コミット前の比較が比べるのは、その実行の宣言が持つものだけである。宣言が挙げない列、`on_insert` の値、宣言しないテーブル、`--schema` を付けた実行のスキーマの外の宣言したテーブルは比べない。モード `insert` のテーブルのキー以外の値と、宣言が持たない保存された行も比べない。ただし、モード `sync` のテーブルの削除する行は数え、`--allow-delete` がなければトランザクションの数でも確かめる。コミットまで遅らせた制約トリガーは比較のあとに働くので、それが変えるものも比べない。
+- トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。トリガーやルールがする範囲の中の更新は見えない。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査の前に動き、それが消すか変える行もほかの行と一緒に数える。宣言したテーブルについては、件数では見えないものをコミット前の比較が見る。更新の書く値と、モード `sync` のテーブルでは、削除する行の数として見る、トリガーが挿入する行である。
+- コミット前の比較が比べるのは、その実行の宣言が持つものだけである。宣言が挙げない列、`on_insert` の値、宣言しないテーブル、`--schema` を付けた実行のスキーマの外の宣言したテーブルは比べない。モード `insert` のテーブルのキー以外の値と、宣言が持たない保存された行も比べない。ただし、モード `sync` のテーブルの削除する行は数え、`--allow-delete` がなければトランザクションの数でも確かめる。削除のない apply では、コミットまで遅らせた制約トリガーは比較のあとに働くので、それが変えるものも比べない。削除をする apply は、削除のあとの検査の前にそうしたトリガーを動かすので、比較はそれがしたことを見る。
 - `--allow-delete` がなければ、削除する行を apply が残すモード `sync` のパーティションテーブルは、その行の数だけで確かめる。そうした行を1行消して別の1行を足すトリガーは通る。PostgreSQL は、テーブルのパーティションの間を移る行を削除と挿入として数える。そのため、その数では2つを区別できない。カスケードがテーブルの中で移す行を理由に、apply を止めるわけにもいかない。宣言したパーティションは自分の数を持ち、それで確かめる。
 - 外部キー `ON UPDATE CASCADE` でつながる宣言した2つのテーブルが一緒に変わるのは、カスケードする列が参照するテーブルの照合キーにないときだけである。キーにあるなら、参照されるキーを先に変える。2つのテーブルが2つのスキーマにあればそのスキーマだけの apply で、そうでなければ自分の `UPDATE` で変える（[コミット前の比較](#コミット前の比較)）。
 - コミット前の比較は、実行の宣言したすべてのテーブルを、変更のないテーブルも含めてもう一度読む。宣言した行を読み込んで確かめる手間がない分、計画の比較より費用は小さい。[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md) に測った値がある。
@@ -844,15 +868,72 @@ kortopi: nothing was changed
 kortopi: after the inserts and updates, the deletion of rows of z.parent reaches 3 rows of b.orders through foreign key "orders_parent", ON DELETE CASCADE, at level 1, and the plan counted 2: a row that this apply wrote through a default of a column, a value of on_insert, a trigger, or a rule created after the plan is now reached, or another transaction changed the rows: declare the rows so that the deletions do not reach them, or delete the rows in a run of their own, and apply again
 ```
 
+### apply の実行中にスキーマが変わったとき
+
+```text
+kortopi: another session changed the schema while the apply ran: it added or renamed foreign key "orders_next_plan_code_fkey" of table app.orders, which references table app.plans, after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+kortopi: nothing was changed
+```
+
+ほかのセッションが、apply のスナップショットのあと、削除の前に外部キーを足した。そのため、計画はそのキーがすることを示さなかったが、PostgreSQL は削除とともにそれを動かした。
+エラーは、apply が見つけた最初の変更を挙げ、ほかの変更の数を数える。対象は、削除が着くテーブルの外部キー・パーティション・トリガー・ルールと、遅らせられる一意キー・主キー・排他制約である。
+パーティションのアタッチやデタッチは、そのパーティションがもたらすか持ち去るオブジェクトより前に来る。その中のパーティションも含め、そうしたオブジェクトは数えるだけで、挙げない。
+apply はこれらのオブジェクトを名前で比べる。そのため、ほかのセッションが名前を変えたものは、1つを削除して1つを足したものに見え、エラーは `added or renamed`、`created or renamed`、`dropped or renamed` と言う。
+遅らせられる一意キー・主キー・排他制約は、それを検査するトリガーではなく、制約として自分の名前で挙げる。
+スキーマの変更がコミットしてから、apply をもう一度実行する。次の apply は、新しいスキーマで計画する。
+
+`DETACH PARTITION ... CONCURRENTLY` がデタッチを始めたパーティションも、apply を止める。外部キーの検査はそのパーティションをすぐに外すので、その行が失敗させるはずの削除が成功してしまうからである。
+
+```text
+kortopi: another session changed the schema while the apply ran: it began to detach partition app.orders_1 of table app.orders after the apply began, so the deletions may have done other than the plan shows: the apply stops before its commit, and nothing was changed: run the apply again, and make schema changes before an apply, not while it runs
+```
+
+コミットまで遅らせた制約は、削除のあとで apply が動かす。そこで失敗すると、書き込みが失敗したときと同じく apply を止める。助言は、削除も含めて apply のすべての書き込みが済んだ時点で成り立つものである。
+
+```text
+kortopi: run the constraints deferred to the commit: update or delete on table "plans" violates foreign key constraint "orders_plan_code_fkey" on table "orders" (detail: Key (code)=(legacy) is still referenced from table "orders".) (constraint: orders_plan_code_fkey): a foreign key deferred to the commit failed when the apply checked it after every write, its deletions among them: a row refers to a row that does not exist, or a row that the apply deleted is still referenced: declare the referenced row, or keep in the declaration a row that other rows reference
+kortopi: nothing was changed
+```
+
+ほかの種類の制約の助言は、次のとおりである。
+
+- 一意キーか主キー。`two rows hold the same value of the key: change the declared value, or the row of the database that holds it` である。
+- 排他制約。`two rows conflict on it: change the declared values, or the row of the database that conflicts with them` である。
+- どんなエラーも出しうる制約トリガー。`check the constraint triggers of the tables that the apply writes, and what their functions read and write` である。
+
+比較は、今のスキーマを、apply と同じ設定の2つ目の接続で読む。その接続は、apply の接続が届いたアドレスへつなぐ。次のときも、apply はコミットの前に止まり、エラーがそう伝える。その接続ができないとき、その問い合わせが失敗したとき、その待ちが上限に達したとき、プロキシやコネクションプーラーが送り先を変えて apply と別のサーバーやデータベースに届いたときである。
+
+```text
+kortopi: the check after the deletions, which reads the schema of the tables that they reach through a second connection, could not open it, so the apply stops, and nothing was changed: cannot connect to database "app" as user "deployer":
+kortopi:   10.0.0.5:5432 (db.example.test): server error: FATAL: too many connections for role "deployer" (SQLSTATE 53300)
+kortopi: nothing was changed
+```
+
+```text
+kortopi: the check after the deletions reads the schema of the tables that they reach through a second connection, and its read waited 5s, the most that the check waits, for a lock on a system catalog, so the apply stops before its commit, and nothing was changed: another session holds such a lock, or waits for one behind the apply itself, as VACUUM FULL of a catalog waits for the lock of the apply on it: run the apply again once that session has ended: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03)
+kortopi: nothing was changed
+```
+
+2つ目の接続の読み取りは最大 5 秒待ち、その接続は最大 10 秒待つ。`--lock-timeout` や `connect_timeout` のほうが短ければ、それが許すだけ待つ。
+上限がなければ、apply は終わるまでロックを持つので、apply の背後でシステムカタログのロックを待つセッションと、互いを際限なく待つことになる。この循環は kortopi を通るので、PostgreSQL には見えない。
+上限が接続を終わらせたときは、`could not open its second connection within 10s, the most that the check waits` と伝える。
+サーバーか、プールのふさがったコネクションプーラーが、新しい接続を間に合うように受け付けなかったことも伝える。
+別のサーバーやデータベースに届いたときは、kortopi をサーバーそのものにつなぐよう伝える。ホストの一覧ではなく1つのホストを与え、新しい接続を別のサーバーに送りうるプロキシやコネクションプーラーを通さない。さもなければ、行を削除せずに apply する。
+これらは2つ目の接続のエラーなので、apply 自身の待ちのエラーと違い、`--lock-timeout` を勧めない。このフラグは、2つ目の接続の上限を短くするだけである。
+
 ### 削除が消さなかった行と、削除が消したほかの行
 
 ```text
-kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL, a rule of a table that the deletions reach, or disabled triggers of a foreign key kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-kortopi: the deletions deleted 2 rows of table t.audit, and the plan counted 0: a foreign key or a partition that another transaction added while the apply ran, a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table t.audit
-kortopi: the deletions updated rows of table t.events 2 times, and the plan allows 1: a foreign key or a partition that another transaction added while the apply ran, a trigger, a rule of a table that the deletions reach, or disabled triggers of a foreign key made them do other than the plan shows, so nothing was written: run the apply again, and if this happens again, check the foreign keys, the triggers, and the rules of table t.events
+kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
+kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
+kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.events
 ```
 
+数は最初の削除からのトランザクションのものである。そのため、コミットまで遅らせた制約トリガーがしたことも含む。apply の挿入や更新が遅らせたものも同じである。apply はそれらをこれらの検査の前に動かすからである。
+テーブルを変えたトリガーやルールは、apply が書いたテーブルの制約トリガーのように、別のテーブルのものでありうる。そのため、助言はそれを探す場所を伝える。
+
 別のトランザクションが起こした原因は、apply をもう一度実行すれば消える。トリガーやルールは、毎回同じことをする。
+apply が始まったあとにほかのセッションが足した外部キー・パーティションや、無効にした外部キーのトリガーは、これらの検査より前に apply を止める（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
 apply の間に別のトランザクションが参照する行を挿入したときは、かわりに、削除が同時の変更のエラーで失敗する。`DO INSTEAD NOTHING` のように、カスケードの問い合わせを何もしないものに変えるルールは、PostgreSQL 自身がカスケードを止める。
 
 ### `track_counts`
@@ -881,4 +962,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:43d2f102b4b013c66f0ceb2b5af085d0e407ebaf1f1bf236131442be3ab1d1c7 -->
+<!-- i18n-source: apply.md sha256:597463e355887f49f74ee288a3475cb3b0c14ae46de912ad832218c004243918 -->
