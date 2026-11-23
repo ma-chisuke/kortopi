@@ -42,7 +42,8 @@ type Database interface {
 
 	// ForeignKeys returns the foreign keys from one named table to another
 	// named table, also from a table to itself, sorted by the referencing
-	// table and then by the name of the constraint.
+	// table and then by the name of the constraint, each marked when the
+	// database does not enforce it (ForeignKey.NotEnforced).
 	ForeignKeys(ctx context.Context, names []declaration.TableName) ([]ForeignKey, error)
 
 	// Defer postpones the check of the given foreign keys, which must be
@@ -152,6 +153,11 @@ type ForeignKey struct {
 	// Deferrable is true when the check of the constraint can be postponed
 	// to the commit.
 	Deferrable bool
+	// NotEnforced is true for a key that the database neither checks nor
+	// acts on, as a foreign key NOT ENFORCED of PostgreSQL 18 and later. It
+	// does not order the tables, is never deferred, and closes no cycle
+	// (ADR-0049). The zero value is a key that the database enforces.
+	NotEnforced bool
 }
 
 // Options are the guards of an apply (ADR-0018), and how it shows its plan.

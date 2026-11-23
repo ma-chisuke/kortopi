@@ -160,3 +160,42 @@ func TestReferenceError(t *testing.T) {
 		t.Error("the error of PostgreSQL is lost")
 	}
 }
+
+// A write that a foreign key refused, which the snapshot of the apply shows
+// NOT ENFORCED, names the change of the key first, a change of the table
+// that it references when there is one, and the error of PostgreSQL after
+// them, without the advice to declare the referenced row (ADR-0049).
+func TestEnforcedError(t *testing.T) {
+	pgErr := &pgconn.PgError{
+		Code: "23503", Message: `insert or update on table "city" violates foreign key constraint "city_country_fkey"`,
+		Detail: `Key (country)=(FR) is not present in table "country".`, ConstraintName: "city_country_fkey",
+	}
+	write := &writeError{statement: "insert into table m.city", err: pgErr, advice: adviceFor(pgErr, "insert into", declaration.TableName{Schema: "m", Name: "city"})}
+	key := `another session made foreign key "city_country_fkey" of table m.city, which references table m.country, enforced after the apply began, ` +
+		"or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, which its snapshot shows NOT ENFORCED"
+	after := ": run the apply again, and make schema changes before a run of kortopi, not during one: " +
+		`insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" ` +
+		`(detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)`
+	for _, tt := range []struct {
+		cause, want string
+	}{
+		{want: key + after},
+		{
+			cause: "rewrote or truncated table m.country",
+			want: key + ", and it also rewrote or truncated table m.country after the apply began, " +
+				"so the check of the key may not have seen the rows of table m.country" + after,
+		},
+	} {
+		err := &enforcedError{
+			cause: tt.cause, key: "city_country_fkey",
+			table: declaration.TableName{Schema: "m", Name: "city"}, referenced: declaration.TableName{Schema: "m", Name: "country"}, err: write,
+		}
+		if got := err.Error(); got != tt.want {
+			t.Errorf("error:\n%s\nwant:\n%s", got, tt.want)
+		}
+		var got *pgconn.PgError
+		if !errors.As(err, &got) || got != pgErr {
+			t.Error("the error of PostgreSQL is lost")
+		}
+	}
+}

@@ -25,9 +25,10 @@ type Order struct {
 	Cycles []Cycle
 }
 
-// Cycle is a cycle of foreign keys that are not deferrable, two or more of
-// whose tables have rows to write. Their statements depend on each other in
-// both directions, so no order of them can be right for every row.
+// Cycle is a cycle of foreign keys that the database enforces and that are
+// not deferrable, two or more of whose tables have rows to write. Their
+// statements depend on each other in both directions, so no order of them
+// can be right for every row.
 type Cycle struct {
 	// Tables are the tables of the cycle, sorted.
 	Tables []declaration.TableName
@@ -84,12 +85,15 @@ func tableNames(tables []declaration.TableName) []string {
 // order works, and a reference that its rows break is the ordinary error of
 // the database.
 //
-// Keys that name a table outside tables do not affect the order.
+// Keys that name a table outside tables do not affect the order, and
+// neither do keys that the database does not enforce (ForeignKey.NotEnforced,
+// ADR-0049): the database checks nothing for such a key, so any order of its
+// tables writes their rows, and it needs no deferral and closes no cycle.
 func Arrange(tables []declaration.TableName, keys []ForeignKey, writes map[declaration.TableName]bool) Order {
 	names := slices.Clone(tables)
 	slices.SortFunc(names, compareNames)
 	names = slices.Compact(names)
-	keys = slices.Clone(keys)
+	keys = slices.DeleteFunc(slices.Clone(keys), func(k ForeignKey) bool { return k.NotEnforced })
 	slices.SortStableFunc(keys, func(a, b ForeignKey) int {
 		return cmp.Or(compareNames(a.Table, b.Table), cmp.Compare(a.Name, b.Name), compareNames(a.References, b.References))
 	})
