@@ -63,7 +63,7 @@ func (db testDB) session(t *testing.T, dir string) *Session {
 // sessionWith connects a session with cfg, and closes it when the test ends.
 func (db testDB) sessionWith(t *testing.T, cfg *pgx.ConnConfig, dir string) *Session {
 	t.Helper()
-	s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir})
+	s, err := ConnectConfig(runContext(t), cfg, Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -73,6 +73,17 @@ func (db testDB) sessionWith(t *testing.T, cfg *pgx.ConnConfig, dir string) *Ses
 		}
 	})
 	return s
+}
+
+// runContext returns the context of the run of a session that the test
+// closes in a cleanup: that of the test, but not cancelled when the test
+// ends. Go cancels the context of a test before its cleanups, and a session
+// whose run was cancelled closes as an interrupted one, which fails when the
+// server takes longer than cancelWait to roll back, as a busy machine does.
+// The tests of an interrupt cancel a context of their own.
+func runContext(t *testing.T) context.Context {
+	t.Helper()
+	return context.WithoutCancel(t.Context())
 }
 
 // writeFiles writes files into a new data directory.

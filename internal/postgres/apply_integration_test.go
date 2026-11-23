@@ -25,7 +25,7 @@ import (
 // the test ends.
 func (db testDB) applySession(t *testing.T, cfg *pgx.ConnConfig, dir string) *Session {
 	t.Helper()
-	s, err := ConnectConfig(t.Context(), cfg, Options{Dir: dir, Apply: true})
+	s, err := ConnectConfig(runContext(t), cfg, Options{Dir: dir, Apply: true})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
