@@ -98,14 +98,15 @@ func countLine(mode string, inserts, updates int) string {
 // gives every new row the values, now as the time of its transaction, the
 // same for all rows of a statement; the rows that exist keep what they hold;
 // and a plan after the apply is empty. A second apply that updates a row and
-// inserts another leaves the times of the first rows as they were. It sets
-// the environment, so it does not run in parallel with other tests.
+// inserts another leaves the times of the first rows as they were.
 func TestOnInsertCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			for _, format := range []string{"csv", "sql"} {
 				for _, mode := range []string{"insert", "upsert", "sync"} {
 					t.Run(format+"/"+mode, func(t *testing.T) {
+						t.Parallel()
 						db := srv.Database(t)
 						db.Exec(t, onInsertSchema)
 						e := connect(t, db)
@@ -205,11 +206,11 @@ func TestOnInsertCommand(t *testing.T) {
 // its column rejects is not reported. A column that the table lacks waits
 // for the schema change, or stops the plan with --no-pending, and stops an
 // apply. A role without INSERT on a column of on_insert gets the error of
-// the privilege before any write. It sets the environment, so it does not
-// run in parallel with other tests.
+// the privilege before any write.
 func TestOnInsertMistakes(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, onInsertSchema+`
 				CREATE TABLE facility.room_types (code text PRIMARY KEY, capacity integer NOT NULL);
@@ -322,10 +323,7 @@ func TestOnInsertMistakes(t *testing.T) {
 				GRANT SELECT, UPDATE ON facility.rooms TO "`+writer.User+`";
 				GRANT INSERT (name, capacity, created_at, sort_order) ON facility.rooms TO "`+writer.User+`"`)
 			good := writeFiles(t, roomsDeclaration("csv", "upsert", [2]string{"annex", "10"}, [2]string{"lobby", "20"}))
-			t.Setenv("PGPASSWORD", writer.Password)
-			conn := slices.Clone(e.conn)
-			conn[slices.Index(conn, "--user")+1] = writer.User
-			code, stdout, stderr = (&e2e{db: db, conn: conn}).command(t, "apply", "--dir", good)
+			code, stdout, stderr = connectAs(db, writer).command(t, "apply", "--dir", good)
 			checkRun(t, code, stdout, stderr, exitError, "",
 				`kortopi: an apply needs INSERT on table facility.rooms, and the role "`+writer.User+`" may not insert into its column "created_by": `+
 					"grant the role INSERT on the table\n"+
@@ -343,11 +341,11 @@ func TestOnInsertMistakes(t *testing.T) {
 // leaves the rows that an apply leaves, but for the time, which is that of
 // the script's transaction, and its comment says so. An export of a table
 // that no file declares yet leaves out the columns that on_insert names, and
-// a plan after it is empty. It sets the environment, so it does not run in
-// parallel with other tests.
+// a plan after it is empty.
 func TestOnInsertScriptAndExport(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			dir := writeFiles(t, roomsDeclaration("csv", "upsert", [2]string{"annex", "10"}, [2]string{"hall", "80"}, [2]string{"lobby", "30"}))
 
 			applied := srv.Database(t)

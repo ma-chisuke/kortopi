@@ -5,8 +5,6 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // chainSchema is the reproduction of issue 58: the rows of app.steps form a
@@ -58,11 +56,11 @@ var chainPlan = lines(
 // of the chain, each two spaces further in than the line before; it now
 // prints one line for the 299 levels that repeat the same foreign key, and
 // its summary, the plan as SQL, the limit of --max-delete, and the apply
-// count the same 300 rows as before (ADR-0050). It sets the environment, so
-// it does not run in parallel with other tests.
+// count the same 300 rows as before (ADR-0050).
 func TestPlanOfADeepCascadeCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, chainSchema)
 			e := connect(t, db)

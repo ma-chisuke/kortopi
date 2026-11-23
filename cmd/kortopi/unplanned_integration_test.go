@@ -5,11 +5,8 @@ package main
 import (
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // TestApplyUnplannedChangesCommand runs the case of issue 51 as the binary
@@ -25,11 +22,9 @@ import (
 //     apply within the limit commits, says what the trigger did, and the
 //     database holds what it said.
 func TestApplyUnplannedChangesCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
-			t.Setenv("PGPASSWORD", "")
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, `CREATE SCHEMA shop;
 				CREATE TABLE shop.categories (code text PRIMARY KEY, name text NOT NULL);
@@ -47,8 +42,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 				$$;
 				CREATE TRIGGER forget_category AFTER DELETE ON shop.categories
 					FOR EACH ROW EXECUTE FUNCTION shop.forget_category();`)
-			t.Setenv("PGPASSWORD", db.Config.Password)
-			conn := []string{"--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", db.Config.User, "--dbname", db.Name}
+			e := connect(t, db)
 			rows := func() []string {
 				var got []string
 				for _, r := range db.Query(t, `SELECT 'categories ' || string_agg(code, ' ' ORDER BY code) FROM shop.categories
@@ -73,7 +67,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 			)
 
 			without := writeFiles(t, with(declared, map[string]string{"kortopi.toml": sync}))
-			code, stdout, stderr := runTest(t, append([]string{"apply", "--dir", without, "--allow-delete"}, conn...), buildDialects(t))
+			code, stdout, stderr := runTest(t, append([]string{"apply", "--dir", without, "--allow-delete"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitError, planText,
 				"kortopi: after its first deletion, the database counted 2 deletions in table shop.category_labels for the transaction, and the plan counted 0: "+
 					"a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, "+
@@ -93,9 +87,9 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 					"which allow_unplanned_changes in kortopi.toml allows.",
 				"The database has no table shop.archive, which allow_unplanned_changes in kortopi.toml names.",
 			)
-			code, stdout, stderr = runTest(t, append([]string{"plan", "--dir", dir, "--exit-code"}, conn...), buildDialects(t))
+			code, stdout, stderr = runTest(t, append([]string{"plan", "--dir", dir, "--exit-code"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitChanges, planWith)
-			code, stdout, stderr = runTest(t, append([]string{"plan", "--dir", dir, "--format", "sql"}, conn...), buildDialects(t))
+			code, stdout, stderr = runTest(t, append([]string{"plan", "--dir", dir, "--format", "sql"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitOK, stdout)
 			if want := "-- It is the difference at the moment of the plan: 0 to insert, 0 to update, 1 to delete in 1 table.\n" +
 				"-- The deletion may also delete, update, or insert rows of shop.category_labels and shop.totals beyond what the plan shows, " +
@@ -106,7 +100,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 				t.Errorf("plan as SQL:\n%s\nwant it to hold\n%s", stdout, want)
 			}
 
-			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", dir, "--allow-delete", "--max-delete", "2"}, conn...), buildDialects(t))
+			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", dir, "--allow-delete", "--max-delete", "2"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitError, planWith,
 				"kortopi: the deletions of the apply come to 3, more than the limit of 2: 1 row of shop.categories to delete, "+
 					"and 2 deletions beyond the plan in tables that allow_unplanned_changes names, by the counts of the database (2 in shop.category_labels), "+
@@ -118,7 +112,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 				t.Errorf("rows after the apply beyond its limit: %v, want %v", got, before)
 			}
 
-			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", dir, "--allow-delete"}, conn...), buildDialects(t))
+			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", dir, "--allow-delete"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitOK, planWith+lines(
 				"",
 				"Applied: 0 inserted, 0 updated, 1 deleted.",
@@ -128,7 +122,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 			if got, want := rows(), []string{"categories books", "labels books/en", "totals 1"}; !slices.Equal(got, want) {
 				t.Errorf("rows after the apply: %v, want %v", got, want)
 			}
-			code, stdout, stderr = runTest(t, append([]string{"plan", "--dir", dir, "--exit-code"}, conn...), buildDialects(t))
+			code, stdout, stderr = runTest(t, append([]string{"plan", "--dir", dir, "--exit-code"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
 		})
 	}

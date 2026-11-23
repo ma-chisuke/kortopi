@@ -5,7 +5,6 @@ package main
 import (
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -30,10 +29,9 @@ import (
 //     commits;
 //   - a session with track_counts off stops before the first write.
 func TestApplyAfterItsWrites(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
+			t.Parallel()
 			for _, tt := range []struct {
 				name   string
 				schema string
@@ -233,15 +231,14 @@ func TestApplyAfterItsWrites(t *testing.T) {
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, tt.schema)
-					t.Setenv("PGPASSWORD", db.Config.Password)
-					t.Setenv("PGOPTIONS", tt.options)
+					e := connect(t, db).withOptions(tt.options)
 					dir := writeFiles(t, tt.files)
 					before := db.Objects(t)
-					args := []string{"apply", "--dir", dir, "--allow-delete", "--max-delete", "10",
-						"--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", db.Config.User, "--dbname", db.Name}
-					code, stdout, stderr := runTest(t, args, buildDialects(t))
+					args := append([]string{"apply", "--dir", dir, "--allow-delete", "--max-delete", "10"}, e.conn...)
+					code, stdout, stderr := runTest(t, args, e.dialects(t))
 					if got := db.Objects(t); !slices.Equal(got, before) {
 						t.Errorf("the apply left the catalogs changed:\n%s", pgtest.Difference(before, got))
 					}
@@ -278,10 +275,9 @@ func TestApplyAfterItsWrites(t *testing.T) {
 //     rows of a referencing table, which a privilege on columns does not
 //     cover: the apply stops before any write, and says what to grant.
 func TestApplyDeletesWithSelectOnTheDeclaredColumns(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, `CREATE SCHEMA m; CREATE SCHEMA t;
 				CREATE TABLE m.kind (id int PRIMARY KEY, code text NOT NULL UNIQUE, secret text);
@@ -294,8 +290,7 @@ func TestApplyDeletesWithSelectOnTheDeclaredColumns(t *testing.T) {
 			db.Exec(t, "GRANT USAGE ON SCHEMA m, t TO "+role.User+"; GRANT TEMPORARY ON DATABASE "+db.Name+" TO "+role.User+
 				"; GRANT SELECT (code), DELETE ON m.kind TO "+role.User+"; GRANT SELECT ON t.uses TO "+role.User+
 				"; GRANT SELECT (id, parent_id, name), DELETE ON m.node TO "+role.User)
-			t.Setenv("PGPASSWORD", role.Password)
-			conn := []string{"--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", role.User, "--dbname", db.Name}
+			e := connectAs(db, role)
 			rows := func() []string {
 				var got []string
 				for _, r := range db.Query(t, `SELECT 'kind ' || string_agg(code, ' ' ORDER BY code) FROM m.kind
@@ -310,7 +305,7 @@ func TestApplyDeletesWithSelectOnTheDeclaredColumns(t *testing.T) {
 				"kortopi.toml": "[tables.\"m.kind\"]\nkey = [\"code\"]\nmode = \"sync\"\n",
 				"m/kind.csv":   "code\nkeep\n",
 			})
-			code, stdout, stderr := runTest(t, append([]string{"apply", "--dir", kinds, "--allow-delete"}, conn...), buildDialects(t))
+			code, stdout, stderr := runTest(t, append([]string{"apply", "--dir", kinds, "--allow-delete"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitOK, lines(
 				"m.kind (sync, key: code)",
 				"  - code=gone",
@@ -332,7 +327,7 @@ func TestApplyDeletesWithSelectOnTheDeclaredColumns(t *testing.T) {
 				"kortopi.toml": "[tables.\"m.node\"]\nmode = \"sync\"\n",
 				"m/node.csv":   "id,parent_id,name\n1,,root\n",
 			})
-			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", nodes, "--allow-delete"}, conn...), buildDialects(t))
+			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", nodes, "--allow-delete"}, e.conn...), e.dialects(t))
 			checkRun(t, code, stdout, stderr, exitError, lines(
 				"m.node (sync, key: id)",
 				"  - id=2",

@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // postalSchema and postalFiles are the reproduction of issue 45: the
@@ -32,11 +30,11 @@ var postalFiles = map[string]string{
 // error that says what happened, where it used to see the table as empty: a
 // plan that showed every row as missing with status 2, and an apply that
 // failed on a duplicate key. Nothing changes, and a plan afterwards finds no
-// difference (ADR-0047). It sets the environment, so it does not run in
-// parallel with other tests.
+// difference (ADR-0047).
 func TestTableRewrittenDuringARunCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			for _, tt := range []struct {
 				command string
 				want    string
@@ -59,6 +57,7 @@ func TestTableRewrittenDuringARunCommand(t *testing.T) {
 				},
 			} {
 				t.Run(tt.command, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, postalSchema)
 					e := connect(t, db)
@@ -115,8 +114,9 @@ func TestTableRewrittenDuringARunCommand(t *testing.T) {
 // and does not tell to declare the referenced row, which the table holds.
 // Nothing changes, and the apply passes when it runs again (ADR-0047).
 func TestReferencedTableRewrittenDuringAnApplyCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, `
 				CREATE SCHEMA m;

@@ -5,8 +5,6 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // enforcedSchema is the reproduction of issue 57: app.members references
@@ -58,11 +56,11 @@ var enforcedPlan = lines(
 // where it used to refuse the two tables as a cycle that no order can write
 // (ADR-0049). On PostgreSQL 15 to 17, which have no such keys, the same
 // tables with a key that PostgreSQL enforces are refused as before, and
-// with the same error. It sets the environment, so it does not run in
-// parallel with other tests.
+// with the same error.
 func TestApplyLeavesOutKeysNotEnforcedCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			e := connect(t, db)
 			dir := writeFiles(t, enforcedFiles)

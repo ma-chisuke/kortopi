@@ -5,10 +5,11 @@ package main
 import (
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
@@ -68,22 +69,21 @@ var effectRowsBefore = []string{
 	"node 5", "kind 2", "facts 31 0", "status 2", "task 1=old",
 }
 
-// effectE2E is a database of effectSchema and the flags that name it.
+// effectE2E is a database of effectSchema.
 type effectE2E struct {
-	db   *pgtest.DB
-	conn []string
+	db *pgtest.DB
 }
 
-// run runs kortopi as the user of cfg's flags, fails the test when the run
-// left an object in the catalogs (ADR-0010), and returns what it printed and
-// the counts of effectRows after it.
-func (e *effectE2E) run(t *testing.T, user string, args ...string) (code int, stdout, stderr string, rows []string) {
+// run runs kortopi as the role of cfg, what db.Role returns or db.Config
+// for the superuser, fails the test when the run left an object in the
+// catalogs (ADR-0010), and returns what it printed and the counts of
+// effectRows after it.
+func (e *effectE2E) run(t *testing.T, cfg *pgx.ConnConfig, args ...string) (code int, stdout, stderr string, rows []string) {
 	t.Helper()
 	before := e.db.Objects(t)
-	conn := slices.Clone(e.conn)
-	conn[len(conn)-3] = user
-	args = append(args, conn...)
-	code, stdout, stderr = runTest(t, args, buildDialects(t))
+	as := connectAs(e.db, cfg)
+	args = append(args, as.conn...)
+	code, stdout, stderr = runTest(t, args, as.dialects(t))
 	if got := e.db.Objects(t); !slices.Equal(got, before) {
 		t.Errorf("kortopi %s left the catalogs changed:\n%s", strings.Join(args, " "), pgtest.Difference(before, got))
 	}
@@ -98,8 +98,7 @@ func newEffectE2E(t *testing.T, srv *pgtest.Server) *effectE2E {
 	t.Helper()
 	db := srv.Database(t)
 	db.Exec(t, effectSchema)
-	port := strconv.Itoa(int(db.Config.Port))
-	return &effectE2E{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+	return &effectE2E{db: db}
 }
 
 // checkCounts fails the test unless the counts of effectRows are want.
@@ -133,12 +132,11 @@ func replaced(rows []string, changes ...string) []string {
 // apply, the rows that are gone or changed, counted through a plain
 // connection, are the rows that the output announced.
 func TestApplyEffectOfDeletions(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			e := newEffectE2E(t, srv)
 			db := e.db
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
 			owner := db.Role(t, "inventory")
 			db.Exec(t, "GRANT USAGE ON SCHEMA m TO "+owner.User+"; GRANT SELECT, DELETE ON m.kind TO "+owner.User+
 				"; GRANT TEMPORARY ON DATABASE "+db.Name+" TO "+owner.User)
@@ -161,8 +159,7 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 				"Plan: 0 to insert, 0 to update, 1 to delete in 1 table.",
 				"Through foreign keys, the deletion also changes 30 rows.",
 			)
-			t.Setenv("PGPASSWORD", db.Config.Password)
-			code, stdout, stderr, rows := e.run(t, db.Config.User, "apply", "--dir", kinds, "--allow-delete", "--max-delete", "1")
+			code, stdout, stderr, rows := e.run(t, db.Config, "apply", "--dir", kinds, "--allow-delete", "--max-delete", "1")
 			checkRun(t, code, stdout, stderr, exitError, setNullPlan,
 				"kortopi: the apply would delete or change 31 rows, more than the limit of 1: 1 row of m.kind to delete, "+
 					"and 30 rows that ON DELETE SET NULL or SET DEFAULT changes (30 rows of b.facts): "+
@@ -172,8 +169,7 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 
 			// A role that may not read b.facts cannot know what the deletion
 			// does there, so the apply stops before it writes.
-			t.Setenv("PGPASSWORD", owner.Password)
-			code, stdout, stderr, rows = e.run(t, owner.User, "apply", "--dir", kinds, "--allow-delete")
+			code, stdout, stderr, rows = e.run(t, owner, "apply", "--dir", kinds, "--allow-delete")
 			checkRun(t, code, stdout, stderr, exitError, kindBlock+lines(
 				"    Rows of b.facts (kind) may reference it through facts_kind_fkey, ON DELETE SET NULL, but the role may not use schema b, so what the deletion does to them is not known.",
 				"",
@@ -188,8 +184,7 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 
 			// Within the limit, the deletion changes the 30 rows that the
 			// output announces, and no other.
-			t.Setenv("PGPASSWORD", db.Config.Password)
-			code, stdout, stderr, rows = e.run(t, db.Config.User, "apply", "--dir", kinds, "--allow-delete", "--max-delete", "31")
+			code, stdout, stderr, rows = e.run(t, db.Config, "apply", "--dir", kinds, "--allow-delete", "--max-delete", "31")
 			checkRun(t, code, stdout, stderr, exitOK, setNullPlan+lines("",
 				"Applied: 0 inserted, 0 updated, 1 deleted.",
 				"Through foreign keys, the deletion also changed 30 rows.",
@@ -221,7 +216,7 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 				"Through foreign keys, the deletions also delete 52001 rows.",
 			)
 			afterSetNull := replaced(effectRowsBefore, "kind 1", "facts 31 30")
-			code, stdout, stderr, rows = e.run(t, db.Config.User, "apply", "--dir", plans, "--allow-delete")
+			code, stdout, stderr, rows = e.run(t, db.Config, "apply", "--dir", plans, "--allow-delete")
 			checkRun(t, code, stdout, stderr, exitError, cascadePlan,
 				"kortopi: the apply would delete 52004 rows, more than the limit of 100: 1 row of m.plan and 2 rows of m.plan_feature to delete, "+
 					"and 52001 rows that ON DELETE CASCADE deletes with them (2000 rows of t.line_note, 50000 rows of t.order_line, and 1 row of t.orders): "+
@@ -230,7 +225,7 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 			checkCounts(t, rows, afterSetNull)
 
 			// The plan as SQL holds the same block as comments.
-			code, stdout, stderr, _ = e.run(t, db.Config.User, "plan", "--dir", plans, "--format", "sql")
+			code, stdout, stderr, _ = e.run(t, db.Config, "plan", "--dir", plans, "--format", "sql")
 			checkRun(t, code, stdout, stderr, exitOK, stdout)
 			for _, want := range []string{
 				"-- Through foreign keys, the deletions also delete 52001 rows.\n",
@@ -246,7 +241,7 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 			}
 
 			start := time.Now()
-			code, stdout, stderr, rows = e.run(t, db.Config.User, "apply", "--dir", plans, "--allow-delete", "--max-delete", "52004")
+			code, stdout, stderr, rows = e.run(t, db.Config, "apply", "--dir", plans, "--allow-delete", "--max-delete", "52004")
 			t.Logf("the apply that deletes 52004 rows took %v", time.Since(start))
 			checkRun(t, code, stdout, stderr, exitOK, cascadePlan+lines("",
 				"Applied: 0 inserted, 0 updated, 3 deleted.",
@@ -262,13 +257,11 @@ func TestApplyEffectOfDeletions(t *testing.T) {
 // reference that the plan moves to a row that stays is no reason for the
 // deletion to fail.
 func TestDeclaredRowsInTheWay(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			e := newEffectE2E(t, srv)
 			db := e.db
-			t.Setenv("PGPASSWORD", db.Config.Password)
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
 			dir := writeFiles(t, map[string]string{
 				"kortopi.toml": "[tables.\"m.plan\"]\nkey = [\"code\"]\nmode = \"sync\"\n" +
 					"[tables.\"m.plan_feature\"]\nmode = \"sync\"\n[tables.\"m.node\"]\nmode = \"sync\"\n",
@@ -283,11 +276,11 @@ func TestDeclaredRowsInTheWay(t *testing.T) {
 				`through foreign key "plan_feature_plan_id_fkey" (plan_id) to table m.plan, so ON DELETE CASCADE would delete them too, ` +
 				"and the declaration contradicts itself: id=2 references code=legacy and id=3 references code=legacy: " +
 				"remove these rows from the declaration too, or point them at rows that stay\n"
-			code, stdout, stderr, rows := e.run(t, db.Config.User, "plan", "--dir", dir)
+			code, stdout, stderr, rows := e.run(t, db.Config, "plan", "--dir", dir)
 			checkRun(t, code, stdout, stderr, exitError, "", mistakes)
 			checkCounts(t, rows, effectRowsBefore)
 			for _, args := range [][]string{{"apply", "--dir", dir}, {"apply", "--dir", dir, "--allow-delete", "--max-delete", "100000"}} {
-				code, stdout, stderr, rows = e.run(t, db.Config.User, args...)
+				code, stdout, stderr, rows = e.run(t, db.Config, args...)
 				checkRun(t, code, stdout, stderr, exitError, "", mistakes+"kortopi: nothing was changed\n")
 				checkCounts(t, rows, effectRowsBefore)
 			}
@@ -299,7 +292,7 @@ func TestDeclaredRowsInTheWay(t *testing.T) {
 				"m/status.csv": "code\nopen\n",
 				"m/task.csv":   "id,status\n1,open\n",
 			})
-			code, stdout, stderr, rows = e.run(t, db.Config.User, "apply", "--dir", moved, "--allow-delete")
+			code, stdout, stderr, rows = e.run(t, db.Config, "apply", "--dir", moved, "--allow-delete")
 			checkRun(t, code, stdout, stderr, exitOK, lines(
 				"m.status (sync, key: code)",
 				"  - code=old",

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,11 +12,35 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ma-chisuke/kortopi/internal/dialect"
+	"github.com/ma-chisuke/kortopi/internal/postgres"
 	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 func TestMain(m *testing.M) {
 	os.Exit(pgtest.Main(m))
+}
+
+// eachServer marks a test as parallel and returns the servers, so that the
+// test runs a parallel subtest on each, with a database of its own:
+//
+//	for _, srv := range eachServer(t) {
+//		t.Run(srv.Name, func(t *testing.T) {
+//			t.Parallel()
+//			db := srv.Database(t)
+//			e := connect(t, db)
+//			...
+//		})
+//	}
+//
+// A test in parallel leaves the environment of the process alone: its
+// command takes the settings of the connection from its e2e (ADR-0052).
+func eachServer(t *testing.T) []*pgtest.Server {
+	t.Helper()
+	t.Parallel()
+	return pgtest.Servers()
 }
 
 // e2eSchema is the schema and the stored rows of the tests of the command.
@@ -98,6 +123,70 @@ type e2e struct {
 	db *pgtest.DB
 	// conn holds the flags that name the database.
 	conn []string
+	// settings are the settings of the connection that a user gives in the
+	// environment variables of libpq, by the keywords of libpq: password for
+	// PGPASSWORD, sslmode for PGSSLMODE, connect_timeout for
+	// PGCONNECT_TIMEOUT, and options for PGOPTIONS. The command takes them
+	// through its dialect (postgres.WithSettings), so that the test leaves
+	// the environment of the process alone, and runs in parallel with other
+	// tests (ADR-0052). Without them, the command reads the environment, as
+	// the binary does.
+	settings map[string]string
+}
+
+// connect returns the e2e of a database, whose command connects as the
+// superuser.
+func connect(t *testing.T, db *pgtest.DB) *e2e {
+	t.Helper()
+	return connectAs(db, db.Config)
+}
+
+// connectAs returns the e2e of a database, whose command connects as the
+// role of cfg: what db.Role returns, or db.Config for the superuser.
+func connectAs(db *pgtest.DB, cfg *pgx.ConnConfig) *e2e {
+	port := strconv.Itoa(int(db.Config.Port))
+	return &e2e{
+		db:       db,
+		conn:     []string{"--host", db.Config.Host, "--port", port, "--user", cfg.User, "--dbname", db.Name},
+		settings: map[string]string{"password": cfg.Password, "sslmode": "disable", "connect_timeout": "10"},
+	}
+}
+
+// withOptions returns a copy of e whose sessions get options, the settings
+// of the server that PGOPTIONS gives, such as -c lock_timeout=20s.
+func (e *e2e) withOptions(options string) *e2e {
+	c := *e
+	c.settings = maps.Clone(e.settings)
+	c.settings["options"] = options
+	return &c
+}
+
+// connectFromEnvironment returns the e2e of a database, whose command
+// connects as the superuser with the password and the other settings in the
+// environment of the process, as the binary does. The test that calls it
+// sets the environment, so it does not run in parallel with other tests.
+func connectFromEnvironment(t *testing.T, db *pgtest.DB) *e2e {
+	t.Helper()
+	e := connect(t, db)
+	t.Setenv("PGPASSWORD", db.Config.Password)
+	t.Setenv("PGSSLMODE", "disable")
+	t.Setenv("PGCONNECT_TIMEOUT", "10")
+	e.settings = nil
+	return e
+}
+
+// dialects returns the dialects of the command: PostgreSQL with the settings
+// of e, or, without them, the dialects that main builds.
+func (e *e2e) dialects(t *testing.T) *dialect.Registry {
+	t.Helper()
+	if e.settings == nil {
+		return buildDialects(t)
+	}
+	r, err := dialect.NewRegistry(postgres.WithSettings(e.settings))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // plan runs `kortopi plan` with args and the flags of the connection, and
@@ -108,7 +197,7 @@ func (e *e2e) plan(t *testing.T, args ...string) (code int, stdout, stderr strin
 	objects := e.db.Objects(t)
 	rows := e.db.Query(t, e2eRows)
 	args = append(append([]string{"plan"}, args...), e.conn...)
-	code, stdout, stderr = runTest(t, args, buildDialects(t))
+	code, stdout, stderr = runTest(t, args, e.dialects(t))
 	if got := e.db.Objects(t); !slices.Equal(got, objects) {
 		t.Errorf("kortopi %s left the catalogs changed:\n%s", strings.Join(args, " "), pgtest.Difference(objects, got))
 	}
@@ -139,18 +228,14 @@ func checkRun(t *testing.T, code int, stdout, stderr string, wantCode int, wantS
 }
 
 // TestPlanCommand runs `kortopi plan` as the binary does, against each
-// version. The command reads the password from the environment, so the test
-// sets it, and does not run in parallel with other tests.
+// version.
 func TestPlanCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, e2eSchema)
-			t.Setenv("PGPASSWORD", db.Config.Password)
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
-			port := strconv.Itoa(int(db.Config.Port))
-			e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+			e := connect(t, db)
 			dir := writeFiles(t, e2eFiles)
 
 			code, stdout, stderr := e.plan(t, "--dir", dir)
@@ -231,11 +316,11 @@ func TestPlanCommand(t *testing.T) {
 // version: a misspelled column and a table that the database lacks, in CSV
 // files and in a SQL file, are errors in both formats, and a declaration
 // without such names gives the output and the exit status of a plan without
-// the flag. It sets the environment, so it does not run in parallel with
-// other tests.
+// the flag.
 func TestPlanCommandNoPending(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, e2eSchema)
 			e := connect(t, db)
@@ -339,7 +424,10 @@ func TestPlanCommandNoPending(t *testing.T) {
 	}
 }
 
-// A connection that fails gives a clear error, and nothing on stdout.
+// A connection that fails gives a clear error, and nothing on stdout. The
+// command reads the settings of the connection from the environment of the
+// process, as the binary does, so the test sets it, and does not run in
+// parallel with other tests.
 func TestPlanCommandConnectionErrors(t *testing.T) {
 	srv := pgtest.Servers()[0]
 	db := srv.Database(t)

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // sequenceSchema holds the tables of issue 29: an identity column and a
@@ -48,11 +46,11 @@ const nextIDs = `INSERT INTO billing.tax_rates (name, rate) VALUES ('special', 0
 // version (ADR-0045): the plan shows where each sequence would move, the
 // apply moves it, and the next insert of the application gets the ID 4. The
 // plan as SQL, run through a plain connection, does the same, and moves no
-// sequence back when it runs after the application took more values. It
-// sets the environment, so it does not run in parallel with other tests.
+// sequence back when it runs after the application took more values.
 func TestSequencesCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			dir := writeFiles(t, sequenceFiles)
 			db := srv.Database(t)
 			db.Exec(t, sequenceSchema)
