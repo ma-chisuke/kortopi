@@ -557,7 +557,7 @@ Each line of the block names the referencing table, its columns, and the foreign
 | `SET DEFAULT` | the deletion sets the columns of these rows to their defaults |
 | `NO ACTION`, `RESTRICT` | the deletion fails while these rows reference them |
 
-- The rows that a cascade deletes are followed in turn, at every depth, through a table that references itself and through cycles. A line of level n+1 stands two spaces further in, under the first line of level n that deletes rows of the table that it references, and counts the rows that reference any of those rows, also rows that another line of level n deleted.
+- The rows that a cascade deletes are followed in turn, at every depth, through a table that references itself and through cycles. Each step of this walk, one foreign key at one level, counts the rows that reference rows that the level before deleted in the table that its key references or in a partition of it, whichever step deleted them. It stands two spaces further in than the first step of the level before that deleted such rows, as the walk tells, also when the key is on a partition or references one, and so names another table than that step. `that row of` and `those rows of` name the table that the key references, by the number of such rows.
 - A foreign key that the walk follows again at a deeper level, through a table that references itself or through a cycle of foreign keys, adds no line there: its rows count on the line above where the key first came, which gives the number of its levels. What references the rows of all those levels counts on the lines under that line, one for each key. Such a line, and a line under it, say that the rows reference rows of the table that the deletion deletes, since different levels delete them. A chain of 300 rows, each after another row of the same table, takes two lines:
 
   ```text
@@ -570,7 +570,7 @@ Each line of the block names the referencing table, its columns, and the foreign
   ```
 
 - A table that the deletions reach through several foreign keys gets a line for each key, and a key that comes under two lines gets a line under each.
-- A line stands five levels in at most. A line of a deeper level stands at the fifth and says the level at which it starts, as `at level 7`, or `at 3 levels from level 8` for a line of several levels.
+- A line stands five places in at most: a line further in stands at the fifth. Its place is otherwise the level at which it starts, but under a line that sums up levels, which puts it at fewer places. A line says the level at which it starts whenever its place does not show it: `at level 6` for a line of one step, or `at 3 levels from level 8` for a line of several.
 - `SET NULL` and `SET DEFAULT` name the columns that they set, also the columns of a column list of PostgreSQL 15 and later. A changed row is not followed further.
 - Every foreign key counts: from any table, declared or not, in any schema, from the table itself, to one of its partitions, or to a partitioned table above it. A count joins on the columns of the foreign key, with its own operators and collations, not on the match key. A declared table holds the rows of a referencing table that are its rows: the table itself, a partition of it, or a partitioned table above it, so a foreign key defined on a partitioned table and a declared partition, or the reverse, count the declared rows as declared.
 - A foreign key `NOT ENFORCED`, which PostgreSQL 18 allows, does nothing at a deletion: PostgreSQL neither runs its action nor checks it, so the block leaves it out.
