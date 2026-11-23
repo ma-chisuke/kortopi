@@ -36,7 +36,7 @@ concurrency:
 env:
   # The version of mise itself. mise.toml and mise.lock pin every other tool.
   # renovate: datasource=github-releases depName=jdx/mise extractVersion=^v(?<version>.+)$
-  MISE_VERSION: 2026.11.8
+  MISE_VERSION: 2026.11.10
 
 jobs:
   gate:
