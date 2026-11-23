@@ -558,6 +558,19 @@ Each line of the block names the referencing table, its columns, and the foreign
 | `NO ACTION`, `RESTRICT` | the deletion fails while these rows reference them |
 
 - The rows that a cascade deletes are followed in turn, at every depth, through a table that references itself and through cycles. A line of level n+1 stands two spaces further in, under the first line of level n that deletes rows of the table that it references, and counts the rows that reference any of those rows, also rows that another line of level n deleted.
+- A foreign key that the walk follows again at a deeper level, through a table that references itself or through a cycle of foreign keys, adds no line there: its rows count on the line above where the key first came, which gives the number of its levels. What references the rows of all those levels counts on the lines under that line, one for each key. Such a line, and a line under it, say that the rows reference rows of the table that the deletion deletes, since different levels delete them. A chain of 300 rows, each after another row of the same table, takes two lines:
+
+  ```text
+  app.plans (sync, key: code)
+    - code=legacy
+    0 to insert, 0 to update, 1 to delete
+    Through foreign keys, the deletion of this row also reaches other rows:
+      1 row of app.steps (plan_code) references it through steps_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+        299 rows of app.steps (after_id) reference rows of app.steps that the deletion deletes, through steps_after_id_fkey, ON DELETE CASCADE, at 299 levels, so the deletion deletes these rows too.
+  ```
+
+- A table that the deletions reach through several foreign keys gets a line for each key, and a key that comes under two lines gets a line under each.
+- A line stands five levels in at most. A line of a deeper level stands at the fifth and says the level at which it starts, as `at level 7`, or `at 3 levels from level 8` for a line of several levels.
 - `SET NULL` and `SET DEFAULT` name the columns that they set, also the columns of a column list of PostgreSQL 15 and later. A changed row is not followed further.
 - Every foreign key counts: from any table, declared or not, in any schema, from the table itself, to one of its partitions, or to a partitioned table above it. A count joins on the columns of the foreign key, with its own operators and collations, not on the match key. A declared table holds the rows of a referencing table that are its rows: the table itself, a partition of it, or a partitioned table above it, so a foreign key defined on a partitioned table and a declared partition, or the reverse, count the declared rows as declared.
 - A foreign key `NOT ENFORCED`, which PostgreSQL 18 allows, does nothing at a deletion: PostgreSQL neither runs its action nor checks it, so the block leaves it out.
@@ -574,7 +587,7 @@ Each line of the block names the referencing table, its columns, and the foreign
 
 - When `SET NULL` or `SET DEFAULT` changes a column that another foreign key references, the line says that what the action `ON UPDATE` of that key does is not known. A stored generated column that reads a column that the action sets changes with it, so a key that references the generated column counts too.
 
-After the line `Plan:`, one line for each fact sums up all tables: the rows that the deletions also delete and change, the rows that make them fail, and the foreign keys whose effect is not known, each key once:
+After the line `Plan:`, one line for each fact sums up all tables: the rows that the deletions also delete and change, the rows that make them fail, and the foreign keys whose effect is not known, each key once. The rows of the lines of the blocks add up to these numbers:
 
 ```text
 Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
@@ -830,4 +843,4 @@ fi
 The `|| status=$?` keeps a shell with `set -e` from stopping on status 2, and a `grep` that finds no line does not stop it either, because it is the condition of the `if`.
 A plan that fails prints its error on standard error, which the job prints to its log as it comes.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), and [ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md), [ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.md), and [ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.md).
