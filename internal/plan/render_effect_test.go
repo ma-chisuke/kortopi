@@ -164,6 +164,27 @@ var effectCases = []effectCase{
 		totals: Totals{Deleted: 3, Changed: 3, Unknown: 2},
 	},
 	{
+		// A chain of three tables, a key from the third to itself at two
+		// levels, and five more tables each through its own key: the line
+		// under the line of two levels stands at the fifth place and starts
+		// at level 6, and the lines under it stand there too, so each says
+		// its level.
+		name: "effect_levels_under_a_line_of_several_levels",
+		plan: withEffect("m", "root", []string{"old"},
+			step(1, name("m", "t1"), "t1_root_fkey", name("m", "root"), "CASCADE", 1, "root"),
+			step(2, name("m", "t2"), "t2_t1_fkey", name("m", "t1"), "CASCADE", 1, "t1"),
+			step(3, name("m", "t3"), "t3_t2_fkey", name("m", "t2"), "CASCADE", 1, "t2"),
+			step(4, name("m", "t3"), "t3_up_fkey", name("m", "t3"), "CASCADE", 1, "up"),
+			step(5, name("m", "t3"), "t3_up_fkey", name("m", "t3"), "CASCADE", 1, "up"),
+			step(6, name("m", "t4"), "t4_t3_fkey", name("m", "t3"), "CASCADE", 1, "t3"),
+			step(7, name("m", "t5"), "t5_t4_fkey", name("m", "t4"), "CASCADE", 1, "t4"),
+			step(8, name("m", "t6"), "t6_t5_fkey", name("m", "t5"), "CASCADE", 1, "t5"),
+			step(9, name("m", "t7"), "t7_t6_fkey", name("m", "t6"), "CASCADE", 1, "t6"),
+			step(10, name("m", "t8"), "t8_t7_fkey", name("m", "t7"), "CASCADE", 1, "t7"),
+		),
+		totals: Totals{Deleted: 10},
+	},
+	{
 		// app.steps is partitioned, and its partition app.steps_a holds a
 		// key to app.steps along which a chain of rows of app.steps_a
 		// cascades: each step references rows of app.steps that the step of

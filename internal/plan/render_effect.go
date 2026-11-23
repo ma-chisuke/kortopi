@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// MaxEffectDepth is the deepest level at which a line of the block of the
-// effect of the deletions stands: a line of a deeper level stands there, and
-// names its level (ADR-0050).
+// MaxEffectDepth is the deepest place at which a line of the block of the
+// effect of the deletions stands: a line further in stands there (ADR-0050).
 const MaxEffectDepth = 5
 
 // EffectLines returns the block of what the deletions of a table also do
@@ -18,8 +17,9 @@ const MaxEffectDepth = 5
 // and a sentence for each line of effectTree, two spaces further in than the
 // line that it stands under, MaxEffectDepth places in at most. A line sums up
 // the steps that repeat its foreign key at deeper levels, so every row of
-// every step counts on exactly one line. It returns nothing for a table whose
-// deletions reach no row. A plan prints the lines after the
+// every step counts on exactly one line. A line says the level of the walk at
+// which it starts whenever its place does not show it. It returns nothing for
+// a table whose deletions reach no row. A plan prints the lines after the
 // counts of the table, apart from its rows to delete, and the plan as SQL as
 // comments before the deletions of the table.
 func EffectLines(t *Table) []string {
@@ -194,8 +194,8 @@ func treeOrder(steps []Step) (order, parents []int) {
 // (Step.Referenced). A line of several steps, and a line under one,
 // references rows of the table that the deletion deletes: its steps
 // reference the rows that different levels delete. A line of several steps
-// gives the number of its levels, and a line deeper than MaxEffectDepth its
-// level.
+// gives the number of its levels, and a line whose place, MaxEffectDepth at
+// most, is not the level of the walk at which it starts gives that level.
 func (l *effectLine) sentence(steps []Step, tree []effectLine, deletes int) string {
 	s := &steps[l.steps[0]]
 	rows := l.rows(steps)
@@ -235,15 +235,16 @@ func (l *effectLine) sentence(steps []Step, tree []effectLine, deletes int) stri
 	case s.Level > 1:
 		target = "those rows of " + FormatTable(s.References)
 	}
-	// levels says at how many levels the line counts rows, and from which
-	// level when it stands deeper than the block shows.
+	// levels says at how many levels the line counts rows, and at which
+	// level it starts when its place does not show it: under a line of
+	// several levels, or beyond MaxEffectDepth.
 	levels := ""
-	switch deep := l.depth > MaxEffectDepth; {
-	case len(l.steps) > 1 && deep:
+	switch shown := min(l.depth, MaxEffectDepth) == s.Level; {
+	case len(l.steps) > 1 && !shown:
 		levels = ", at " + strconv.Itoa(len(l.steps)) + " levels from level " + strconv.Itoa(s.Level)
 	case len(l.steps) > 1:
 		levels = ", at " + strconv.Itoa(len(l.steps)) + " levels"
-	case deep:
+	case !shown:
 		levels = ", at level " + strconv.Itoa(s.Level)
 	}
 	sentence := subject + " " + verb + " " + target + " through " + FormatName(s.Constraint) + ", ON DELETE " + s.OnDelete + levels
