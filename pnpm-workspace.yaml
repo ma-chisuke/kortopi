@@ -17,4 +17,4 @@ overrides:
   # textlint 15.8.0 requires glob 13, which has CVE-2026-118773; glob 13 in
   # turn requires minimatch 10, which has CVE-2026-118764.
   glob: 14.0.6
-  minimatch@10: 11.0.8
+  minimatch@10: 11.0.9
