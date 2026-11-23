@@ -315,7 +315,9 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 
 - 自分自身を参照するテーブルには、何も要らない。PostgreSQL は、そのキーを各文の終わりに検査する。
 - 2つ以上のテーブルが循環して互いを参照し、そのうち2つ以上に書く行があるときは、kortopi は循環の外部キーのうち `DEFERRABLE` なものをコミットまで遅らせる。遅らせられるキーのない循環は、そのとき、どの書き込みよりも前のエラーになる。エラーはテーブルとキーを挙げ、どれか1つを `DEFERRABLE` と宣言するよう伝える。
-- キーを遅らせる `SET CONSTRAINTS` は、制約をスキーマと名前で指す。そのスキーマの別のテーブルに、同じ名前で遅らせられない制約があれば、apply は止まり、どちらかの名前を変えるよう求める。
+- キーを遅らせる `SET CONSTRAINTS` は、制約をスキーマと名前で指す。そのスキーマの別のテーブルに、同じ名前で遅らせられない制約があれば、apply は止まり、どちらかの名前を変えるよう求める。`NOT ENFORCED` の制約も数える。`SET CONSTRAINTS` はそれも断るからである。
+- PostgreSQL 18 が許す `NOT ENFORCED` の外部キーには、トリガーがない。PostgreSQL はそれを検査せず、その動作も働かせない。そのため、そのキーはテーブルの順番を決めず、`DEFERRABLE` であっても遅らせず、循環を作らない。一方は PostgreSQL が検査するキーで、もう一方は `NOT ENFORCED` のキーで互いを参照する2つのテーブルは、前者のキーの順に書き、何も要らない。
+- apply の実行中に、ほかのセッションがそうしたキーを検査するキーに変えたとき、apply が参照する側のテーブルを読んだあとなら、その変更は apply を待ち、そのあとで apply がコミットした行を検査する。その読み取りより前なら、apply のスナップショットのカタログがキーをまだ `NOT ENFORCED` と見せている間に、変更がコミットしうる。そのとき PostgreSQL は書き込みでキーを検査し、apply があとで書く行を参照する行は、[存在しない行を参照する行](#存在しない行を参照する行)のエラーで失敗し、何も変わらない。次の apply はそのキーでテーブルを順序づけるか、循環を断る。そうした変更は、apply の実行中ではなく、その前にする（[デプロイでの使い方](#デプロイでの使い方)）。
 - `--schema` を使うと、実行の外のテーブルは順番に影響しない。行がそうしたテーブルへの外部キーを破れば、PostgreSQL のエラーがテーブルと制約を示す。
 
 ## 削除の安全策
@@ -738,6 +740,8 @@ apply はこの誤りを計画を出す前に報告し、`kortopi plan` も報�
 kortopi: tables a.a and a.b reference each other through foreign keys that are not deferrable, "a_b" of a.a and "b_a" of a.b, and tables a.a and a.b have rows to write, so no order of these tables can write their changes: declare one of these foreign keys DEFERRABLE
 ```
 
+エラーが挙げるキーは、PostgreSQL が検査するキーである。`NOT ENFORCED` の外部キーは循環を作らない（[外部キーと循環](#外部キーと循環)）。
+
 ### コミットで失敗する遅らせた外部キー
 
 ```text
@@ -960,6 +964,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:597463e355887f49f74ee288a3475cb3b0c14ae46de912ad832218c004243918 -->
+<!-- i18n-source: apply.md sha256:8735235c7606569dea613dfbdbefd6a48e6b454eeb8b93f71abb6a768772952c -->
