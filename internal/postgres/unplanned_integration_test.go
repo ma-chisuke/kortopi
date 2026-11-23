@@ -164,6 +164,27 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					wantErr: "after its first deletion, the apply deleted 2 rows of table shop.log, and the plan counted 0" + beyond + "shop.log, or, ",
 				},
 				{
+					// SET NULL of the partition key moves a row to another
+					// partition, as a deletion and an insertion, which the counts
+					// cannot tell from the work of a trigger: the table is held to
+					// the plan, and the error says why.
+					name: "a named table whose rows SET NULL moves between partitions",
+					setUp: `CREATE TABLE shop.shelves (id int, category text REFERENCES shop.categories ON DELETE SET NULL) PARTITION BY LIST (category);
+						CREATE TABLE shop.shelves_books PARTITION OF shop.shelves FOR VALUES IN ('books');
+						CREATE TABLE shop.shelves_games PARTITION OF shop.shelves FOR VALUES IN ('games');
+						CREATE TABLE shop.shelves_none PARTITION OF shop.shelves DEFAULT;
+						INSERT INTO shop.shelves VALUES (1, 'books'), (2, 'games');
+						CREATE FUNCTION shop.open_shelf() RETURNS trigger LANGUAGE plpgsql AS $$
+						BEGIN INSERT INTO shop.shelves VALUES (99, 'books'); RETURN OLD; END $$;
+						CREATE TRIGGER open_shelf AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.open_shelf();`,
+					unplanned: []string{"shop.shelves"},
+					wantErr: "after its first deletion, the apply deleted 1 row of table shop.shelves and inserted 2, and the plan counted 0 deleted, " +
+						"and one more deleted and one inserted for each row that SET NULL or SET DEFAULT moves to another partition" + beyond +
+						"shop.shelves: allow_unplanned_changes of {settings} names table shop.shelves, but SET NULL or SET DEFAULT of the deletions " +
+						"can move its rows to another partition, which its counts cannot tell from a row that a trigger deletes and another that it inserts, " +
+						"so the apply holds it to the plan",
+				},
+				{
 					// Rows that the plan counted, and that a trigger keeps, stop
 					// the apply in a named table too: that is not beyond the
 					// plan.
