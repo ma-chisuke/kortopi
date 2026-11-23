@@ -386,10 +386,10 @@ kortopi: no file was written
 - `REPEATABLE READ` かつ `READ ONLY` の1つのトランザクションで動く。そのため、どのテーブルも1つのスナップショットから読む。トランザクションは最後にロールバックする。
 - 計画と同じ設定を固定する。
 - ふつうのテーブルは計画と同じく `ONLY` を付けて読み、パーティションテーブルは全体を読む。
-- ロックは取らない。
+- 自分のロックは取らない。読むたびに、テーブルを読むどの文も取るロックを取り、書き出しが終わるまで持つ（[実行中のスキーマの変更](plan.ja.md#実行中のスキーマの変更)）。
 
 ロールには、各テーブルのスキーマに対する `USAGE` と、書く列と行を並べる列に対する `SELECT` が要る。
-`TEMPORARY` も書き込みのできるセッションも要らない。そのため、書き出しは読み取り専用のトランザクションでも動き、スタンバイでも動くと見込まれる。ただし、スタンバイではテストしていない。
+`TEMPORARY` も書き込みのできるセッションも要らない。そのため、書き出しは読み取り専用のトランザクションでも、スタンバイでも動く（[スタンバイからの書き出し](#スタンバイからの書き出し)）。
 
 ```sql
 GRANT USAGE ON SCHEMA facility TO reader;
@@ -403,6 +403,39 @@ kortopi: an export needs USAGE on schema "facility" and SELECT on table facility
 kortopi: an export needs SELECT on table facility.room_types, and the role "reader" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "reader" sees only the rows that its policies allow, and an export would leave the others out: export as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
 ```
+
+### スタンバイからの書き出し
+
+書き出しは、接続したサーバーが持つ行を、トランザクションのスナップショットの時点で書く。そのサーバーについては、どのサーバーを読んだかも、スタンバイがプライマリからどれだけ遅れていたかも、何も出力しない。
+スタンバイが持つのは、プライマリの変更を再生したところまでの行である。そのため、遅れているスタンバイからの書き出しは、それより前の時点の行を書き、終了コード 0 で終わる。
+PostgreSQL 18.7 とそのストリーミングのスタンバイに対する試験で、スタンバイの再生を止め、プライマリで `shipped` のラベルを変えた。スタンバイからの書き出しは古いラベルを書いた。その宣言によるプライマリの計画は、変更を元へ戻す計画だった。
+
+```text
+$ kortopi export --dir data --overwrite --table catalog.order_statuses   # from the standby
+wrote data/catalog/order_statuses.csv (2 rows)
+Exported 1 table with 2 rows.
+$ kortopi plan --dir data   # against the primary
+catalog.order_statuses (upsert, key: code)
+  ~ code=shipped  label: "Handed to the carrier" -> Shipped
+  0 to insert, 1 to update
+
+Plan: 0 to insert, 1 to update, 0 to delete in 1 table.
+```
+
+宣言はプライマリから書き出し直す（[宣言したテーブルを書き出し直す](#宣言したテーブルを書き出し直す)）。ホストの一覧では、`PGTARGETSESSIONATTRS=read-write` がプライマリを残す（[kortopi plan](plan.ja.md#接続の設定)）。
+
+プライマリの変更の再生は、スタンバイでの書き出しの読み込みと競合することがある。書き出しが読むテーブルに、プライマリが `ACCESS EXCLUSIVE` のロックを取ったときがそうである。
+再生は最長で `max_standby_streaming_delay`（既定は 30 秒）だけ書き出しを待ち、そのあとスタンバイは読み込みか、書き出しのセッションを終わらせる。
+同じ試験でこの設定を `1s` にすると、書き出しは失敗し、ファイルを書かず、もう一度実行できた。
+
+```text
+kortopi: export table bulk.many into data/bulk/many.csv: read the rows of table bulk.many: FATAL: terminating connection due to conflict with recovery (SQLSTATE 40001)
+kortopi: roll back to the savepoint: conn closed
+kortopi: no file was written
+```
+
+再生がスタンバイでの読み込みと競合するプライマリの変更のほかの種類と、それに関わるスタンバイの設定は、PostgreSQL のホットスタンバイの文書にある。
+書き出しの最後の読み込みのあと、ロールバックの前にスタンバイがセッションを終わらせると、ファイルは書かれたまま残り、書き出しは終了コード 1 で終わる（[出力とエラー](#出力とエラー)）。
 
 ## 出力とエラー
 
@@ -426,6 +459,16 @@ kortopi は次の順に進み、最後の手順の前までがすべて通るま
 kortopi: data/facility/types.csv: a file appeared there while the export ran, and an export replaces only the file that declares a table: move the file, and export again
 kortopi: these files were written before the error, and they stay as written: data/facility/room_types.csv, data/facility/rooms.csv
 ```
+
+最後の読み込みのあと、書き出しがロールバックする前にサーバーがセッションを終わらせることがある。書き出しがファイルを書いている間に `idle_in_transaction_session_timeout` が終わらせる場合などである。そのとき、どのファイルも所定の場所へ移ったうえで、書き出しは終了コード 1 と、ロールバックのエラーだけを出して終わる。そのエラーは、どのファイルも示さない。
+
+```text
+wrote data/bulk/many.csv (2000000 rows)
+Exported 1 table with 2000000 rows.
+kortopi: roll back the transaction of the export: FATAL: terminating connection due to idle-in-transaction timeout (SQLSTATE 25P03)
+```
+
+ファイルは、そのとき書き出しがスナップショットで読んだものを持つ。どの読み込みも終わっていたからである。
 
 書き出しを止めるには Ctrl-C を押すか、SIGTERM を送る。
 kortopi は、計画と同じく、動いている文のキャンセルをサーバーに求める（[kortopi plan](plan.ja.md#セッションに要るもの)）。
@@ -508,4 +551,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:3f0a7eb52fe2e59b3debd2a73a091e4791e1b0d0517bc49decc8fbbe0b87275d -->
+<!-- i18n-source: export.md sha256:6701fccbad3faf7b0b29f38d7f5b99e95c9483f7b3c668369c44cc5fa1885b77 -->

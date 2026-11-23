@@ -119,7 +119,7 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 | `PGSSLMODE` | `disable`・`allow`・`prefer`（既定）・`require`・`verify-ca`・`verify-full` のどれか。 |
 | `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。`verify-ca` か `verify-full` で、`PGSSLROOTCERT` も `~/.postgresql/root.crt` もないとき、kortopi はシステムの認証局を信頼する。libpq は、このとき接続を拒む。自分の認証局だけを信頼するには、その証明書を `PGSSLROOTCERT` に与える。`PGSSLROOTCERT=system` は、libpq と同じくシステムの認証局を信頼する。 |
 | `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。ある試験では、何も応答しないアドレスへの試みは約 150 秒で終わった。macOS でも Linux のコンテナでも同じだった。誰も見ていない実行では、10 などに設定する。 |
-| `PGTARGETSESSIONATTRS` | ホストの一覧のうち、残すサーバーの種類。計画と apply が要するプライマリには `read-write` か `primary`、スタンバイには `standby` か `prefer-standby` を使い、libpq と同じく `read-only` もある。既定の `any` は、接続を受け付けた最初のサーバーを残す。 |
+| `PGTARGETSESSIONATTRS` | ホストの一覧のうち、残すサーバーの種類。計画と apply が要するプライマリには `read-write` か `primary`、スタンバイには `standby` か `prefer-standby` を使う。書き出しはスタンバイを読める（[kortopi export](export.ja.md#スタンバイからの書き出し)）。libpq と同じく `read-only` もある。既定の `any` は、接続を受け付けた最初のサーバーを残す。 |
 | `PGAPPNAME` | セッションの `application_name`。`pg_stat_activity` に表示される。既定は `kortopi` である。 |
 | `PGOPTIONS` | セッションの設定。`-c statement_timeout=5min` のように `-c name=value` の形で書く。後で述べるとおり、トランザクションモードのコネクションプーラーの後ろでは届かない。 |
 
@@ -274,7 +274,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 ```
 
 理由がスタンバイや読み取り専用のトランザクションなら、1つ目のエラーは「because the server is a standby」や「because the transaction is read-only」と示す。
-リードレプリカに対しては、計画を立てられない。
+リードレプリカに対しては、計画を立てられず、apply もできない。書き出しはできる（[kortopi export](export.ja.md#スタンバイからの書き出し)）。
 
 行単位セキュリティをエラーにするのは、計画にはポリシーが許す行しか見えないからである。
 ポリシーが隠す行は、存在しないように見える。計画はそれらを挿入する行として示し、更新する行や削除する行としては決して示さない。
@@ -897,4 +897,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:529fbc7acd8edf988d1f19b96ad570e43c514ac11e60bdb41023f300e1518e0a -->
+<!-- i18n-source: plan.md sha256:c8051b82c4bf52eedb6d36acfca57309c21f2b359cbd838e57d7f0debab01c9b -->

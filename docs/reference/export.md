@@ -386,10 +386,10 @@ An export reads, and creates nothing in the database, not even a temporary table
 - It runs in one transaction that is `REPEATABLE READ` and `READ ONLY`, so every table is read from one snapshot, and it rolls the transaction back.
 - It pins the settings of a plan.
 - It reads an ordinary table with `ONLY`, as a plan does, and a partitioned table as a whole.
-- It takes no lock.
+- It takes no lock of its own. Each read takes the lock that every read of a table takes, and holds it until the export ends ([A schema change during a run](plan.md#a-schema-change-during-a-run)).
 
 The role needs `USAGE` on the schema of each table, and `SELECT` on the columns that it writes and on those that sort the rows.
-It needs no `TEMPORARY` and no session that can write, so an export also works in a read-only transaction, and is expected to work on a standby, which is not tested.
+It needs no `TEMPORARY` and no session that can write, so an export also works in a read-only transaction, and on a standby ([Export from a standby](#export-from-a-standby)).
 
 ```sql
 GRANT USAGE ON SCHEMA facility TO reader;
@@ -403,6 +403,39 @@ kortopi: an export needs USAGE on schema "facility" and SELECT on table facility
 kortopi: an export needs SELECT on table facility.room_types, and the role "reader" may not read its column "capacity": grant the role SELECT on the table
 kortopi: table facility.room_types has row-level security, so the role "reader" sees only the rows that its policies allow, and an export would leave the others out: export as a role with BYPASSRLS, or as the owner of the table if the table does not force row-level security
 ```
+
+### Export from a standby
+
+An export writes the rows that the server it connects to holds, as of the snapshot of its transaction, and prints nothing of that server: neither which server it read, nor how far a standby was behind its primary.
+A standby holds the rows as far as it has replayed the changes of its primary, so an export from a standby that lags writes the rows of an earlier moment, with exit status 0.
+In a test against PostgreSQL 18.7 and its streaming standby, the replay of the standby was paused, and the primary changed the label of `shipped`; an export from the standby wrote the old label, and a plan of it against the primary showed the change taken back:
+
+```text
+$ kortopi export --dir data --overwrite --table catalog.order_statuses   # from the standby
+wrote data/catalog/order_statuses.csv (2 rows)
+Exported 1 table with 2 rows.
+$ kortopi plan --dir data   # against the primary
+catalog.order_statuses (upsert, key: code)
+  ~ code=shipped  label: "Handed to the carrier" -> Shipped
+  0 to insert, 1 to update
+
+Plan: 0 to insert, 1 to update, 0 to delete in 1 table.
+```
+
+Refresh a declaration from the primary ([Refresh a declared table](#refresh-a-declared-table)). With a list of hosts, `PGTARGETSESSIONATTRS=read-write` keeps the primary ([kortopi plan](plan.md#connection-settings)).
+
+The replay of the primary can conflict with the reads of an export on a standby, as when the primary takes a lock `ACCESS EXCLUSIVE` on a table that the export reads.
+The replay waits for the export for `max_standby_streaming_delay` at most, 30 seconds by default, and the standby then ends the read, or the session of the export.
+In the same test, with the setting at `1s`, the export failed, wrote no file, and could run again:
+
+```text
+kortopi: export table bulk.many into data/bulk/many.csv: read the rows of table bulk.many: FATAL: terminating connection due to conflict with recovery (SQLSTATE 40001)
+kortopi: roll back to the savepoint: conn closed
+kortopi: no file was written
+```
+
+The documentation of PostgreSQL on hot standby lists the other changes of the primary whose replay conflicts with reads on a standby, and the settings of the standby that bear on them.
+A session that the standby ends after the last read of the export, before its rollback, leaves the files written, and the export exits with status 1 ([Output and errors](#output-and-errors)).
 
 ## Output and errors
 
@@ -426,6 +459,16 @@ A new file is linked to its name, so a file that appeared in its place while the
 kortopi: data/facility/types.csv: a file appeared there while the export ran, and an export replaces only the file that declares a table: move the file, and export again
 kortopi: these files were written before the error, and they stay as written: data/facility/room_types.csv, data/facility/rooms.csv
 ```
+
+A session that the server ends after the last read, before the export rolls back, as `idle_in_transaction_session_timeout` can end it while the export writes its files, lets every file move into place, and then ends the export with status 1 and the error of its rollback alone, which names no file:
+
+```text
+wrote data/bulk/many.csv (2000000 rows)
+Exported 1 table with 2000000 rows.
+kortopi: roll back the transaction of the export: FATAL: terminating connection due to idle-in-transaction timeout (SQLSTATE 25P03)
+```
+
+The files then hold what the export read in its snapshot, since every read had ended.
 
 Press Ctrl-C to stop an export, or send it SIGTERM.
 kortopi asks the server to cancel the statement that runs, as for a plan ([kortopi plan](plan.md#what-the-session-needs)).

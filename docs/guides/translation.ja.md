@@ -285,5 +285,7 @@
 | base（プルリクエストの）, merge | ベース、マージ |
 | event trigger（PostgreSQL の） | イベントトリガー |
 | superuser（PostgreSQL の） | スーパーユーザー |
+| replay（スタンバイでのプライマリの変更の）, lag（スタンバイの） | 再生、遅れ |
+| conflict（スタンバイでの再生と読み込みの） | 競合 |
 
-<!-- i18n-source: translation.md sha256:c42b7fb5bd9ab6ac3e944309fa6bbe23a9fd64cf2e639a735515caa259325081 -->
+<!-- i18n-source: translation.md sha256:2e9c92ffac2a6bbfa31155169aec099d5afe035f511e26735b17b4d673ac0491 -->

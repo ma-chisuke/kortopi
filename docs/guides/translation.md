@@ -285,3 +285,5 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | base (of a pull request), merge | ベース、マージ |
 | event trigger (of PostgreSQL) | イベントトリガー |
 | superuser (of PostgreSQL) | スーパーユーザー |
+| replay (of the changes of the primary on a standby), lag (of a standby) | 再生、遅れ |
+| conflict (of the replay with a read on a standby) | 競合 |

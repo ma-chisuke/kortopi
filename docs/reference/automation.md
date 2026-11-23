@@ -24,7 +24,7 @@ A pipeline tells the outcomes apart by the status and the last line of standard 
 - 1, with `kortopi: nothing was changed` last, or that line with the sequences that it names: fix what the error names, and run again.
 - 1, with the message that the outcome of the commit is not known: run `kortopi plan` to see whether the commit was made, and apply again if it was not ([kortopi apply](apply.md#read-the-output)).
 - 1, with the usage of the command last: correct the flags.
-- 1, from `kortopi export`: the error names the files that the export wrote, or says that it wrote none, or is a mistake that the export found before it wrote anything ([kortopi export](export.md#output-and-errors)).
+- 1, from `kortopi export`: the error names the files that the export wrote, or says that it wrote none, or is a mistake that the export found before it wrote anything. An error of the rollback alone, `roll back the transaction of the export: ...`, comes after every file was written ([kortopi export](export.md#output-and-errors)).
 - A status above 128, as 137 for SIGKILL: a signal ended kortopi before it could end its session, which can stay on the server and hold its locks ([A run that breaks off](#a-run-that-breaks-off)). kortopi catches SIGINT and SIGTERM, and exits with 1 after them.
 
 ## At deploy time

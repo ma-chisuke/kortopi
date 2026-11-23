@@ -119,7 +119,7 @@ Besides the host, the port, the user, the database, and the password, kortopi ta
 | `PGSSLMODE` | `disable`, `allow`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. |
 | `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. With `verify-ca` or `verify-full`, and neither `PGSSLROOTCERT` nor `~/.postgresql/root.crt`, kortopi trusts the authorities of the system, where libpq refuses to connect: give `PGSSLROOTCERT` the certificate of your authority, to trust it alone. `PGSSLROOTCERT=system` trusts the authorities of the system, as in libpq. |
 | `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it: an attempt to an address that answered nothing ended after about 150 seconds in a test, on macOS and in a Linux container alike. Set it for a run that no one watches, such as to 10. |
-| `PGTARGETSESSIONATTRS` | The kind of server to keep, among the hosts of a list: `read-write` or `primary` for the primary, which a plan and an apply need, `standby` or `prefer-standby` for a standby, and `read-only`, as in libpq. `any`, the default, keeps the first server that accepts the connection. |
+| `PGTARGETSESSIONATTRS` | The kind of server to keep, among the hosts of a list: `read-write` or `primary` for the primary, which a plan and an apply need, `standby` or `prefer-standby` for a standby, which an export can read ([kortopi export](export.md#export-from-a-standby)), and `read-only`, as in libpq. `any`, the default, keeps the first server that accepts the connection. |
 | `PGAPPNAME` | The `application_name` of the session, which `pg_stat_activity` shows: `kortopi` by default. |
 | `PGOPTIONS` | Settings of the session, written as `-c name=value`, such as `-c statement_timeout=5min`. Not behind a connection pooler in transaction mode, as below. |
 
@@ -274,7 +274,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 ```
 
 The first error says "because the server is a standby" or "because the transaction is read-only" when that is the reason.
-A plan cannot run against a read replica.
+A plan cannot run against a read replica, and an apply cannot either; an export can ([kortopi export](export.md#export-from-a-standby)).
 
 Row-level security is an error because a plan would see only the rows that the policies allow.
 The rows that they hide would look missing: the plan would show them as rows to insert, and never as rows to update or to delete.

@@ -24,7 +24,7 @@ kortopi が人の手を離れて動く場所は3つある。デプロイのと�
 - 1 で、最後の行が `kortopi: nothing was changed` か、それにシーケンスを挙げたもの：エラーが示すものを直して、もう一度実行する。
 - 1 で、コミットの結果が分からないというメッセージ：`kortopi plan` でコミットされたかどうかを確かめ、されていなければもう一度 apply する（[kortopi apply](apply.ja.md#出力の読み方)）。
 - 1 で、最後がコマンドの使い方：フラグを直す。
-- `kortopi export` の 1：エラーは、書き出しが書いたファイルを挙げるか、何も書かなかったと告げるか、何かを書く前に書き出しが見つけた誤りである（[kortopi export](export.ja.md#出力とエラー)）。
+- `kortopi export` の 1：エラーは、書き出しが書いたファイルを挙げるか、何も書かなかったと告げるか、何かを書く前に書き出しが見つけた誤りである。ロールバックのエラー（`roll back the transaction of the export: ...`）だけが出たときは、すべてのファイルを書いたあとである（[kortopi export](export.ja.md#出力とエラー)）。
 - 128 より大きい値（SIGKILL なら 137）：kortopi が自分のセッションを終える前に、シグナルが kortopi を終わらせた。そのセッションはサーバーに残り、ロックを持ち続けることがある（[途中で途切れた実行](#途中で途切れた実行)）。kortopi は SIGINT と SIGTERM を受け止め、そのあとは 1 で終わる。
 
 ## デプロイのとき
@@ -224,4 +224,4 @@ Linux の PostgreSQL 18.7 に対する試験で、サーバーの設定を既定
 - そうしたセッションは、手で終わらせることもできる。`pg_stat_activity` で `application_name` が `kortopi` のセッションを見つけ、`pg_terminate_backend` で終わらせる。`PGAPPNAME` がほかの名前を挙げていれば、その名前で探す。
 - 応答しなくなったサーバーには、kortopi 自身が自分のプローブで気付く（[接続の設定](plan.ja.md#接続の設定)）。
 
-<!-- i18n-source: automation.md sha256:baf063103ea8906c71b458fa2ab4e3e7d610e8689c671e5ae7e123a7c562003e -->
+<!-- i18n-source: automation.md sha256:a4e23b1b57fb8c5e17e22a8db89ee9b416003428541fbc2b2a9ea8a506c284e4 -->

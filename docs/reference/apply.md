@@ -703,6 +703,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit. Each of these tables holds a lock until the commit, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default: it then fails with `out of shared memory` and a hint to raise the setting, and nothing is changed.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
 - Not tested: a standby, Aurora PostgreSQL, and a real connection pooler, through which `--lock-timeout` holds and a cancel request is forwarded by design. No test cuts the network either.
+- By hand, against PostgreSQL 18.7 and its streaming standby, a plan and an apply on the standby stopped with the error that the server is a standby, and an export read it ([kortopi export](export.md#export-from-a-standby)).
 
 ## Common errors
 
