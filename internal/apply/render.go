@@ -119,19 +119,21 @@ func noted(s *plan.Sequence) bool {
 
 // unplannedLine returns the line of what the deletions did beyond the plan to
 // a table of allow_unplanned_changes (ADR-0051), as in "Unplanned changes in
-// shop.category_labels: 2 rows deleted." It claims no more than the counts of
-// the database show: the rows deleted beyond those that the plan counted,
-// the rows inserted, and the number of updates, which is not a number of
-// rows, and of which, in a table where the actions SET NULL and SET DEFAULT
-// of the deletions can update rows too, only those beyond their most are
-// beyond the plan for certain.
+// shop.category_labels, by the counts of the database: 2 deletions." It
+// claims no more than the counts show, which are counts of the database for
+// the transaction and not rows that the table lost or gained: the deletions
+// beyond those that the plan counted, the insertions, and the updates. The
+// database counts what a block of a trigger rolled back too, and a row that
+// moves to another partition as a deletion and an insertion. In a table
+// where the actions SET NULL and SET DEFAULT of the deletions can update rows
+// too, only the updates beyond their most are beyond the plan for certain.
 func unplannedLine(u Unplanned) string {
 	var parts []string
 	if u.Deleted > 0 {
-		parts = append(parts, rows(u.Deleted)+" deleted")
+		parts = append(parts, plural(u.Deleted, "deletion", "deletions"))
 	}
 	if u.Inserted > 0 {
-		parts = append(parts, rows(u.Inserted)+" inserted")
+		parts = append(parts, plural(u.Inserted, "insertion", "insertions"))
 	}
 	if u.Updates > u.MostUpdates {
 		updates := plural(u.Updates, "update", "updates")
@@ -140,7 +142,7 @@ func unplannedLine(u Unplanned) string {
 		}
 		parts = append(parts, updates)
 	}
-	return "Unplanned changes in " + plan.FormatTable(u.Table) + ": " + joinAnd(parts) + "."
+	return "Unplanned changes in " + plan.FormatTable(u.Table) + ", by the counts of the database: " + joinAnd(parts) + "."
 }
 
 // unevenLines returns the line of the updates that found fewer rows to

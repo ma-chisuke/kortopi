@@ -384,11 +384,16 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 			gone = moved >= 0 && got.inserted == moved
 		}
 		changes := got.updated + moved
-		// A table of allow_unplanned_changes may lose, gain, and change rows
-		// beyond the plan, but not fewer than the plan counted (ADR-0051). In
-		// a table where a change can move a row to another partition, the
-		// counts cannot tell such a move from a row that a trigger deleted and
-		// another that it inserted, so the table is held to the plan.
+		// The counts of a table of allow_unplanned_changes may go beyond what
+		// the plan counted, but not below it (ADR-0051). They are counts of the
+		// database, which hold what a block of a trigger rolled back, and both
+		// halves of a move between partitions, so they say nothing of the rows
+		// themselves: a counted row that a trigger kept with an update leaves
+		// its deletion to be made up by any other deletion that the database
+		// counts. In a table where a change can move a row to another
+		// partition, the counts cannot tell such a move from a row that a
+		// trigger deleted and another that it inserted, so the table is held to
+		// the plan.
 		unplanned, named := tops[oid]
 		lifted := named && !s.effectMoves[oid]
 		short := got.deleted < want.deleted || changes < want.updated
@@ -420,7 +425,9 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 			WHERE c.oid = $1`, oid).Scan(&name.Schema, &name.Name); err != nil {
 			return nil, fmt.Errorf("read the name of a table that the deletions changed: %w", err)
 		}
-		what := fmt.Sprintf("deleted %d %s of table %s, and the plan counted %d", got.deleted, plural(got.deleted, "row", "rows"), name, want.deleted)
+		// The counts are what the database counted for the transaction, not
+		// rows that the table lost or gained, and the error says so.
+		what := fmt.Sprintf("%s in table %s for the transaction, and the plan counted %d", counted(got.deleted, "deletion", "deletions"), name, want.deleted)
 		allows := strconv.FormatInt(want.updated, 10)
 		if most != want.updated {
 			allows = fmt.Sprintf("from %d to %d", want.updated, most)
@@ -428,17 +435,16 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 		switch {
 		case lifted && got.deleted < want.deleted:
 		case !gone && s.effectMoves[oid] && moved >= 0:
-			what = fmt.Sprintf("deleted %d %s of table %s and inserted %d, and the plan counted %d deleted, "+
-				"and one more deleted and one inserted for each row that SET NULL or SET DEFAULT moves to another partition",
-				got.deleted, plural(got.deleted, "row", "rows"), name, got.inserted, want.deleted)
+			what = fmt.Sprintf("%s and %s in table %s for the transaction, and the plan counted %s, "+
+				"and one more deletion and one insertion for each row that SET NULL or SET DEFAULT moves to another partition",
+				counted(got.deleted, "deletion", "deletions"), counted(got.inserted, "insertion", "insertions"), name, counted(want.deleted, "deletion", "deletions"))
 		case !gone && !lifted:
 		case most == 0:
-			what = fmt.Sprintf("changed %d %s of table %s, which the plan did not count", changes, plural(changes, "row", "rows"), name)
+			what = fmt.Sprintf("%s in table %s for the transaction, which the plan did not count", counted(changes, "update", "updates"), name)
 		case s.effectMoves[oid]:
-			what = fmt.Sprintf("updated rows of table %s, or moved them to another partition, %d %s, and the plan allows %s",
-				name, changes, plural(changes, "time", "times"), allows)
+			what = fmt.Sprintf("%s in table %s for the transaction, and the plan allows %s", counted(changes, "update or move to another partition", "updates or moves to another partition"), name, allows)
 		default:
-			what = fmt.Sprintf("updated rows of table %s %d %s, and the plan allows %s", name, got.updated, plural(got.updated, "time", "times"), allows)
+			what = fmt.Sprintf("%s in table %s for the transaction, and the plan allows %s", counted(got.updated, "update", "updates"), name, allows)
 		}
 		// A foreign key, a partition, or disabled triggers that another
 		// session added after the snapshot stopped the apply already, in
@@ -457,12 +463,12 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 				"which its counts cannot tell from a row that a trigger deletes and another that it inserts, so the apply holds it to the plan",
 				config.UnplannedKey, settingsFile, name)
 		case named:
-			setting = fmt.Sprintf(": %s of %s names table %s, which lets the deletions do more to it than the plan counted, but not less",
+			setting = fmt.Sprintf(": %s of %s names table %s, which lets the database count more deletions, updates, and insertions in it than the plan counted, but not fewer",
 				config.UnplannedKey, settingsFile, name)
 		case !short && !s.effectMoves[oid]:
 			setting = fmt.Sprintf(", or, if it changes table %s on purpose, name the table in %s of %s", name, config.UnplannedKey, settingsFile)
 		}
-		return nil, fmt.Errorf("after its first deletion, the apply %s: a trigger or a rule of a table that the deletions reach, "+
+		return nil, fmt.Errorf("after its first deletion, the database counted %s: a trigger or a rule of a table that the deletions reach, "+
 			"or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, "+
 			"so nothing was written: check the triggers and the rules of the tables that the deletions reach, "+
 			"and the constraint triggers of the tables that the apply writes, for one that changes table %s%s", what, name, setting)
@@ -471,4 +477,10 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 		return cmp.Or(cmp.Compare(a.Table.Schema, b.Table.Schema), cmp.Compare(a.Table.Name, b.Table.Name))
 	})
 	return beyond, nil
+}
+
+// counted returns n with the singular or the plural noun, as in "2
+// deletions".
+func counted(n int64, one, many string) string {
+	return strconv.FormatInt(n, 10) + " " + plural(n, one, many)
 }

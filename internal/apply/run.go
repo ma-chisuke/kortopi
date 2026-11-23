@@ -352,12 +352,15 @@ func checkDeletes(p *plan.Plan, limit int) error {
 }
 
 // checkDeletesAfter checks the limit on the rows that an apply deletes again
-// after its deletions, before its commit, with the rows that they deleted
-// beyond the plan in the tables of allow_unplanned_changes, which the plan
-// cannot count (ADR-0051). The rows that the plan counts passed the limit
-// before the first write already. Updates beyond the plan do not count: the
-// database counts updates, which can change one row more than once, and
-// not the rows that they change.
+// after its deletions, before its commit, with the deletions beyond the plan
+// that the database counted in the tables of allow_unplanned_changes, which
+// the plan cannot count (ADR-0051). The rows that the plan counts passed the
+// limit before the first write already. The count of the database can exceed
+// the rows that are gone, since it holds what a block of a trigger rolled
+// back and both halves of a move between partitions, so the check errs on
+// the side of stopping, and its error says so. Updates beyond the plan do
+// not count: the database counts updates, which can change one row more than
+// once, and not the rows that they change.
 func checkDeletesAfter(p *plan.Plan, limit int, unplanned []Unplanned) error {
 	var beyond int
 	by := make(map[declaration.TableName]int)
@@ -372,14 +375,17 @@ func checkDeletesAfter(p *plan.Plan, limit int, unplanned []Unplanned) error {
 	if beyond == 0 || total <= limit {
 		return nil
 	}
-	verb := "deleted"
-	if c.changed > 0 {
-		verb = "deleted or changed"
+	names := slices.SortedFunc(maps.Keys(by), compareNames)
+	in := make([]string, len(names))
+	for i, n := range names {
+		in[i] = strconv.Itoa(by[n]) + " in " + n.String()
 	}
-	groups := append(c.groups(), rows(beyond)+" that they deleted beyond the plan in tables that "+config.UnplannedKey+" names ("+byTable(by)+")")
-	return fmt.Errorf("the deletions of the apply %s %s, more than the limit of %d: %s, so the apply stops before its commit: "+
+	groups := append(c.groups(), plural(beyond, "deletion", "deletions")+" beyond the plan in tables that "+config.UnplannedKey+
+		" names, by the counts of the database ("+joinAnd(in)+")")
+	return fmt.Errorf("the deletions of the apply come to %d, more than the limit of %d: %s, so the apply stops before its commit: "+
+		"a count of the database can exceed the rows that are gone, since it holds what a block of a trigger rolled back and both halves of a move between partitions: "+
 		"check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete %d",
-		verb, rows(total), limit, listGroups(groups), total)
+		total, limit, listGroups(groups), total)
 }
 
 // deleteCounts are the rows that the deletions of a plan delete and change,

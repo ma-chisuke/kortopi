@@ -13,6 +13,6 @@ The deletion may also delete, update, or insert rows of billing.invoices, shop.c
 
 Applied: 1 inserted, 1 updated, 1 deleted.
 Through foreign keys, the deletion also deleted 2 rows and changed 1 row.
-Unplanned changes in billing.invoices: 1 row deleted, 2 rows inserted, and 7 updates, at most 5 of them by foreign keys.
-Unplanned changes in shop.category_labels: 2 rows deleted.
-Unplanned changes in shop.totals: 1 update.
+Unplanned changes in billing.invoices, by the counts of the database: 1 deletion, 2 insertions, and 7 updates, at most 5 of them by foreign keys.
+Unplanned changes in shop.category_labels, by the counts of the database: 2 deletions.
+Unplanned changes in shop.totals, by the counts of the database: 1 update.

@@ -42,20 +42,48 @@ const unplannedTrigger = `CREATE TRIGGER forget_category AFTER DELETE ON shop.ca
 
 // An apply that deletes stops on rows of a table that a trigger deletes or
 // changes beyond the plan, unless allow_unplanned_changes names the table
-// (ADR-0051). A named table may lose, gain, and change rows beyond the
-// plan, and the apply returns what happened there; the rows that the plan
-// counted still must go, and a table that the setting does not name, or a
-// partition whose partitioned table it does not name, still stops the apply.
-// The rows that the deletions delete beyond the plan count against
+// (ADR-0051). The counts of a named table may go beyond the plan, and the
+// apply returns them; a counted row that is still there unchanged, and
+// counts below the plan, stop it, as a table that the setting does not
+// name, or a partition whose partitioned table it does not name, does. The
+// deletions that the database counts beyond the plan count against
 // --max-delete, after the deletions. The comparison before the commit still
 // decides for a named table that is declared, and a name that the database
-// has no table of is no error.
+// has no table of is no error. Every error is compared whole.
 func TestApplyUnplannedChanges(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			beyond := ": a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, " +
 				"which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables " +
 				"that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table "
+			// counts is the error of the counts of table: what the database
+			// counted, and what follows the advice to look for a trigger.
+			counts := func(what, table, after string) string {
+				return "after its first deletion, the database counted " + what + beyond + table + after
+			}
+			// naming is the advice to name table, and named what the error says
+			// of a table of the setting whose counts are below the plan.
+			naming := func(table string) string {
+				return ", or, if it changes table " + table + " on purpose, name the table in allow_unplanned_changes of {settings}"
+			}
+			named := func(table string) string {
+				return ": allow_unplanned_changes of {settings} names table " + table +
+					", which lets the database count more deletions, updates, and insertions in it than the plan counted, but not fewer"
+			}
+			shelves := `CREATE TABLE shop.shelves (id int, category text REFERENCES shop.categories ON DELETE SET NULL) PARTITION BY LIST (category);
+				CREATE TABLE shop.shelves_books PARTITION OF shop.shelves FOR VALUES IN ('books');
+				CREATE TABLE shop.shelves_games PARTITION OF shop.shelves FOR VALUES IN ('games');
+				CREATE TABLE shop.shelves_none PARTITION OF shop.shelves DEFAULT;
+				INSERT INTO shop.shelves VALUES (1, 'books'), (2, 'games');
+				CREATE FUNCTION shop.open_shelf() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN INSERT INTO shop.shelves VALUES (99, 'books'); RETURN OLD; END $$;
+				CREATE TRIGGER open_shelf AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.open_shelf();`
+			shelvesCounted := "1 deletion and 2 insertions in table shop.shelves for the transaction, and the plan counted 0 deletions, " +
+				"and one more deletion and one insertion for each row that SET NULL or SET DEFAULT moves to another partition"
+			unchanged := []string{
+				"shop.categories (books,Books)", "shop.category_labels (books,en,Books)", "shop.category_labels (games,en,Games)",
+				"shop.category_labels (games,fr,Jeux)", "shop.totals (1,2)",
+			}
 			for _, tt := range []struct {
 				name string
 				// setUp follows unplannedSchema.
@@ -64,8 +92,9 @@ func TestApplyUnplannedChanges(t *testing.T) {
 				// files are more files of the declaration, beside the categories.
 				files     map[string]string
 				maxDelete int
-				// wantErr is the error, with {settings} for the path of the
-				// settings file; without it, the apply commits.
+				// wantErr is the whole error, with {settings} for the path of the
+				// settings file and {dir} for the data directory; without it, the
+				// apply commits.
 				wantErr string
 				// wantLines are the lines of the plan about the setting, when
 				// they are not nil.
@@ -75,10 +104,9 @@ func TestApplyUnplannedChanges(t *testing.T) {
 				rows []string
 			}{
 				{
-					name:  "the trigger of issue 51, without the setting",
-					setUp: unplannedTrigger,
-					wantErr: "after its first deletion, the apply deleted 2 rows of table shop.category_labels, and the plan counted 0" + beyond +
-						"shop.category_labels, or, if it changes table shop.category_labels on purpose, name the table in allow_unplanned_changes of {settings}",
+					name:    "the trigger of issue 51, without the setting",
+					setUp:   unplannedTrigger,
+					wantErr: counts("2 deletions in table shop.category_labels for the transaction, and the plan counted 0", "shop.category_labels", naming("shop.category_labels")),
 				},
 				{
 					name:      "the trigger of issue 51, with the setting",
@@ -96,20 +124,20 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					name:      "a table that the setting does not name",
 					setUp:     unplannedTrigger,
 					unplanned: []string{"shop.category_labels"},
-					wantErr: "after its first deletion, the apply changed 1 row of table shop.totals, which the plan did not count" + beyond +
-						"shop.totals, or, if it changes table shop.totals on purpose, name the table in allow_unplanned_changes of {settings}",
+					wantErr:   counts("1 update in table shop.totals for the transaction, which the plan did not count", "shop.totals", naming("shop.totals")),
 				},
 				{
-					// The plan counts 1 row, within the limit, and the trigger
-					// deletes 2 more.
-					name:      "rows beyond the plan that pass the limit",
+					// The plan counts 1 row, within the limit, and the database
+					// counts 2 more deletions.
+					name:      "deletions beyond the plan that pass the limit",
 					setUp:     unplannedTrigger,
 					unplanned: []string{"shop.category_labels", "shop.totals"},
 					maxDelete: 2,
-					wantErr: "the deletions of the apply deleted 3 rows, more than the limit of 2: 1 row of shop.categories to delete, " +
-						"and 2 rows that they deleted beyond the plan in tables that allow_unplanned_changes names (2 rows of shop.category_labels), " +
-						"so the apply stops before its commit: check the triggers and the rules that delete rows of these tables, " +
-						"and if the deletions are right, raise the limit with --max-delete 3",
+					wantErr: "the deletions of the apply come to 3, more than the limit of 2: 1 row of shop.categories to delete, " +
+						"and 2 deletions beyond the plan in tables that allow_unplanned_changes names, by the counts of the database (2 in shop.category_labels), " +
+						"so the apply stops before its commit: a count of the database can exceed the rows that are gone, " +
+						"since it holds what a block of a trigger rolled back and both halves of a move between partitions: " +
+						"check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete 3",
 				},
 				{
 					// The deferred trigger runs before the check after the
@@ -126,7 +154,7 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					setUp: `CREATE CONSTRAINT TRIGGER forget_category AFTER DELETE ON shop.categories
 						DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION shop.forget_category();`,
 					unplanned: []string{"shop.totals"},
-					wantErr:   "after its first deletion, the apply deleted 2 rows of table shop.category_labels, and the plan counted 0" + beyond + "shop.category_labels, or, ",
+					wantErr:   counts("2 deletions in table shop.category_labels for the transaction, and the plan counted 0", "shop.category_labels", naming("shop.category_labels")),
 				},
 				{
 					// A trigger that inserts rows, and a named partitioned table
@@ -146,7 +174,7 @@ func TestApplyUnplannedChanges(t *testing.T) {
 						CREATE TRIGGER log_category AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.log_category();`,
 					unplanned: []string{"shop.log"},
 					want:      []apply.Unplanned{{Table: tn("shop", "log"), Deleted: 1, Inserted: 2}},
-					rows:      []string{"shop.categories (books,Books)", "shop.category_labels (books,en,Books)", "shop.category_labels (games,en,Games)", "shop.category_labels (games,fr,Jeux)", "shop.totals (1,2)"},
+					rows:      unchanged,
 				},
 				{
 					// The counts of a partition are those of its partitioned
@@ -161,33 +189,24 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					unplanned: []string{"shop.log_1"},
 					wantLines: []string{"A partition is checked with the partitioned table at the top of its tree, " +
 						"so allow_unplanned_changes in kortopi.toml does not cover partition shop.log_1 of shop.log: name shop.log instead."},
-					wantErr: "after its first deletion, the apply deleted 2 rows of table shop.log, and the plan counted 0" + beyond + "shop.log, or, ",
+					wantErr: counts("2 deletions in table shop.log for the transaction, and the plan counted 0", "shop.log", naming("shop.log")),
 				},
 				{
 					// SET NULL of the partition key moves a row to another
 					// partition, as a deletion and an insertion, which the counts
 					// cannot tell from the work of a trigger: the table is held to
 					// the plan, and the error says why.
-					name: "a named table whose rows SET NULL moves between partitions",
-					setUp: `CREATE TABLE shop.shelves (id int, category text REFERENCES shop.categories ON DELETE SET NULL) PARTITION BY LIST (category);
-						CREATE TABLE shop.shelves_books PARTITION OF shop.shelves FOR VALUES IN ('books');
-						CREATE TABLE shop.shelves_games PARTITION OF shop.shelves FOR VALUES IN ('games');
-						CREATE TABLE shop.shelves_none PARTITION OF shop.shelves DEFAULT;
-						INSERT INTO shop.shelves VALUES (1, 'books'), (2, 'games');
-						CREATE FUNCTION shop.open_shelf() RETURNS trigger LANGUAGE plpgsql AS $$
-						BEGIN INSERT INTO shop.shelves VALUES (99, 'books'); RETURN OLD; END $$;
-						CREATE TRIGGER open_shelf AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.open_shelf();`,
+					name:      "a named table whose rows SET NULL moves between partitions",
+					setUp:     shelves,
 					unplanned: []string{"shop.shelves"},
-					wantErr: "after its first deletion, the apply deleted 1 row of table shop.shelves and inserted 2, and the plan counted 0 deleted, " +
-						"and one more deleted and one inserted for each row that SET NULL or SET DEFAULT moves to another partition" + beyond +
-						"shop.shelves: allow_unplanned_changes of {settings} names table shop.shelves, but SET NULL or SET DEFAULT of the deletions " +
-						"can move its rows to another partition, which its counts cannot tell from a row that a trigger deletes and another that it inserts, " +
-						"so the apply holds it to the plan",
+					wantErr: counts(shelvesCounted, "shop.shelves", ": allow_unplanned_changes of {settings} names table shop.shelves, "+
+						"but SET NULL or SET DEFAULT of the deletions can move its rows to another partition, "+
+						"which its counts cannot tell from a row that a trigger deletes and another that it inserts, so the apply holds it to the plan"),
 				},
 				{
-					// Rows that the plan counted, and that a trigger keeps, stop
-					// the apply in a named table too: that is not beyond the
-					// plan.
+					// Rows that the plan counted, and that a trigger keeps
+					// unchanged, stop the apply in a named table too: that is not
+					// beyond the plan.
 					name: "a row that the plan counted and that stays",
 					setUp: `CREATE TABLE shop.items (id int PRIMARY KEY, category text REFERENCES shop.categories ON DELETE CASCADE);
 						INSERT INTO shop.items VALUES (1, 'games'), (2, 'games');
@@ -195,7 +214,10 @@ func TestApplyUnplannedChanges(t *testing.T) {
 						BEGIN IF OLD.id = 2 THEN RETURN NULL; END IF; RETURN OLD; END $$;
 						CREATE TRIGGER keep_one BEFORE DELETE ON shop.items FOR EACH ROW EXECUTE FUNCTION shop.keep_one();`,
 					unplanned: []string{"shop.items"},
-					wantErr:   "the deletions did not delete or change 1 row of table shop.items that the plan counted: ",
+					wantErr: "the deletions did not delete or change 1 row of table shop.items that the plan counted: " +
+						"another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE " +
+						"that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: " +
+						"run the apply again, and if this happens again, check the triggers and the rules of table shop.items",
 				},
 				{
 					// A trigger that deletes a row that SET NULL changes, before
@@ -209,8 +231,7 @@ func TestApplyUnplannedChanges(t *testing.T) {
 						BEGIN DELETE FROM shop.reviews WHERE category = OLD.code; RETURN OLD; END $$;
 						CREATE TRIGGER "A_drop_reviews" AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.drop_reviews();`,
 					unplanned: []string{"shop.reviews"},
-					wantErr: "after its first deletion, the apply updated rows of table shop.reviews 0 times, and the plan allows 1" + beyond +
-						"shop.reviews: allow_unplanned_changes of {settings} names table shop.reviews, which lets the deletions do more to it than the plan counted, but not less",
+					wantErr:   counts("0 updates in table shop.reviews for the transaction, and the plan allows 1", "shop.reviews", named("shop.reviews")),
 				},
 				{
 					// A named table that is declared is compared again before
@@ -231,7 +252,10 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					unplanned: []string{"shop.category_labels", "shop.totals"},
 					files:     map[string]string{"shop/category_labels.csv": "code,lang,label\nbooks,en,Books\ngames,en,Games\n"},
 					wantErr: "{dir}shop/category_labels.csv: after the writes of the apply, table shop.category_labels still differs from the declaration in 1 row to insert: " +
-						"+ code=games  lang=en  label=Games: ",
+						"+ code=games  lang=en  label=Games: declare only rows that the table keeps after the writes, or change what takes them away\n" +
+						"the database did something else with the writes of the apply than the declaration says, so the apply stops before its commit: " +
+						"a trigger that changes the values that a write gives, skips a row, or writes rows of a declared table, " +
+						"the cascade or another action of a foreign key, or a rule created after the plan can do that",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
@@ -269,7 +293,7 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					if tt.wantErr != "" {
 						want := strings.ReplaceAll(tt.wantErr, "{settings}", filepath.Join(dir, config.FileName))
 						want = strings.ReplaceAll(want, "{dir}", dir+string(filepath.Separator))
-						if err == nil || !strings.HasPrefix(err.Error(), want) {
+						if err == nil || err.Error() != want {
 							t.Errorf("apply: %v\nwant %s", err, want)
 						}
 						if got := dump(t, db, tables...); !slices.Equal(got, before) {
@@ -329,7 +353,8 @@ func TestUnplanned(t *testing.T) {
 				CREATE SCHEMA "A"; CREATE TABLE "A"."Mixed" ();`)
 			s := db.session(t, t.TempDir())
 			got, err := s.Unplanned(t.Context(), []declaration.TableName{
-				tn("a", "plain"), tn("a", "tree"), tn("a", "branch"), tn("a", "leaf"), tn("a", "v"), tn("a", "nothing"), tn("b", "plain"), tn("A", "Mixed"), tn("a", "mixed"),
+				tn("a", "plain"), tn("a", "tree"), tn("a", "branch"), tn("a", "leaf"), tn("a", "v"),
+				tn("a", "nothing"), tn("b", "plain"), tn("A", "Mixed"), tn("a", "mixed"),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -337,7 +362,8 @@ func TestUnplanned(t *testing.T) {
 			want := []plan.UnplannedTable{
 				{Name: tn("a", "plain")}, {Name: tn("a", "tree")},
 				{Name: tn("a", "branch"), Top: tn("a", "tree")}, {Name: tn("a", "leaf"), Top: tn("a", "tree")},
-				{Name: tn("a", "v"), Missing: true}, {Name: tn("a", "nothing"), Missing: true}, {Name: tn("b", "plain"), Missing: true},
+				{Name: tn("a", "v"), Missing: true},
+				{Name: tn("a", "nothing"), Missing: true}, {Name: tn("b", "plain"), Missing: true},
 				{Name: tn("A", "Mixed")}, {Name: tn("a", "mixed"), Missing: true},
 			}
 			if !reflect.DeepEqual(got, want) {

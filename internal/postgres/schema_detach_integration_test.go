@@ -714,7 +714,7 @@ func TestDeferredTriggerThatChangesAnotherTable(t *testing.T) {
 			}
 			before := db.Query(t, schemaCheckRows)
 			_, err = applyThrough(t, db.Config, decl, settings, true)
-			want := "after its first deletion, the apply changed 1 row of table public.summary, which the plan did not count: " +
+			want := "after its first deletion, the database counted 1 update in table public.summary for the transaction, which the plan did not count: " +
 				"a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, " +
 				"did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, " +
 				"and the constraint triggers of the tables that the apply writes, for one that changes table public.summary, " +

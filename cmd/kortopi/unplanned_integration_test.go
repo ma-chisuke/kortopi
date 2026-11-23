@@ -75,7 +75,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 			without := writeFiles(t, with(declared, map[string]string{"kortopi.toml": sync}))
 			code, stdout, stderr := runTest(t, append([]string{"apply", "--dir", without, "--allow-delete"}, conn...), buildDialects(t))
 			checkRun(t, code, stdout, stderr, exitError, planText,
-				"kortopi: after its first deletion, the apply deleted 2 rows of table shop.category_labels, and the plan counted 0: "+
+				"kortopi: after its first deletion, the database counted 2 deletions in table shop.category_labels for the transaction, and the plan counted 0: "+
 					"a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, "+
 					"did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, "+
 					"and the constraint triggers of the tables that the apply writes, for one that changes table shop.category_labels, "+
@@ -108,10 +108,11 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 
 			code, stdout, stderr = runTest(t, append([]string{"apply", "--dir", dir, "--allow-delete", "--max-delete", "2"}, conn...), buildDialects(t))
 			checkRun(t, code, stdout, stderr, exitError, planWith,
-				"kortopi: the deletions of the apply deleted 3 rows, more than the limit of 2: 1 row of shop.categories to delete, "+
-					"and 2 rows that they deleted beyond the plan in tables that allow_unplanned_changes names (2 rows of shop.category_labels), "+
-					"so the apply stops before its commit: check the triggers and the rules that delete rows of these tables, "+
-					"and if the deletions are right, raise the limit with --max-delete 3\n"+
+				"kortopi: the deletions of the apply come to 3, more than the limit of 2: 1 row of shop.categories to delete, "+
+					"and 2 deletions beyond the plan in tables that allow_unplanned_changes names, by the counts of the database (2 in shop.category_labels), "+
+					"so the apply stops before its commit: a count of the database can exceed the rows that are gone, "+
+					"since it holds what a block of a trigger rolled back and both halves of a move between partitions: "+
+					"check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete 3\n"+
 					"kortopi: nothing was changed\n")
 			if got := rows(); !slices.Equal(got, before) {
 				t.Errorf("rows after the apply beyond its limit: %v, want %v", got, before)
@@ -121,8 +122,8 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 			checkRun(t, code, stdout, stderr, exitOK, planWith+lines(
 				"",
 				"Applied: 0 inserted, 0 updated, 1 deleted.",
-				"Unplanned changes in shop.category_labels: 2 rows deleted.",
-				"Unplanned changes in shop.totals: 1 update.",
+				"Unplanned changes in shop.category_labels, by the counts of the database: 2 deletions.",
+				"Unplanned changes in shop.totals, by the counts of the database: 1 update.",
 			))
 			if got, want := rows(), []string{"categories books", "labels books/en", "totals 1"}; !slices.Equal(got, want) {
 				t.Errorf("rows after the apply: %v, want %v", got, want)

@@ -139,11 +139,12 @@ func TestRunUnplannedChanges(t *testing.T) {
 			// The plan counts 4 rows, within the limit, and the deletions
 			// delete 2 more.
 			name: "beyond the limit", maxDelete: 5,
-			wantErr: "the deletions of the apply deleted or changed 6 rows, more than the limit of 5: 1 row of z.parent to delete, " +
+			wantErr: "the deletions of the apply come to 6, more than the limit of 5: 1 row of z.parent to delete, " +
 				"2 rows that ON DELETE CASCADE deletes with them (2 rows of b.orders), 1 row that ON DELETE SET NULL or SET DEFAULT changes (1 row of b.reviews), " +
-				"and 2 rows that they deleted beyond the plan in tables that allow_unplanned_changes names (2 rows of shop.labels), " +
-				"so the apply stops before its commit: check the triggers and the rules that delete rows of these tables, " +
-				"and if the deletions are right, raise the limit with --max-delete 6",
+				"and 2 deletions beyond the plan in tables that allow_unplanned_changes names, by the counts of the database (2 in shop.labels), " +
+				"so the apply stops before its commit: a count of the database can exceed the rows that are gone, " +
+				"since it holds what a block of a trigger rolled back and both halves of a move between partitions: " +
+				"check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete 6",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

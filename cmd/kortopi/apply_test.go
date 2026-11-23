@@ -256,8 +256,8 @@ func TestRunApply(t *testing.T) {
 			wantCode: exitOK,
 			wantStdout: planOfGoldAndOldWithUnplanned +
 				"\nApplied: 1 inserted, 0 updated, 1 deleted.\n" +
-				"Unplanned changes in shop.labels: 2 rows deleted.\n" +
-				"Unplanned changes in shop.totals: 1 update.\n",
+				"Unplanned changes in shop.labels, by the counts of the database: 2 deletions.\n" +
+				"Unplanned changes in shop.totals, by the counts of the database: 1 update.\n",
 			wantCalls: append(diffs, "PrepareDeletes", "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
 		},
 		{
@@ -269,10 +269,11 @@ func TestRunApply(t *testing.T) {
 			session:    &fakeSession{diffs: goldAndOld, missing: noArchive, beyond: []apply.Unplanned{{Table: labels, Deleted: 2}, {Table: totals, Updates: 1}}},
 			wantCode:   exitError,
 			wantStdout: planOfGoldAndOldWithUnplanned,
-			wantStderr: "kortopi: the deletions of the apply deleted 3 rows, more than the limit of 2: 1 row of app.plans to delete, " +
-				"and 2 rows that they deleted beyond the plan in tables that allow_unplanned_changes names (2 rows of shop.labels), " +
-				"so the apply stops before its commit: check the triggers and the rules that delete rows of these tables, " +
-				"and if the deletions are right, raise the limit with --max-delete 3\n" + nothingChanged,
+			wantStderr: "kortopi: the deletions of the apply come to 3, more than the limit of 2: 1 row of app.plans to delete, " +
+				"and 2 deletions beyond the plan in tables that allow_unplanned_changes names, by the counts of the database (2 in shop.labels), " +
+				"so the apply stops before its commit: a count of the database can exceed the rows that are gone, " +
+				"since it holds what a block of a trigger rolled back and both halves of a move between partitions: " +
+				"check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete 3\n" + nothingChanged,
 			wantCalls: append(diffs, "PrepareDeletes", "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect"),
 		},
 		{

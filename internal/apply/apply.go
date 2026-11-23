@@ -276,12 +276,15 @@ type Count struct {
 // allow_unplanned_changes beyond what its plan counted, by the counts that
 // the database keeps of the rows of the transaction since its first
 // deletion, which hold what the constraints deferred to the commit did too
-// (ADR-0051). The partitions of a partitioned table count with it.
+// (ADR-0051). The partitions of a partitioned table count with it. They are
+// counts of the database, not rows that the table lost or gained: they hold
+// what a block of a trigger rolled back, and a row that moves to another
+// partition counts as a deletion and an insertion.
 type Unplanned struct {
 	Table declaration.TableName
-	// Deleted counts the rows that the transaction deleted from the table
-	// beyond those that the plan deletes from it and that the effect of the
-	// deletions counted, and Inserted the rows that it inserted into it.
+	// Deleted counts the deletions in the table beyond those of the rows that
+	// the plan deletes from it and that the effect of the deletions counted,
+	// and Inserted the insertions into it.
 	Deleted  int
 	Inserted int
 	// Updates is the number of updates of rows of the table, which can
