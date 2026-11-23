@@ -1,0 +1,9 @@
+app.plans (sync, key: code)
+  - code=legacy
+  0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of app.steps (plan_code) references it through steps_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      299 rows of app.steps (after_id) reference rows of app.steps that the deletion deletes, through steps_after_id_fkey, ON DELETE CASCADE, at 299 levels, so the deletion deletes these rows too.
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+Through foreign keys, the deletion also deletes 300 rows.

@@ -114,6 +114,18 @@ func table(name declaration.TableName, mode config.Mode, d plan.TableDiff) plan.
 	return plan.Table{Name: name, Mode: mode, Key: []string{"id"}, Compare: []string{"name"}, Diff: d}
 }
 
+// chainOfLines returns the steps of the deletion of a region that cascades
+// into a line of geo.lines, and along a chain of rows of geo.lines, each
+// after a row of the level before, two rows at each of n-1 more levels.
+func chainOfLines(n int) []plan.Step {
+	steps := []plan.Step{{Level: 1, Table: tn("geo", "lines"), Columns: []string{"region"}, Constraint: "lines_region", References: regions, OnDelete: "CASCADE", Rows: 1}}
+	for level := 2; level <= n; level++ {
+		steps = append(steps, plan.Step{Level: level, Table: tn("geo", "lines"), Columns: []string{"after"}, Constraint: "lines_after",
+			References: tn("geo", "lines"), OnDelete: "CASCADE", Rows: 2})
+	}
+	return steps
+}
+
 // withEffect returns t with the steps as the effect of its deletions.
 func withEffect(t plan.Table, steps ...plan.Step) plan.Table {
 	t.Effect = plan.Effect{Steps: steps}
@@ -270,6 +282,16 @@ func TestWrite(t *testing.T) {
 				),
 			}},
 			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			// The levels of a cascade along a chain of rows of a table that
+			// references itself take one comment line (ADR-0050).
+			name: "deletions_through_a_chain",
+			plan: &plan.Plan{Tables: []plan.Table{
+				withEffect(table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("1")}), chainOfLines(41)...),
+			}},
+			db:     &fakeDB{},
 			header: Header{Dir: "data", Database: "shop"},
 		},
 		{
