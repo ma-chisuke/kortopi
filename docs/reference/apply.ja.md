@@ -638,7 +638,7 @@ apply が 2 で終わることはない。コミットした apply は、省い�
 
 ロックは接続ではなくトランザクションに属する。そのため、トランザクションモードのコネクションプーラーを通しても働き、トランザクションとともに終わる。
 割り込まれた apply は、終了する前にトランザクションを終える（[apply に割り込む](#apply-に割り込む)）。
-kortopi が強制終了されたときや接続が切れたときは、接続がなくなったことにサーバーが気付いたときにトランザクションが終わる。セッションが待っているか文を実行しているときは、それに長くかかることがある。
+kortopi が強制終了されたときや接続が切れたときは、kortopi がいなくなったことにサーバーが気付いたときにトランザクションが終わる。それには長くかかることがある。行を待つ文のように実行中の文は、実行中に接続をサーバーが確かめない限り、まず最後まで動く。ネットワークが切れた先のセッションは、そのあと、サーバーの設定が終わらせるまでクライアントを待つ（[スクリプトから kortopi を実行する](automation.ja.md#途中で途切れた実行)）。
 これはサーバーのロックであり、データベースのオブジェクトではない。
 
 別の apply を待つのが `--lock-timeout` かセッションの `lock_timeout` の上限に達すると、apply は止まる。
@@ -1076,4 +1076,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:e11abc9ed9fc78aac29628d3fd1b50c4b97e6205a5241a06e93b020f25f2ac0e -->
+<!-- i18n-source: apply.md sha256:d54eeda80a61f02d7af67d549e1cad0b2afa13b45e2dbce8c47e4b7c1b780c9a -->

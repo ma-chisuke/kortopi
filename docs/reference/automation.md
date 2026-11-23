@@ -18,6 +18,14 @@ The commands are those of [kortopi plan](plan.md), [kortopi apply](apply.md), an
 | `kortopi apply` | the apply committed, or there was nothing to change | the apply failed | never |
 | `kortopi export` | every file was written | the export failed | never |
 
+A pipeline tells the outcomes apart by the status and the last line of standard error:
+
+- 2, from `kortopi plan --exit-code`: the plan is not empty. Show it for a review, or report the drift.
+- 1, with `kortopi: nothing was changed` last, or that line with the sequences that it names: fix what the error names, and run again.
+- 1, with the message that the outcome of the commit is not known: run `kortopi plan` to see whether the commit was made, and apply again if it was not ([kortopi apply](apply.md#read-the-output)).
+- 1, with the usage of the command last: correct the flags.
+- A status above 128, as 137 for SIGKILL: a signal ended kortopi before it could end its session, which can stay on the server and hold its locks ([A run that breaks off](#a-run-that-breaks-off)). kortopi catches SIGINT and SIGTERM, and exits with 1 after them.
+
 ## At deploy time
 
 Apply the rows after the schema, in the same deployment:
@@ -31,7 +39,7 @@ kortopi apply --dir data --lock-timeout 10s
 - Start the apply once the schema change of the deployment has committed. A change that rewrites, truncates, or replaces a declared table, or attaches or detaches one of its partitions, after the apply began stops the apply before it writes anything, with exit status 1: run it again then ([kortopi plan](plan.md#a-schema-change-during-a-run)).
 - Run the apply as the role that owns the declared tables, or as a role that has [what an apply needs](apply.md#what-an-apply-needs). With one owner role for each schema, run one apply for each schema, with `--schema` ([kortopi apply](apply.md#one-apply-for-each-schema)).
 - Give the apply a lock timeout with `--lock-timeout`. Without one, an apply waits without limit while another session holds a lock on a declared table, or on the rows that it writes, and the deployment waits with it. With one, the apply stops with an error that says so, and changes nothing ([kortopi plan](plan.md#wait-for-a-lock)). Use the flag, not `PGOPTIONS`: behind a connection pooler in transaction mode, `PGOPTIONS` does not reach the server, and the run fails to connect or waits without the limit ([Connection settings](plan.md#connection-settings)).
-- A runner that cancels a job sends kortopi SIGTERM, or SIGINT. Before the commit, kortopi asks the server to cancel its statement, rolls back, and exits with status 1 within 5 seconds, or within 10 seconds during the check after the deletions, which ends a second session too, with `kortopi: nothing was changed` last; when the server did not confirm the end of the session in that time, a line before it says how to find the session in `pg_stat_activity` and end it. Once the commit has started, kortopi says that it waits for the answer, and a second signal gives up the wait with the message of the unknown outcome: run `kortopi plan` then. A runner that kills the process before that leaves the outcome to the server ([kortopi apply](apply.md#interrupt-an-apply)).
+- A runner that cancels a job sends kortopi SIGTERM, or SIGINT. Before the commit, kortopi asks the server to cancel its statement, rolls back, and exits with status 1 within 5 seconds, or within 10 seconds during the check after the deletions, which ends a second session too, with `kortopi: nothing was changed` last; when the server did not confirm the end of the session in that time, a line before it says how to find the session in `pg_stat_activity` and end it. Once the commit has started, kortopi says that it waits for the answer, and a second signal gives up the wait with the message of the unknown outcome: run `kortopi plan` then. A runner that kills the process before that leaves the outcome to the server ([kortopi apply](apply.md#interrupt-an-apply)), and the session too, until the server ends it ([A run that breaks off](#a-run-that-breaks-off)).
 - Exit status 1 means that the apply changed nothing, unless its error says that the outcome of the commit is not known. The deployment can run the apply again after a fix.
 - Decide about deletions for each pipeline. Without `--allow-delete`, an apply leaves the rows that tables of mode `sync` should lose, says so in a line `Not deleted: ...`, and exits with 0. With `--allow-delete`, it deletes them, within `--max-delete`, 100 rows by default, which counts the rows to delete and every row that foreign keys delete or change with them, at every depth ([kortopi apply](apply.md#the-guards-on-deletions)). Set the limit for what the deletions of the pipeline do to the tables that reference them, not only for the rows of the declaration. A trigger that deletes or changes rows of other tables when a row is deleted stops an apply that deletes, unless `allow_unplanned_changes` in `kortopi.toml` names the tables that it changes: the apply then counts the deletions that the database counts there against the limit, and gives the counts after `Applied:`, in lines that start with `Unplanned changes in` ([kortopi apply](apply.md#tables-that-may-change-beyond-the-plan)). To fail a deployment that leaves rows behind, run `kortopi plan --exit-code` after the apply. Either way, an apply whose plan has rows to delete in a table that is not partitioned needs `track_counts` on, as it is by default ([kortopi apply](apply.md#track_counts)). An apply that deletes opens a second connection after its deletions, to compare the schema of the tables that they reach with what it is now, and stops before its commit when another session changed it while the apply ran: it needs a free connection slot for that connection, and the schema change of the deployment has to commit before the apply starts ([kortopi apply](apply.md#the-schema-changed-while-the-apply-ran)).
 - An apply compares every declared table of its run again before its commit, and fails without changing anything when the database holds other values or rows than the declaration after the writes, as a trigger that rewrites a declared value makes it hold ([kortopi apply](apply.md#the-check-before-the-commit)). Without `--allow-delete`, it also fails when its writes deleted a row that a table of mode `sync` holds and the declaration lacks, or added such a row, also when the one takes the place of the other. A table whose trigger rewrites a declared value fails every such apply until the declaration holds the value as the table stores it. A plan right after an apply that committed can still show:
@@ -131,3 +139,40 @@ A plan of each declaration below ran in a container with the memory limit of the
 
 - Give a job that reads SQL files at least 300 MiB, and more for large SQL files, or declare the tables in CSV files, which kortopi never parses.
 - A run that the system kills for its memory prints nothing, because it gets no chance to, and a shell reports the exit status 137, which stands for the signal SIGKILL. Look at the memory of a job that ends so.
+
+### Connections
+
+- Set `PGCONNECT_TIMEOUT`, such as to 10 seconds. Without it, an attempt to a host that answers nothing waits as long as the operating system lets it, about 150 seconds in a test ([Connection settings](plan.md#connection-settings)).
+- With a list of hosts in `PGHOST`, set `PGTARGETSESSIONATTRS=read-write` for a plan and an apply, which need the primary ([Connection settings](plan.md#connection-settings)).
+- An apply that deletes opens a second connection after its deletions, so count two connection slots for it, within `max_connections`, the connection limit of its role, and the pool of a connection pooler ([kortopi apply](apply.md#what-an-apply-needs)).
+
+### Time limits
+
+- `--lock-timeout` limits each wait of a run for a lock that another session holds, the wait for another apply among them. Give it to every run that a deployment waits for ([Wait for a lock](plan.md#wait-for-a-lock)).
+- `statement_timeout` of the session, of its role, or of the server ends a statement that runs too long, for whatever reason. kortopi has no flag for it, and its error says when it ended a statement ([Wait for a lock](plan.md#wait-for-a-lock)).
+- `idle_in_transaction_session_timeout` ends a session that waits too long for its client inside a transaction, as the session of a run that broke off does ([A run that breaks off](#a-run-that-breaks-off)).
+
+### A run that breaks off
+
+A run that kortopi stops itself, on an error or on an interrupt, rolls its transaction back and ends its session on the server ([kortopi apply](apply.md#interrupt-an-apply)).
+A run that stops otherwise leaves its session to the server: a job that is killed with SIGKILL, a machine that stops, or a network that is cut.
+The session keeps its transaction, and with it the lock of kortopi that keeps two applies apart and the locks on the tables and the rows that the run read and wrote, until the server ends it.
+A second apply waits for that lock, and stops at its lock timeout, with an error that says how to find and end the session ([Two applies at once](apply.md#two-applies-at-once)).
+
+In a test against PostgreSQL 18.7 on Linux, with the settings of the server as they come, an apply waited for a row that another session held, and its client went away while it waited:
+
+- When kortopi was killed with SIGKILL, on a machine that stayed up, the session went on waiting for the row, and ended once the other session committed and its statement had ended.
+- When the network of the client was cut, the session finished its statement once the row was free, and then waited for its client, `idle in transaction`, with the lock of kortopi, for as long as the test watched, over a minute. A second apply waited for it, and stopped at its `--lock-timeout`.
+
+These settings of the server end such a session sooner. The test set the first two for the role of the apply, with `ALTER ROLE ... IN DATABASE ... SET`, and the others for the server, with `ALTER SYSTEM`:
+
+| Setting | What it ends | In the test |
+|---|---|---|
+| `idle_in_transaction_session_timeout` | a session that has waited for its client inside a transaction longer than the setting | `5s` ended the session behind the cut network 5 seconds after its statement, and the next apply ran. |
+| `client_connection_check_interval` | a statement whose client has closed its connection, which the server checks at this interval while the statement runs | `1s` ended the statement of the killed kortopi while it waited for the row. Alone, it did not notice the cut network. |
+| `tcp_keepalives_idle`, `tcp_keepalives_interval`, `tcp_keepalives_count` | a connection whose client does not answer the probes that the server sends while none of its own data waits for an acknowledgment | `5`, `2`, and `3`, with `client_connection_check_interval` at `1s`, ended the statement behind the cut network while it waited for the row. Alone, they did not end the session behind the cut network that waited for its client after its statement, whose answer the client never acknowledged. |
+| `tcp_user_timeout` | a connection whose data waits for an acknowledgment longer than the setting, in milliseconds | `10000` ended that session about 10 seconds after its statement. |
+
+- `idle_in_transaction_session_timeout` ends the session of a client that went away in any of these ways once its statement has ended. It needs a margin over the pauses of a run between its own statements: the longest pause measured was 2.3 seconds in a plan and in an apply of 100,000 changed rows, 3.1 seconds in a plan and 5.0 seconds in an apply of 1,000,000 changed rows, on a machine that other work loaded. Give it a margin over the largest runs, for the role of the deployment.
+- To end such a session by hand, find it in `pg_stat_activity`, where `application_name` is `kortopi` unless `PGAPPNAME` names another, and end it with `pg_terminate_backend`.
+- kortopi itself notices a server that no longer answers, with probes of its own ([Connection settings](plan.md#connection-settings)).

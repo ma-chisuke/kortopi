@@ -629,7 +629,7 @@ It then compares the declaration with the rows that the first one wrote.
 
 The lock belongs to the transaction, not to the connection, so it also works through a connection pooler in transaction mode, and it ends with the transaction.
 An interrupted apply ends its transaction before it exits ([Interrupt an apply](#interrupt-an-apply)).
-When kortopi is killed, or its connection is cut, the transaction ends once the server notices that the connection is gone, which can take long when the session waits or runs a statement.
+When kortopi is killed, or its connection is cut, the transaction ends once the server notices that kortopi is gone, which can take long: a statement that runs, such as a wait for a row, runs to its end first unless the server checks the connection while it runs, and a session behind a cut network then waits for its client until a setting of the server ends it ([Run kortopi from scripts](automation.md#a-run-that-breaks-off)).
 It is a lock of the server, not an object in the database.
 
 When the wait for another apply reaches the limit of `--lock-timeout`, or of `lock_timeout` of the session, the apply stops:
