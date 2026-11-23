@@ -127,7 +127,8 @@ func (s *Session) CheckEffect(ctx context.Context, unplanned []declaration.Table
 }
 
 // unplannedTops returns the tables of unplanned that the snapshot shows as
-// ordinary or partitioned tables that are no partitions, by their OIDs: the
+// ordinary or partitioned tables that are no partitions, or as materialized
+// views, by their OIDs: the
 // OID of the partitioned table at the top of a relation, by which
 // checkWrittenRows adds up the counts, is that of such a table.
 func (s *Session) unplannedTops(ctx context.Context, unplanned []declaration.TableName) (map[uint32]declaration.TableName, error) {

@@ -20,10 +20,12 @@ type unplannedRelation struct {
 
 // Unplanned reports what the catalogs say about each table that the settings
 // name in allow_unplanned_changes, in the order of names: whether the
-// database has an ordinary or a partitioned table of the name, and, for a
-// partition, the partitioned table at the top of its tree, with which
-// CheckEffect counts its rows. It reads pg_class and pg_namespace alone,
-// which every role may read, and no row of a table.
+// database has an ordinary or a partitioned table, or a materialized view,
+// of the name, whose rows the counts of CheckEffect cover, as a trigger that
+// refreshes the view changes them, and, for a partition, the partitioned
+// table at the top of its tree, with which CheckEffect counts its rows. It
+// reads pg_class and pg_namespace alone, which every role may read, and no
+// row of a table.
 func (s *Session) Unplanned(ctx context.Context, names []declaration.TableName) (_ []plan.UnplannedTable, err error) {
 	defer s.explainWait(ctx, &err)
 	relations, err := s.unplannedRelations(ctx, names)
@@ -40,7 +42,8 @@ func (s *Session) Unplanned(ctx context.Context, names []declaration.TableName) 
 // unplannedRelations reads the tables of names from the catalogs of the
 // snapshot, in the order of names, with one query. A name matches exactly,
 // as a declared name does, and a relation of another kind than an ordinary
-// or a partitioned table, such as a view, is no table of the name.
+// or a partitioned table or a materialized view, such as a view, is no table
+// of the name.
 func (s *Session) unplannedRelations(ctx context.Context, names []declaration.TableName) ([]unplannedRelation, error) {
 	schemas := make([]string, len(names))
 	tables := make([]string, len(names))
@@ -51,7 +54,7 @@ func (s *Session) unplannedRelations(ctx context.Context, names []declaration.Ta
 			COALESCE(tn.nspname::pg_catalog.text, ''), COALESCE(top.relname::pg_catalog.text, '')
 		FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) WITH ORDINALITY AS r(nspname, relname, n)
 		LEFT JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
-		LEFT JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname AND c.relkind IN ('r', 'p')
+		LEFT JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname AND c.relkind IN ('r', 'p', 'm')
 		LEFT JOIN pg_catalog.pg_class AS top ON c.relispartition
 			AND top.oid = pg_catalog.pg_partition_root(c.oid::pg_catalog.regclass)::pg_catalog.oid
 		LEFT JOIN pg_catalog.pg_namespace AS tn ON tn.oid = top.relnamespace

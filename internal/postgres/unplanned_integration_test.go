@@ -48,9 +48,10 @@ const unplannedTrigger = `CREATE TRIGGER forget_category AFTER DELETE ON shop.ca
 // name, or a partition whose partitioned table it does not name, does. The
 // deletions that the database counts beyond the plan count against
 // --max-delete, after the deletions. The comparison before the commit still
-// decides for a named table that is declared, and a name that the database
-// has no table of is no error. Every error is compared whole, so that the
-// advice to name a table shows only where naming it helps.
+// decides for a named table that is declared, a name that the database has
+// no table of is no error, and a materialized view can be named. Every error
+// is compared whole, so that the advice to name a table shows only where
+// naming it helps.
 func TestApplyUnplannedChanges(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -86,6 +87,11 @@ func TestApplyUnplannedChanges(t *testing.T) {
 				CREATE TRIGGER open_shelf AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.open_shelf();`
 			shelvesCounted := "1 deletion and 2 insertions in table shop.shelves for the transaction, and the plan counted 0 deletions, " +
 				"and one more deletion and one insertion for each row that SET NULL or SET DEFAULT moves to another partition"
+			names := `CREATE MATERIALIZED VIEW shop.category_names AS SELECT code, name FROM shop.categories;
+				CREATE UNIQUE INDEX ON shop.category_names (code);
+				CREATE FUNCTION shop.refresh_names() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN REFRESH MATERIALIZED VIEW CONCURRENTLY shop.category_names; RETURN OLD; END $$;
+				CREATE TRIGGER refresh_names AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.refresh_names();`
 			unchanged := []string{
 				"shop.categories (books,Books)", "shop.category_labels (books,en,Books)", "shop.category_labels (games,en,Games)",
 				"shop.category_labels (games,fr,Jeux)", "shop.totals (1,2)",
@@ -261,6 +267,22 @@ func TestApplyUnplannedChanges(t *testing.T) {
 					wantErr:   counts("0 updates in table shop.reviews for the transaction, and the plan allows 1", "shop.reviews", named("shop.reviews")),
 				},
 				{
+					// A trigger that refreshes a materialized view changes its
+					// rows, which the counts cover, and the setting can name it.
+					name:    "a materialized view that a trigger refreshes, without the setting",
+					setUp:   names,
+					wantErr: counts("1 deletion in table shop.category_names for the transaction, and the plan counted 0", "shop.category_names", naming("shop.category_names")),
+				},
+				{
+					name:      "a materialized view that a trigger refreshes",
+					setUp:     names,
+					unplanned: []string{"shop.category_names"},
+					wantLines: []string{"The deletion may also delete, update, or insert rows of shop.category_names beyond what the plan shows, " +
+						"which allow_unplanned_changes in kortopi.toml allows."},
+					want: []apply.Unplanned{{Table: tn("shop", "category_names"), Deleted: 1}},
+					rows: unchanged,
+				},
+				{
 					// The settings file cannot name a table whose name holds a
 					// dot, so the error does not advise it.
 					name: "a table whose name holds a dot",
@@ -377,8 +399,9 @@ func applyWith(t *testing.T, db testDB, decl *declaration.Declaration, settings 
 }
 
 // Unplanned reads the tables of allow_unplanned_changes from the catalogs:
-// a table, a partitioned table and its partitions at every depth, a view,
-// and names that the database has no table of, in the order of the names.
+// a table, a partitioned table and its partitions at every depth, a
+// materialized view, a view, and names that the database has no table of,
+// in the order of the names.
 func TestUnplanned(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -389,10 +412,11 @@ func TestUnplanned(t *testing.T) {
 				CREATE TABLE a.branch PARTITION OF a.tree FOR VALUES FROM (0) TO (10) PARTITION BY RANGE (id);
 				CREATE TABLE a.leaf PARTITION OF a.branch FOR VALUES FROM (0) TO (10);
 				CREATE VIEW a.v AS SELECT 1 AS x;
+				CREATE MATERIALIZED VIEW a.mv AS SELECT 1 AS x;
 				CREATE SCHEMA "A"; CREATE TABLE "A"."Mixed" ();`)
 			s := db.session(t, t.TempDir())
 			got, err := s.Unplanned(t.Context(), []declaration.TableName{
-				tn("a", "plain"), tn("a", "tree"), tn("a", "branch"), tn("a", "leaf"), tn("a", "v"),
+				tn("a", "plain"), tn("a", "tree"), tn("a", "branch"), tn("a", "leaf"), tn("a", "v"), tn("a", "mv"),
 				tn("a", "nothing"), tn("b", "plain"), tn("A", "Mixed"), tn("a", "mixed"),
 			})
 			if err != nil {
@@ -401,7 +425,7 @@ func TestUnplanned(t *testing.T) {
 			want := []plan.UnplannedTable{
 				{Name: tn("a", "plain")}, {Name: tn("a", "tree")},
 				{Name: tn("a", "branch"), Top: tn("a", "tree")}, {Name: tn("a", "leaf"), Top: tn("a", "tree")},
-				{Name: tn("a", "v"), Missing: true},
+				{Name: tn("a", "v"), Missing: true}, {Name: tn("a", "mv")},
 				{Name: tn("a", "nothing"), Missing: true}, {Name: tn("b", "plain"), Missing: true},
 				{Name: tn("A", "Mixed")}, {Name: tn("a", "mixed"), Missing: true},
 			}

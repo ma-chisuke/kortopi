@@ -77,7 +77,8 @@ type Database interface {
 type UnplannedTable struct {
 	Name declaration.TableName
 	// Missing is true when the database has no table of the name: none at
-	// all, or a relation of another kind, such as a view.
+	// all, or a relation of another kind than a table or a materialized view,
+	// such as a view.
 	Missing bool
 	// Top names, for a partition, the partitioned table at the top of its
 	// tree. It is the zero name for a table that is no partition.
