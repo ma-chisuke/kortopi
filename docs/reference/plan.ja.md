@@ -602,6 +602,7 @@ A partition is checked with the partitioned table at the top of its tree, so all
 - 3行目は、ツリーの最上位のパーティションテーブルを挙げずに設定が挙げたパーティションを挙げる。apply はその行を最上位のパーティションテーブルと一緒に数えるので、設定はそれを含まない。
 - 各行はテーブルを多くとも5つ挙げ、ほかは `and 3 more tables` のように数える。
 - 削除する行のない計画は、これらの行をどれも出さず、これらの行は終了コードを変えない。
+- この設定のテーブルについて、まとまりと外部キーの行が伝えるのは、外部キーだけがするはずのことである。それらが数える行を、トリガーが先に削除することがある。削除を失敗させると数えた行も同じであり、そのとき apply はコミットする。
 
 削除が消す宣言した行や、削除が宣言した列を設定する宣言した行は、まとまりの行ではなく誤りである。計画は失敗し、その行と、それを宣言したファイルを挙げる（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
 モード `insert` のテーブルは、保存された行をキーだけで比べる。そのため、そこで保存された行が誤りになるのは、削除がそのキーの列を設定するときだけであり、ほかの列の変更はまとまりの行になる。
@@ -858,4 +859,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:10215e1fac8480f4fae2ef292bdd1fd03f9b69fa1c10eded9bf2a0f3e3e3acf5 -->
+<!-- i18n-source: plan.md sha256:20064169922d374280ce7eb73f86a102f52b3637a5b96ff6d695ee660f33d9ca -->

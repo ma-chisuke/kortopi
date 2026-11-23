@@ -598,6 +598,7 @@ A partition is checked with the partitioned table at the top of its tree, so all
 - The third names the partitions that the setting names without the partitioned table at the top of their trees, with which an apply counts their rows, so that the setting does not cover them.
 - Each line names five tables at most, and counts the others, as in `and 3 more tables`.
 - A plan without rows to delete prints none of them, and they change no exit status.
+- For a table of the setting, the block and the lines of the foreign keys say what the foreign keys alone would do. A trigger can delete first the rows that they count, also rows that they count as making the deletion fail, and the apply then commits.
 
 A declared row that the deletions would delete, or whose declared column they would set, is a mistake, not a line of the block: the plan fails, and names the row and the file that declares it ([kortopi apply](apply.md#declared-rows-in-the-way)).
 A table of mode `insert` compares a stored row by its key alone, so there a stored row is a mistake only when the deletions would set a column of its key; a change of another column is a line of the block.

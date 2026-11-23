@@ -275,14 +275,18 @@ mode = "sync"
 ```
 
 An apply that deletes stops before its commit when a table lost or changed rows that its plan did not count ([kortopi apply](apply.md#the-guards-on-deletions)), so a table whose trigger keeps other tables in step, as one that deletes the labels of a category and counts the categories, could never delete a row.
-For a table of the setting, the apply does not stop on rows beyond the plan, counts the rows that it deleted against `--max-delete`, and says after its commit what it did there ([Tables that may change beyond the plan](apply.md#tables-that-may-change-beyond-the-plan)).
+For a table of the setting, the apply does not stop on what the database counts beyond the plan, counts the deletions there against `--max-delete`, and says after its commit what the database counted ([Tables that may change beyond the plan](apply.md#tables-that-may-change-beyond-the-plan)).
 Every other table stops the apply as before.
 
 - The key stands at the top of the file, before the first section: a key after a section belongs to that section, and is an unknown setting of the table there.
 - Each name is `<schema>.<table>`, with the case of the database, once. An array names no table when it is empty.
 - A table of the setting needs no file that declares it, and no section of its own. A declared table may be named too: the apply still compares it again before its commit, so it must still end as declared.
+- A name may be an ordinary table, a partitioned table, or a materialized view, whose rows a trigger that refreshes it changes.
 - A partitioned table covers its partitions at every depth. A partition named alone covers nothing, since the apply counts the rows of a partition with its partitioned table at the top of the tree; a plan says so, and names the table to name instead.
 - A name that the database has no table of is no error, so the setting can name a table that a schema change will add, or that one environment lacks. A plan with rows to delete says so.
+- A table whose schema or name holds a dot cannot be named, as it cannot be declared.
+
+Naming a table gives up a check for it: the apply can no longer tell a row that the plan shows as deleted, and that a trigger kept with an update, from other work of the trigger, so the output can say more than happened there ([Tables that may change beyond the plan](apply.md#tables-that-may-change-beyond-the-plan)). Name only the tables that a trigger changes on purpose.
 
 A plan with rows to delete names the tables of the setting ([kortopi plan](plan.md#what-the-deletions-also-do)). The setting changes nothing in an apply without `--allow-delete`, or without rows to delete.
 
