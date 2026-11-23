@@ -55,7 +55,7 @@ jobs:
           # The history of main, to tell whether the tag is on it.
           fetch-depth: 0
       - name: Install mise, gh, and jq
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: gh jq
@@ -82,7 +82,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise, Go, and Trivy
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: go trivy
@@ -134,7 +134,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install mise and gh
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: gh

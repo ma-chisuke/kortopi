@@ -157,7 +157,9 @@ const deferredWhat = "run the constraints deferred to the commit"
 // session, as the commit would run them, and the pinned settings again after
 // it (ADR-0037). An apply writes nothing after it, so nothing is left to
 // defer to the commit. A constraint that fails is the error of a write,
-// with its advice, and nothing was changed.
+// with its advice, and nothing was changed; a foreign key that fails is
+// held to what another session changed after the snapshot, as at the commit
+// (referencedChange).
 func (s *Session) runDeferred(ctx context.Context) error {
 	_, _, failed, _, err := s.execWrite(ctx, nil, batchStatement{what: deferredWhat, sql: "SET CONSTRAINTS ALL IMMEDIATE"})
 	if err == nil {
@@ -167,7 +169,7 @@ func (s *Session) runDeferred(ctx context.Context) error {
 	if !errors.As(err, &pgErr) {
 		return fmt.Errorf("%s: %w", failed, err)
 	}
-	return deferredError(failed, pgErr)
+	return s.referencedChange(ctx, deferredError(failed, pgErr), false)
 }
 
 // deferredError is the error of the statement failed of the batch of

@@ -317,7 +317,9 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 
 - 自分自身を参照するテーブルには、何も要らない。PostgreSQL は、そのキーを各文の終わりに検査する。
 - 2つ以上のテーブルが循環して互いを参照し、そのうち2つ以上に書く行があるときは、kortopi は循環の外部キーのうち `DEFERRABLE` なものをコミットまで遅らせる。遅らせられるキーのない循環は、そのとき、どの書き込みよりも前のエラーになる。エラーはテーブルとキーを挙げ、どれか1つを `DEFERRABLE` と宣言するよう伝える。
-- キーを遅らせる `SET CONSTRAINTS` は、制約をスキーマと名前で指す。そのスキーマの別のテーブルに、同じ名前で遅らせられない制約があれば、apply は止まり、どちらかの名前を変えるよう求める。
+- キーを遅らせる `SET CONSTRAINTS` は、制約をスキーマと名前で指す。そのスキーマの別のテーブルに、同じ名前で遅らせられない制約があれば、apply は止まり、どちらかの名前を変えるよう求める。遅らせられない `NOT ENFORCED` の制約も数える。`SET CONSTRAINTS` はそれも断るからである。
+- PostgreSQL 18 が許す `NOT ENFORCED` の外部キーには、トリガーがない。PostgreSQL はそれを検査せず、その動作も働かせない。そのため、そのキーはテーブルの順番を決めず、`DEFERRABLE` であっても遅らせず、循環を作らない。一方は PostgreSQL が検査するキーで、もう一方は `NOT ENFORCED` のキーで互いを参照する2つのテーブルは、前者のキーの順に書き、何も要らない。
+- ほかのセッションが apply の実行中にそうしたキーを検査するキーへ変えたとき、apply が参照する側のテーブルを読む時点でコミットしていない変更は apply を待ち、そのあとで apply がコミットした行を検査する。apply のスナップショットからその読み取りまでの間にコミットした変更では、スナップショットのカタログはキーを `NOT ENFORCED` と見せたまま、PostgreSQL は書き込みでキーを検査する。apply の始まりにロックを持っている変更も同じである。apply は、その読み取りでそのロックを待つからである。そのキーが書き込みを拒むと、apply はその変更を挙げるエラーで止まり（[検査が途中で始まったキー](#検査が途中で始まったキー)）、何も変わらない。次の apply はそのキーでテーブルを順序づけるか、循環を断る。そうした変更は、apply の実行中ではなく、その前にする（[デプロイでの使い方](#デプロイでの使い方)）。
 - `--schema` を使うと、実行の外のテーブルは順番に影響しない。行がそうしたテーブルへの外部キーを破れば、PostgreSQL のエラーがテーブルと制約を示す。
 
 ## 削除の安全策
@@ -418,6 +420,7 @@ kortopi: nothing was changed
 ```
 
 上限は、計画が示すとおりに、カスケードのすべての段と、`SET NULL` と `SET DEFAULT` が変える行を数える。注文の明細が 50,000 行あり、その明細に 2,000 件のメモが付いたプランを削除するなら、それらの行をすべて数えるので、既定の上限で止まる。
+1つの外部キーの段をまとめた計画の行も、そのすべての段の行を数える。自分自身を参照するテーブルの 300 行の連なりに沿ってカスケードする行を削除するなら、301 行と数える。計画は、それを2行と削除する行で示す（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。
 
 計画は標準出力に、エラーは標準エラー出力に出るので、端末ではこの順に行が並ぶ。
 契約がもうプランを参照していなければ、apply はプランを削除する。
@@ -682,7 +685,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 照合キーの値の変更は、削除と挿入になる（ADR-0012）。行は新しい ID を得て、外部キーなしで古い ID を持つ行は何も指さないまま残り、モード `upsert` では古い行が新しい行と並んで残る（[kortopi export](export.ja.md#生成される-id-の代わりの自然キー)）。そして、挿入は削除より先に動く。古い行が持つ別の一意キーの値を新しい行も持つと、挿入はそのキーで失敗する。古い行を前の apply で削除する。古い行を宣言から外して `--allow-delete` 付きで適用し、それから新しい行を宣言すればよい。または、行をその別のキーで照合する。
 - ほかのテーブルが参照する宣言した列を更新すると、それらの外部キーの `ON UPDATE` の動作が働く。計画が外部キーのすることを示すのは、削除についてだけである。削除の `SET NULL` や `SET DEFAULT` が働かせる `ON UPDATE` の動作もたどらず、`--allow-delete` 付きの apply はそこで止まる。
 - 削除がテーブルにすることを数えるには、ロールに、外部キーの列だけでなくテーブル全体に対する `SELECT` が要る。
-- 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。
+- 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。たどる処理は段ごとに問い合わせを流すので、自分自身を参照するテーブルの行の連なりでは、連なりの行ごとに1段の費用がかかる。計画がそれらの段を1行にまとめるときも同じである。
 - 計画は、apply と同じく、一時テーブルと宣言したテーブルのロックを終わるまで持つ。テーブルの数がとても多い宣言では、サーバーの `max_locks_per_transaction` を上げる必要がありうる。
 - トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。トリガーやルールがする範囲の中の更新は見えない。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査の前に動き、それが消すか変える行もほかの行と一緒に数える。宣言したテーブルについては、件数では見えないものをコミット前の比較が見る。更新の書く値と、モード `sync` のテーブルでは、削除する行の数として見る、トリガーが挿入する行である。
 - `allow_unplanned_changes` のテーブルでは、チームが想定したものに限らず、どのトリガー・ルール・遅らせた制約トリガーも、計画を超えて行を削除・更新・挿入してよい（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。計画が挙げるのはテーブルであって行ではなく、数はコミットのあとに出る。その数はデータベースの数であり、トリガーのブロックがロールバックしたものと、パーティションの間の移動の両方の半分を含む。
@@ -752,6 +755,7 @@ kortopi: nothing was changed
 ```
 
 1段目より深いときは、カスケードが行を消し、外部キーが参照するテーブルも、エラーが挙げる。`from rows of b.orders that ON DELETE CASCADE deletes, and the role may not read b.lines as a whole` のようになる。
+外部キーの循環を通じて、たどる処理が1段目より深い複数の段で同じ外部キーに出会っても、この行は1回だけ出る。
 理由ごとに取るべき手順は、[削除の安全策](#削除の安全策)の表のとおりである。
 
 ### 削除とぶつかる宣言した行
@@ -824,6 +828,8 @@ apply はこの誤りを計画を出す前に報告し、`kortopi plan` も報�
 kortopi: tables a.a and a.b reference each other through foreign keys that are not deferrable, "a_b" of a.a and "b_a" of a.b, and tables a.a and a.b have rows to write, so no order of these tables can write their changes: declare one of these foreign keys DEFERRABLE
 ```
 
+エラーが挙げるキーは、PostgreSQL が検査するキーである。`NOT ENFORCED` の外部キーは循環を作らない（[外部キーと循環](#外部キーと循環)）。
+
 ### コミットで失敗する遅らせた外部キー
 
 ```text
@@ -843,6 +849,17 @@ kortopi: nothing was changed
 ```text
 kortopi: foreign key "link" of table app.x cannot be deferred: table app.other has a constraint of the same name in schema "app" that is not DEFERRABLE, and SET CONSTRAINTS names a constraint by its schema and name only: rename one of the two constraints
 ```
+
+### 検査が途中で始まったキー
+
+```text
+kortopi: another session made foreign key "teams_lead_id_fkey" of table app.teams, which references table app.members, enforced after the apply began, or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, which its snapshot shows NOT ENFORCED: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table app.teams: insert or update on table "teams" violates foreign key constraint "teams_lead_id_fkey" (detail: Key (lead_id)=(10) is not present in table "members".) (constraint: teams_lead_id_fkey)
+kortopi: nothing was changed
+```
+
+apply のスナップショットが `NOT ENFORCED` と見せる外部キーが、書き込みか、コミットまで遅らせた制約の検査か、コミットを拒んだ。ほかのセッションがスナップショットのあとでそのキーを検査するキーに変えたので、apply はそのキーを除いて書き込みを順序づけた（[外部キーと循環](#外部キーと循環)）。
+宣言が誤っているとは限らないので、エラーは宣言を変える助言を付けない。apply をもう一度実行すれば、そのキーでテーブルを順序づけるか、そのキーが作る循環を伝える。
+ほかのセッションがそのキーの参照するテーブルも書き直したときは、エラーは `NOT ENFORCED` のあとでそれも挙げる。
 
 ### 同時の変更
 
@@ -1057,6 +1074,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:c91eea04f51ace657f2e95c917f9db184e3c96fdf1bada114ea06d18fddaf266 -->
+<!-- i18n-source: apply.md sha256:e11abc9ed9fc78aac29628d3fd1b50c4b97e6205a5241a06e93b020f25f2ac0e -->

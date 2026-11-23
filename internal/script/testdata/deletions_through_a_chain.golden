@@ -1,0 +1,16 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+-- Through foreign keys, the deletion also deletes 81 rows.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- geo.regions: 1 to delete
+-- Through foreign keys, the deletion of this row also reaches other rows:
+--   1 row of geo.lines (region) references it through lines_region, ON DELETE CASCADE, so the deletion deletes this row too.
+--     80 rows of geo.lines (after) reference rows of geo.lines that the deletion deletes, through lines_after, ON DELETE CASCADE, at 40 levels, so the deletion deletes these rows too.
+-- DELETE FROM geo.regions WHERE (1);

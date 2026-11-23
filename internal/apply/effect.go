@@ -98,7 +98,8 @@ func sameStep(a, b plan.Step) bool {
 // reaches comes before that table too (plan.Effect.Reaches): a cascade from
 // the other table, through tables that the run does not declare, would
 // otherwise delete rows that its own statement counts on. When the two
-// orders cannot both hold, the reverse of sorted stays.
+// orders cannot both hold, the reverse of sorted stays. A key that the
+// database does not enforce orders nothing here either (ADR-0049).
 func DeletionOrder(sorted []declaration.TableName, keys []ForeignKey, deferred []ForeignKey, p *plan.Plan) []declaration.TableName {
 	base := slices.Clone(sorted)
 	slices.Reverse(base)
@@ -116,7 +117,7 @@ func DeletionOrder(sorted []declaration.TableName, keys []ForeignKey, deferred [
 		}
 	}
 	for _, k := range keys {
-		if !slices.ContainsFunc(deferred, func(d ForeignKey) bool { return d.Name == k.Name && d.Table == k.Table }) {
+		if !k.NotEnforced && !slices.ContainsFunc(deferred, func(d ForeignKey) bool { return d.Name == k.Name && d.Table == k.Table }) {
 			add(k.Table, k.References)
 		}
 	}

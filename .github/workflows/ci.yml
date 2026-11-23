@@ -38,7 +38,7 @@ jobs:
           # The commit and its first parent, which CHECK_BASE names.
           fetch-depth: 2
       - name: Install mise and the tools in mise.lock
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: ${{ env.MISE_VERSION }}
       - name: Restore the dependency and build caches
@@ -91,7 +91,7 @@ jobs:
           # branch, which CHECK_BASE names.
           fetch-depth: 2
       - name: Install mise and the tools in mise.lock
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: ${{ env.MISE_VERSION }}
       - name: Restore the dependency and build caches
@@ -132,7 +132,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Go and octocov
-        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
         with:
           version: ${{ env.MISE_VERSION }}
           install_args: go aqua:k1LoW/octocov

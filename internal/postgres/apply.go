@@ -52,8 +52,14 @@ var errNotApply = errors.New("the session is for a plan, which writes nothing: o
 
 // ForeignKeys returns the foreign keys from one named table to another named
 // table, also from a table to itself, sorted by the referencing table and
-// then by the name of the constraint. A foreign key of a partitioned table
-// is read once, from the partitioned table.
+// then by the name of the constraint. It reads only the keys that a table
+// defines itself (conparentid = 0): a key that a partition holds because its
+// partitioned table defines it is not read, so it orders nothing when the
+// partition is declared without its partitioned table. A key NOT ENFORCED, of
+// PostgreSQL 18 and later, has no triggers, so PostgreSQL neither checks it
+// nor runs its action: it comes marked NotEnforced, and the order of an
+// apply leaves it out (ADR-0049). Servers before enforcedSince have no such
+// keys, and no column conenforced.
 func (s *Session) ForeignKeys(ctx context.Context, names []declaration.TableName) (_ []apply.ForeignKey, err error) {
 	defer s.explainWait(ctx, &err)
 	schemas := make([]string, len(names))
@@ -61,13 +67,17 @@ func (s *Session) ForeignKeys(ctx context.Context, names []declaration.TableName
 	for i, n := range names {
 		schemas[i], tables[i] = n.Schema, n.Name
 	}
+	notEnforced := "false"
+	if s.major >= enforcedSince {
+		notEnforced = "NOT co.conenforced"
+	}
 	rows, err := s.tx.Query(ctx, `WITH named AS (
 			SELECT c.oid, n.nspname::pg_catalog.text AS schema, c.relname::pg_catalog.text AS name
 			FROM ROWS FROM (pg_catalog.unnest($1::pg_catalog.text[]), pg_catalog.unnest($2::pg_catalog.text[])) AS r(nspname, relname)
 			JOIN pg_catalog.pg_namespace AS n ON n.nspname = r.nspname
 			JOIN pg_catalog.pg_class AS c ON c.relnamespace = n.oid AND c.relname = r.relname
 		)
-		SELECT co.conname::pg_catalog.text, f.schema, f.name, t.schema, t.name, co.condeferrable
+		SELECT co.conname::pg_catalog.text, f.schema, f.name, t.schema, t.name, co.condeferrable, `+notEnforced+`
 		FROM pg_catalog.pg_constraint AS co
 		JOIN named AS f ON f.oid = co.conrelid
 		JOIN named AS t ON t.oid = co.confrelid
@@ -81,7 +91,7 @@ func (s *Session) ForeignKeys(ctx context.Context, names []declaration.TableName
 	var keys []apply.ForeignKey
 	for rows.Next() {
 		var k apply.ForeignKey
-		if err := rows.Scan(&k.Name, &k.Table.Schema, &k.Table.Name, &k.References.Schema, &k.References.Name, &k.Deferrable); err != nil {
+		if err := rows.Scan(&k.Name, &k.Table.Schema, &k.Table.Name, &k.References.Schema, &k.References.Name, &k.Deferrable, &k.NotEnforced); err != nil {
 			return nil, fmt.Errorf("read the foreign keys of the tables: %w", err)
 		}
 		keys = append(keys, k)
@@ -122,7 +132,8 @@ func (s *Session) Defer(ctx context.Context, keys []apply.ForeignKey) (err error
 // checkConstraintNames returns an error when a constraint of another table
 // in the schema of a key has the name of the key and is not deferrable. SET
 // CONSTRAINTS names constraints by schema and name only, so it would try to
-// defer that constraint too, and fail.
+// defer that constraint too, and fail: also when that constraint is NOT
+// ENFORCED and not deferrable, as a test shows on PostgreSQL 18.
 func (s *Session) checkConstraintNames(ctx context.Context, keys []apply.ForeignKey) error {
 	schemas := make([]string, len(keys))
 	names := make([]string, len(keys))

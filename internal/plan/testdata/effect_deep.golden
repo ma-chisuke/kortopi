@@ -1,0 +1,16 @@
+m.root (sync, key: code)
+  - code=old
+  0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of m.t1 (root) references it through t1_root_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      1 row of m.t2 (t1) references that row of m.t1 through t2_t1_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+        1 row of m.t3 (t2) references that row of m.t2 through t3_t2_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+          1 row of m.t4 (t3) references that row of m.t3 through t4_t3_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+            1 row of m.t5 (t4) references that row of m.t4 through t5_t4_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+            1 row of m.t6 (t5) references that row of m.t5 through t6_t5_fkey, ON DELETE CASCADE, at level 6, so the deletion deletes this row too.
+            2 rows of m.t7 (t6) reference that row of m.t6 through t7_t6_fkey, ON DELETE SET NULL, at level 7, so the deletion sets t6 of these rows to NULL.
+            1 row of m.t7 (t6) references that row of m.t6 through t7_t6_fkey2, ON DELETE CASCADE, at level 7, so the deletion deletes this row too.
+            3 rows of m.t7 (parent) reference rows of m.t7 that the deletion deletes, through t7_parent_fkey, ON DELETE CASCADE, at 3 levels from level 8, so the deletion deletes these rows too.
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+Through foreign keys, the deletion also deletes 10 rows and changes 2 rows.
