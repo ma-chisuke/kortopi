@@ -17,7 +17,7 @@ func chainPlan(n int) *plan.Plan {
 	steps := []plan.Step{{Level: 1, Table: tn("b.steps"), Columns: []string{"parent_id"}, Constraint: "steps_parent", References: parent, OnDelete: "CASCADE", Rows: 1}}
 	for level := 2; level <= n; level++ {
 		steps = append(steps, plan.Step{Level: level, Table: tn("b.steps"), Columns: []string{"after_id"}, Constraint: "steps_after",
-			References: tn("b.steps"), OnDelete: "CASCADE", Rows: 1})
+			References: tn("b.steps"), OnDelete: "CASCADE", Rows: 1, Parent: len(steps), Referenced: 1})
 	}
 	return &plan.Plan{Tables: []plan.Table{{
 		Name: parent, Mode: config.ModeSync, Key: []string{"id"},

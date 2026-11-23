@@ -14,7 +14,8 @@ import (
 )
 
 // withEffect returns the plan of table schema.table in mode sync with rows to
-// delete of the codes, whose deletions reach the steps.
+// delete of the codes, whose deletions reach the steps, each under its parent
+// (linked).
 func withEffect(schema, table string, codes []string, steps ...Step) *Plan {
 	deletes := make([]Row, len(codes))
 	for i, c := range codes {
@@ -22,7 +23,7 @@ func withEffect(schema, table string, codes []string, steps ...Step) *Plan {
 	}
 	return &Plan{Tables: []Table{{
 		Name: name(schema, table), Mode: config.ModeSync, Key: []string{"code"}, Compare: []string{"name"},
-		Diff: TableDiff{Deletes: deletes}, Effect: Effect{Steps: steps},
+		Diff: TableDiff{Deletes: deletes}, Effect: Effect{Steps: linked(steps...)},
 	}}}
 }
 
@@ -162,6 +163,56 @@ var effectCases = []effectCase{
 		),
 		totals: Totals{Deleted: 3, Changed: 3, Unknown: 2},
 	},
+	{
+		// app.steps is partitioned, and its partition app.steps_a holds a
+		// key to app.steps along which a chain of rows of app.steps_a
+		// cascades: each step references rows of app.steps that the step of
+		// the level before, of app.steps_a, deleted, as the walk tells.
+		name:   "effect_key_on_a_partition",
+		plan:   withEffect("app", "plans", []string{"legacy"}, partitionChain(false, 4)...),
+		totals: Totals{Deleted: 4},
+	},
+	{
+		// The key of the chain is on app.steps, and app.notes references
+		// its partition app.steps_a, which holds the rows: the notes stand
+		// under the steps whose rows they reference, as the walk tells.
+		name:   "effect_key_to_a_partition",
+		plan:   withEffect("app", "plans", []string{"legacy"}, partitionChain(true, 4)...),
+		totals: Totals{Deleted: 8},
+	},
+}
+
+// partitionChain returns the steps of the deletion of a plan that cascades
+// into a row of the partitioned table app.steps, whose rows are in its
+// partition app.steps_a, and along a chain of n-1 more rows, each after the
+// one before, as the walk gives them, with their parents (Step.Parent). With
+// notes, the key of the chain is on app.steps, and a note of app.notes
+// references each row of the chain through a key to app.steps_a; without, the
+// key of the chain is on app.steps_a, and references app.steps. The names of
+// the steps do not tell their parents in either.
+func partitionChain(notes bool, n int) []Step {
+	steps := []Step{step(1, name("app", "steps"), "steps_plan_code_fkey", name("app", "plans"), "CASCADE", 1, "plan_code")}
+	chainKey, holder := "steps_a_after_fkey", name("app", "steps_a")
+	if notes {
+		chainKey, holder = "steps_after_fkey", name("app", "steps")
+	}
+	// last is the place of the step of the chain of the level before.
+	last := 1
+	for level := 2; level <= n+1; level++ {
+		if notes {
+			note := step(level, name("app", "notes"), "notes_step_id_fkey", name("app", "steps_a"), "CASCADE", 1, "step_id")
+			note.Parent, note.Referenced = last, 1
+			steps = append(steps, note)
+		}
+		if level > n {
+			break
+		}
+		next := step(level, holder, chainKey, name("app", "steps"), "CASCADE", 1, "after_id")
+		next.Parent, next.Referenced = last, 1
+		steps = append(steps, next)
+		last = len(steps)
+	}
+	return steps
 }
 
 func TestRenderEffectsThatRepeatKeys(t *testing.T) {
@@ -284,6 +335,18 @@ func TestEffectTree(t *testing.T) {
 			want: []string{"1 cat_root_fkey 1", "2 cat_parent_fkey 2 3 4", "3 zzz_cat_fkey 3", "3 note_cat_fkey 5"},
 		},
 		{
+			// The names of the steps of a key on a partition, and of a key to
+			// one, do not tell their parents, which the walk gives them.
+			name:  "a key on a partition",
+			steps: partitionChain(false, 4),
+			want:  []string{"1 steps_plan_code_fkey 1", "2 steps_a_after_fkey 2 3 4"},
+		},
+		{
+			name:  "a key to a partition",
+			steps: partitionChain(true, 3),
+			want:  []string{"1 steps_plan_code_fkey 1", "2 notes_step_id_fkey 2", "2 steps_after_fkey 2 3", "3 notes_step_id_fkey 3 4"},
+		},
+		{
 			name: "a step without a parent stands at the top, at its level",
 			steps: []Step{
 				step(1, name("m", "t1"), "t1_root_fkey", name("m", "root"), "CASCADE", 1, "root"),
@@ -296,7 +359,8 @@ func TestEffectTree(t *testing.T) {
 			t.Parallel()
 
 			var got []string
-			for _, l := range effectTree(tt.steps) {
+			steps := linked(tt.steps...)
+			for _, l := range effectTree(steps) {
 				levels := make([]string, len(l.steps))
 				for i, s := range l.steps {
 					levels[i] = strconv.Itoa(tt.steps[s].Level)

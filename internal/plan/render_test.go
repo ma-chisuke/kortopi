@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -101,6 +102,34 @@ func step(level int, table declaration.TableName, constraint string, references 
 	return s
 }
 
+// linked returns the steps, each beyond level 1 with its parent and the
+// number of rows that it can reference, as the walk gives them for tables
+// without partitions, whose names tell the relations: the parent is the first
+// step of the level before that deletes rows of the table that the step
+// references, and the rows are those that the steps of the level before
+// delete in that table (Step.Parent, Step.Referenced). A step with a parent
+// keeps it, as a test of partitions gives it.
+func linked(steps ...Step) []Step {
+	steps = slices.Clone(steps)
+	for i := range steps {
+		s := &steps[i]
+		if s.Level == 1 || s.Parent != 0 {
+			continue
+		}
+		for j := range steps {
+			p := &steps[j]
+			if p.Level != s.Level-1 || !p.Deletes() || p.Unknown != Known || p.Table != s.References {
+				continue
+			}
+			if s.Parent == 0 {
+				s.Parent = j + 1
+			}
+			s.Referenced += p.Rows
+		}
+	}
+	return steps
+}
+
 // notKnown returns s as a step whose rows were not counted, for reason.
 func notKnown(s Step, reason Unknown) Step {
 	s.Unknown = reason
@@ -131,7 +160,7 @@ func effectPlan() *Plan {
 				Inserts: []Row{{Key: values("suite"), Values: values("Suite")}},
 				Deletes: []Row{{Key: values("old")}, {Key: values("older")}},
 			},
-			Effect: Effect{Steps: []Step{
+			Effect: Effect{Steps: linked(
 				step(1, name("facility", "room_types"), "room_types_replaced_by_fkey", name("facility", "room_types"), "SET NULL", 1, "replaced_by"),
 				step(1, name("facility", "rooms"), "rooms_room_type_fkey", name("facility", "room_types"), "CASCADE", 3, "room_type"),
 				notKnown(step(1, name("reservation", "audit"), "audit_room_type_fkey", name("facility", "room_types"), "NO ACTION", 0, "room_type_id"), NoTableSelect),
@@ -150,17 +179,17 @@ func effectPlan() *Plan {
 				step(3, name("facility", "drawers"), "drawers_desk_fkey", name("facility", "desks"), "CASCADE", 80, "desk"),
 				onUpdate(step(3, name("facility", "screws"), "screws_desk_fkey", name("facility", "desks"), "SET NULL", 2, "desk"),
 					"parts_desk_fkey", name("facility", "parts")),
-			}},
+			)},
 		},
 		{
 			Name: name("geo", "regions"), Mode: config.ModeSync,
 			Key: []string{"code"}, Compare: []string{"name"},
 			Diff: TableDiff{Deletes: []Row{{Key: values("north")}}},
-			Effect: Effect{Steps: []Step{
+			Effect: Effect{Steps: linked(
 				step(1, name("geo", "prefectures"), "prefectures_region_fkey", name("geo", "regions"), "NO ACTION", 1, "region"),
 				step(1, name("geo", "stations"), "stations_region_fkey", name("geo", "regions"), "CASCADE", 1, "region"),
 				step(2, name("geo", "exits"), "exits_station_fkey", name("geo", "stations"), "CASCADE", 2, "station"),
-			}},
+			)},
 		},
 		{
 			// Rows to delete that nothing references have no block.

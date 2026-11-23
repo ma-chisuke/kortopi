@@ -74,6 +74,18 @@ type Step struct {
 	// table.
 	OnUpdate      string
 	OnUpdateTable declaration.TableName
+	// Parent is the place, counted from 1, among the steps of the effect, of
+	// the step that a plan shows this step under: the first step of the
+	// level before that deletes rows that the rows of this step can
+	// reference, rows of the relation that its foreign key references or of
+	// a partition of it, whatever the names of the relations. It is 0 at
+	// level 1, and for a step whose referenced rows no step of the level
+	// before deleted (ADR-0050).
+	Parent int
+	// Referenced counts, beyond level 1, the rows that the level before
+	// deleted in the relation that the foreign key references and in its
+	// partitions: the rows that the rows of the step can reference.
+	Referenced int
 }
 
 // Unknown says why what a step does is not known.

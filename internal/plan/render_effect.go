@@ -15,13 +15,13 @@ const MaxEffectDepth = 5
 
 // EffectLines returns the block of what the deletions of a table also do
 // through foreign keys (ADR-0039, ADR-0050): a line that says what follows,
-// and a sentence for each line of effectTree, indented by two spaces for each
-// level, MaxEffectDepth levels at most, under the line whose deleted rows it
-// references. A line sums up the steps that repeat its foreign key at deeper
-// levels, so every row of every step counts on exactly one line. It returns
-// nothing for a table whose deletions reach no row. A plan prints the lines
-// after the counts of the table, apart from its rows to delete, and the plan
-// as SQL as comments before the deletions of the table.
+// and a sentence for each line of effectTree, two spaces further in than the
+// line that it stands under, MaxEffectDepth places in at most. A line sums up
+// the steps that repeat its foreign key at deeper levels, so every row of
+// every step counts on exactly one line. It returns nothing for a table whose
+// deletions reach no row. A plan prints the lines after the
+// counts of the table, apart from its rows to delete, and the plan as SQL as
+// comments before the deletions of the table.
 func EffectLines(t *Table) []string {
 	steps := t.Effect.Steps
 	if len(steps) == 0 || len(t.Diff.Deletes) == 0 {
@@ -47,8 +47,8 @@ type effectLine struct {
 	// their levels, the first of them the step that the line stands for.
 	steps []int
 	// parent is the index of the line that it stands under, or -1, and depth
-	// its level in the block: the level of its first step at the top, and
-	// one more than the depth of its parent under another line.
+	// its place in the tree of the block: the level of its first step at the
+	// top, and one more than the depth of its parent under another line.
 	parent, depth int
 }
 
@@ -71,8 +71,8 @@ func sameKey(a, b *Step) bool {
 
 // effectTree returns the lines of the block, in the order of a tree: each
 // line follows the line that it stands under, and the lines under one line
-// keep the order of their first steps. A step stands under the first step of the
-// level before that deletes rows of the table that it references (treeOrder).
+// keep the order of their first steps. A step stands under its parent
+// (Step.Parent, treeOrder).
 // A step whose foreign key is the key of a line above it, along its parents,
 // counts on that line instead, and so do the steps under it: the walk
 // follows that key again, through a table that references itself or a cycle
@@ -148,24 +148,20 @@ func effectTree(steps []Step) []effectLine {
 }
 
 // treeOrder returns the indexes of steps in the order of a tree, and the
-// parent of each step, or -1: each step of level n+1 follows the first step
-// of level n that deletes rows of the table that it references, and the steps
-// under one step keep their order. A step whose parent is not among the steps
-// follows the steps of its level.
+// parent of each step, or -1: each step follows its parent, which the walk
+// gives it (Step.Parent): the first step of the level before that deletes
+// rows that its rows can reference, in the relation that its foreign key
+// references or in a partition of it, which may have another name. The steps
+// under one step keep their order. A step without a parent of the level
+// before follows the steps of the top.
 func treeOrder(steps []Step) (order, parents []int) {
 	children := make(map[int][]int)
 	parents = make([]int, len(steps))
 	var top []int
 	for i := range steps {
-		parent := -1
-		if steps[i].Level > 1 {
-			for j := range steps {
-				p := &steps[j]
-				if p.Level == steps[i].Level-1 && p.Deletes() && p.Unknown == Known && p.Table == steps[i].References {
-					parent = j
-					break
-				}
-			}
+		parent := steps[i].Parent - 1
+		if parent < 0 || parent >= len(steps) || steps[parent].Level != steps[i].Level-1 {
+			parent = -1
 		}
 		parents[i] = parent
 		if parent < 0 {
@@ -187,19 +183,6 @@ func treeOrder(steps []Step) (order, parents []int) {
 	return order, parents
 }
 
-// parentRows returns the number of rows of the table that s references that
-// the steps of the level before delete.
-func parentRows(steps []Step, s *Step) int {
-	n := 0
-	for i := range steps {
-		p := &steps[i]
-		if p.Level == s.Level-1 && p.Deletes() && p.Table == s.References {
-			n += p.Rows
-		}
-	}
-	return n
-}
-
 // sentence says what the steps of the line do: which rows reference which
 // rows, through which foreign key, at how many levels, and what the deletion
 // does to them. tree holds the lines of the block, and deletes is the number
@@ -207,11 +190,12 @@ func parentRows(steps []Step, s *Step) int {
 //
 // A line of one step under a line of one step, or at the top, references
 // the rows to delete, or the rows of its table that the level before
-// deletes, as "it", "them", "that row of", or "those rows of". A line of
-// several steps, and a line under one, references rows of the table that the
-// deletion deletes: its steps reference the rows that different levels
-// delete. A line of several steps gives the number of its levels, and a line
-// deeper than MaxEffectDepth its level.
+// deletes, as "it", "them", "that row of", or "those rows of"
+// (Step.Referenced). A line of several steps, and a line under one,
+// references rows of the table that the deletion deletes: its steps
+// reference the rows that different levels delete. A line of several steps
+// gives the number of its levels, and a line deeper than MaxEffectDepth its
+// level.
 func (l *effectLine) sentence(steps []Step, tree []effectLine, deletes int) string {
 	s := &steps[l.steps[0]]
 	rows := l.rows(steps)
@@ -237,7 +221,6 @@ func (l *effectLine) sentence(steps []Step, tree []effectLine, deletes int) stri
 	// target is what the rows reference, and pronoun the same for a second
 	// time in the sentence.
 	target, pronoun := "them", "them"
-	parents := parentRows(steps, s)
 	switch {
 	case len(l.steps) > 1 || l.parent >= 0 && len(tree[l.parent].steps) > 1:
 		// The comma ends the clause before the foreign key.
@@ -247,7 +230,7 @@ func (l *effectLine) sentence(steps []Step, tree []effectLine, deletes int) stri
 		}
 	case s.Level == 1 && deletes == 1:
 		target, pronoun = "it", "it"
-	case s.Level > 1 && parents == 1:
+	case s.Level > 1 && s.Referenced == 1:
 		target, pronoun = "that row of "+FormatTable(s.References), "it"
 	case s.Level > 1:
 		target = "those rows of " + FormatTable(s.References)
