@@ -233,6 +233,7 @@ kortopi は、テーブルを読み込む前に、次の順でカタログを調
 4. そのテーブルで、行単位セキュリティがロールにかからない。テーブルで有効になっていないか、ロールが `BYPASSRLS` を持つか、ロールが行単位セキュリティを強制していないテーブルを所有していればよい。
 
 ロールが接続できること（データベースに対する `CONNECT`）は、PostgreSQL 自身が調べる。PostgreSQL は、既定で `CONNECT` と `TEMPORARY` を `PUBLIC` に与えている。
+値を書く識別列や `serial` の列のシーケンスを apply がどこまで進めるかを示すため、計画はシーケンスの `SELECT` とそのスキーマの `USAGE` でシーケンスを読む。それがなければ、シーケンスの行がそう伝え、計画は続く（[シーケンス](#シーケンス)）。ロールがその進め方を許されないときも、行がそう伝える。`nextval` で値を順に取るにはシーケンスの `USAGE` か `UPDATE` が要り、`setval` には `UPDATE` が要る。
 スキーマの変更を待つテーブルには、これらはどれも要らない。ただし、そうしたテーブルの CSV ファイルは一時テーブルで数えるので、1つ目が要る。
 
 計画を立てるだけのロールなら、次のように権限を与える。
@@ -277,6 +278,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - どの行を読み込むよりも前に、存在するテーブルの `on_insert` の値ごとに、セーブポイントの中でその列だけの一時テーブルを作って値を挿入する。そのあと、セーブポイントをロールバックする（[挿入のときだけ設定する値](#挿入のときだけ設定する値)）。
 - 宣言したテーブルごとに、セーブポイントの中で一時テーブルを作って宣言の行を読み込み、本物のテーブルと比べる。削除の波及は、すべてのテーブルの宣言の行を読むので、一時テーブルは計画が終わるまで残る。
 - 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
+- 挿入する行か更新する行が値を書く、シーケンスを持つ列については、列の最大の値と、シーケンスの位置を読む。`nextval` も `setval` も呼ばない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
 
 計画を止めるには Ctrl-C を押すか、SIGTERM を送る。
@@ -340,6 +342,7 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 | `- code=legacy` | 削除する行。キーを示す。行を削除するのは、モード `sync` のテーブルだけである。 |
 | `1 to insert, 1 to update, 1 to delete` | テーブルの件数。そのモードが求める変更の種類だけを示す。 |
 | `2 stored rows are not declared, which mode upsert does not delete` | モード `upsert` か `insert` のテーブルが持ち、宣言にない保存された行。モードはそれをどれも削除しない（[宣言にない保存された行](#宣言にない保存された行)）。 |
+| `sequence catalog.plans_id_seq of column id: next value 3 -> 4` | 行が値を書く列のシーケンスと、apply がそれをどこまで進めるか（[シーケンス](#シーケンス)）。 |
 | `Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.` | 計画全体の件数と、計画に含まれる宣言したテーブルの数。 |
 
 テーブルは、スキーマ、テーブル名の順に並べる。
@@ -489,6 +492,44 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - テーブルにない `on_insert` の列は、宣言した列と同じくスキーマの変更を待つ。その行は、名前の出どころを `column floor of on_insert in kortopi.toml: known after the schema is applied` のように示す。
 - 計画は、どの行を読み込むよりも前に、挿入する行がないときも含めて、存在するテーブルのそれぞれの値を列の型で読む。スキーマの変更を待つテーブルの値は、テーブルができてから検査する。値ごとに、ロールバックする専用のセーブポイントの中で、その列だけを持つ一時テーブルを作り、値を挿入する。一時テーブルの列は、テーブルの列から型を受け継ぐ。そのため、ほかの列が値や既定値を得ることはない。また、ロールには、型を読むためにこれらの列に対する `SELECT` が要る。宣言した列と同じである（[セッションに要るもの](#セッションに要るもの)）。
 
+### シーケンス
+
+テーブルの挿入する行か更新する行が識別列や `serial` の列に値を書くとき、apply はコミットの直前に、その列のシーケンスを書いた値の先へ進める。アプリケーションの次の挿入がそのどれかを取らないようにするためである（[kortopi apply](apply.ja.md#シーケンス)）。
+計画は、テーブルの件数のあとで、その進め方を示す。
+
+```text
+billing.fees (upsert, key: id)
+  + id=3  name=express  amount=900
+  1 to insert, 0 to update
+  sequence billing.fees_id_seq of column id: next value 3 -> 4
+```
+
+- `next value 3 -> 4` は、シーケンスが次に返す値と、進めたあとに次に返す値である。後者は、増分ずつ進めたシーケンスの値のうち、列の最大の値の先にある最初の値である。減るシーケンスなら最小の値の下である。
+- 計画は、保存された行と、apply が書くはずの宣言した値を数える。apply が更新や削除をする保存された行は、保存された値で数える。apply は書き込みのあとで進め方をもう一度求めるので、計画が示すより手前までしか進めないことがある。
+- すでに列の先の値を返すシーケンスには、行を出さない。
+- apply がそのままにするシーケンスには、その理由とすることを伝える行を出す。
+
+  ```text
+  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+  sequence billing.tax_rates_id_seq of column id: not moved: the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence billing.tax_rates_id_seq
+  sequence billing.codes of column code: next value 1, not moved: the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is
+  sequence billing.ranks of column rank: next value 1, not moved: the sequence gives no value beyond 100, the largest value of the column, because its MAXVALUE is 100: raise its MAXVALUE
+  sequence billing.levels of column level: next value 1, not moved: the sequence gives no value beyond 32767, the largest value of the column, because 32767 is the largest value of its type smallint: give the column and its sequence the type bigint
+  ```
+
+- 計画は、各シーケンスをその `SELECT` とスキーマの `USAGE` で読み、どれも進めない。ロールがその進め方を許されるかは、シーケンスの位置が求める進め方で判断する。`nextval` で値を順に取るにはシーケンスの `USAGE` か `UPDATE` が要る。100,000 個を超えて進めるときは `setval` で設定し、それには `UPDATE` が要る。ロールの読めないシーケンスや進められないシーケンスがあっても計画は止まらず、終了コードも変わらない。助言は、シーケンスとそのスキーマを SQL の識別子で挙げ、必要なところは引用符で囲む。
+- シーケンスを読むとき、ほかのセッションが持つロックを待つのは最大 5 秒であり、`--lock-timeout` がそれより短ければその時間である。読み取りは自分のセーブポイントの中で動き、そのあと `lock_timeout` はもとの値に戻る。その上限などで PostgreSQL が読み取りを終えたときは、計画はそう伝えて先へ進み、apply はそれでも進めようとする。
+
+  ```text
+  sequence billing.fees_id_seq of column id: could not be read: PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence: an apply reads it again, and moves it if it can
+  ```
+
+- 計画が始まったあとで、ほかのセッションがシーケンスを削除するか、名前を変えて同じ名前の別のシーケンスに置き換えても、計画は止まらない。計画はシーケンスを名前で指すので、そのとき名前は別のシーケンスを指すか、何も指さない。その行は次のように伝える。
+
+  ```text
+  could not be read: another session dropped or replaced the sequence after the run began: plan again, which reads the sequence that the column owns then
+  ```
+
 ### 削除がほかの行にすること
 
 削除する行をほかの行が参照するテーブルには、件数の行のあとに、削除する行から離して、まとまりを置く。そのまとまりは、削除が外部キーを通じてほかにすることを示す。
@@ -624,7 +665,9 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。スクリプトが `on_insert` の値を持つときは、コメントが「but those of on_insert」と添えて、それらの値を設定が固定しないことを示す。セッションは、それらの値を自分の設定で読む。
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
-- 削除は最後に、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
+- 削除はそのあとに、逆の順でコメントとして置く。テーブルごとに `DELETE` を1つ書き、その行のキーを1行に1つずつ挙げる（[削除](#削除)）。
+- 最後にシーケンスが来る。その前には、文がすることを伝えるコメント行が並ぶ（[シーケンス](#シーケンス)）。各シーケンスには計画の行をコメントで置き、その下に apply が実行するのと同じ文を置く。スクリプトが動くとき、文はスクリプトの挿入と更新のあとで列の最大の値とシーケンスを読み、`nextval` で、100,000 個を超えて進めるときは `setval` で、シーケンスを列の先へ進める。すでに列の先にあるシーケンスは、そのままにする。計画より遅れてスクリプトが動き、その間にアプリケーションが値を取った場合がそうである。
+- スクリプトは、計画したロールによる apply と同じことをし、シーケンスで失敗しない。文が実行されるのは、apply が進めると計画が示したシーケンス、つまり計画したロールが読めて進められるシーケンスだけである。値を取れるがシーケンスを設定できないロールの文は `setval` を持たず、100,000 個を超える値が要るシーケンスはそのままにする。そのときの行は、列 `how` で `left: it needs setval, which the role of the plan may not run` と伝える。進める必要を示すほかの行と、計画が読めなかったシーケンスの行の下では、文をコメントにする。それは実行を許されたロールのためであり、上の行が計画と同じく理由を伝える。循環するシーケンスと上限が先に来るシーケンスには、コメントの行だけを置き、文は置かない。
 - 名前はすべて二重引用符で囲む。PostgreSQL のある版でそのまま書ける名前が、別の版ではキーワードでありうるからである。ふつうのテーブルには適用と同じく `ONLY` を付け、パーティションテーブルには付けない。
 - スキーマの変更を待つテーブルには文を書かない。スキーマの変更を待つ列は、そのテーブルの文から除く。
 - `on_insert` の値を持つテーブルの `INSERT` は、宣言した列のあとにその列を挙げ、すべての行にその値を与える。文の前には、2行のコメントを置く。
@@ -793,4 +836,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:f3c174b5cdfea16efc5e1631a73a5372969f464125f8a88549ff7908357267fd -->
+<!-- i18n-source: plan.md sha256:d668c9d259635161f361ceb3cbd393466738e9bbbd5e55a0cf91b68d311e1576 -->

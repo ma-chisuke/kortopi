@@ -174,7 +174,7 @@ kortopi は、2か所でこれらを見つける。
 
 - `SET` 文と `SET CONSTRAINTS`
 - `SELECT pg_catalog.set_config(...)`
-- `SELECT pg_catalog.setval(...)`。kortopi はシーケンスを管理しない。
+- `SELECT pg_catalog.setval(...)`。kortopi はファイルの `setval` を実行しない。apply は、自分が値を書く列のシーケンスを、自分の規則で進める（[kortopi apply](apply.ja.md#シーケンス)）。
 - psql のメタコマンド `\restrict` と `\unrestrict` の行
 - コメント
 
@@ -509,4 +509,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列と、削除が消すか変える宣言した行は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:d3ffee8b743a60b9671dfb2e40d43ca865aa155e9c8b5aabe05227d4e0c762c5 -->
+<!-- i18n-source: declaration.md sha256:59ca761e012de50ab4dcd60d1a2616d6523dfb271a05a12efbec8d6edd531a26 -->

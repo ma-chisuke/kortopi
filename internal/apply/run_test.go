@@ -52,11 +52,19 @@ type fakeDB struct {
 	// the rows that the insert of each table wrote.
 	leftOut  []declaration.TableName
 	inserted map[declaration.TableName]int
+	// sequences holds what Sequences returns for the tables that it names,
+	// whose column id then owns a sequence. moved holds what MoveSequences
+	// returns for the tables that it names; without it, MoveSequences moves
+	// each sequence as the plan shows.
+	sequences map[declaration.TableName][]plan.Sequence
+	moved     map[declaration.TableName][]plan.Sequence
 	// fail makes a call return an error, by call.
 	fail map[string]error
 	// cancel is called after the call that it names.
 	cancel     func()
 	cancelCall string
+	// moveErr is the error of the context of the last MoveSequences.
+	moveErr error
 
 	calls    []string
 	requests map[declaration.TableName]plan.DiffRequest
@@ -96,6 +104,9 @@ func (f *fakeDB) Describe(_ context.Context, names []declaration.TableName) (map
 			continue
 		}
 		info := plan.TableInfo{Exists: true, PrimaryKey: []string{"id"}, Columns: []plan.ColumnInfo{{Name: "id", NotNull: true}}}
+		if _, ok := f.sequences[n]; ok {
+			info.Columns[0].Sequence, info.Columns[0].HasDefault = true, true
+		}
 		if !f.noName[n] {
 			info.Columns = append(info.Columns, plan.ColumnInfo{Name: "name"})
 		}
@@ -256,6 +267,36 @@ func (f *fakeDB) DiffAgain(ctx context.Context, req plan.DiffRequest) (plan.Tabl
 func (f *fakeDB) Commit(ctx context.Context) error {
 	f.commitErr = ctx.Err()
 	return f.record("Commit")
+}
+
+func (f *fakeDB) Sequences(_ context.Context, table declaration.TableName, columns []string) ([]plan.Sequence, error) {
+	return f.sequences[table], f.record("Sequences " + table.String() + " " + strings.Join(columns, " "))
+}
+
+// MoveSequences records the call, with the error of its context, and
+// returns what moved holds for the table, or the sequences, each that the
+// apply tries to move moved to its goal (movedTo). With a failure, it
+// returns the first sequence, as a database whose second move failed.
+func (f *fakeDB) MoveSequences(ctx context.Context, table declaration.TableName, sequences []plan.Sequence) ([]plan.Sequence, error) {
+	f.moveErr = ctx.Err()
+	done := make([]plan.Sequence, len(sequences))
+	for i, s := range sequences {
+		if s.Tries() {
+			s = movedTo(s, s.Goal)
+		}
+		done[i] = s
+	}
+	if err := f.record("MoveSequences " + table.String()); err != nil {
+		return done[:1], err
+	}
+	// The statement of a move is a query, which an interrupt cancels.
+	if f.moveErr != nil {
+		return nil, f.moveErr
+	}
+	if m, ok := f.moved[table]; ok {
+		return m, nil
+	}
+	return done, nil
 }
 
 // csv returns the declaration of a table in a CSV file with the columns id

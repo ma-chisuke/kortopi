@@ -48,6 +48,12 @@ import (
 // its work already: the comparison decides, and the result names such
 // updates in Result.Uneven.
 //
+// After every check, and last before the commit, Run lets the database move
+// the sequences of the columns that the apply wrote explicit values into,
+// beyond those values (ADR-0045). A move is not rolled back with the
+// transaction, so an interrupt before it leaves every sequence where it was,
+// and an apply that fails after it returns a SequencesMovedError.
+//
 // On any error before the commit, Run returns without committing, so the
 // transaction is rolled back when the session closes, and the database is
 // as it was. So it is when the database rejects the commit. Only an error of
@@ -177,18 +183,93 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 		}
 	}
 
+	// The sequences move last before the commit, because a move is not
+	// rolled back: an interrupt before the moves leaves every sequence
+	// where it was (ADR-0045).
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var moved []SequenceMove
+	r.Sequences, moved, err = moveSequences(ctx, db, p)
+	if err != nil {
+		return nil, afterMoves(err, moved)
+	}
+
 	// An interrupt before this point rolls back. Once the commit starts, it
 	// runs to its end, so that the outcome is known: a second interrupt only
 	// gives up the wait for its answer, and the outcome is then not known
 	// (ADR-0043).
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, afterMoves(err, moved)
 	}
 	if err := db.Commit(context.WithoutCancel(ctx)); err != nil {
-		return nil, err
+		// When the outcome of the commit is not known, the rows may have
+		// been written, and with them the sequences that the apply left
+		// behind: the error keeps them too.
+		if errors.Is(err, ErrUnknownOutcome) {
+			return nil, &SequencesMovedError{Err: err, Moved: moved, Left: left(r.Sequences)}
+		}
+		return nil, afterMoves(err, moved)
 	}
 	r.Committed = true
 	return r, nil
+}
+
+// left returns the sequences that a note says what to do about
+// (SequenceNotes): those that the apply left behind the values of their
+// columns, or whose positions it does not know.
+func left(sequences []SequenceMove) []SequenceMove {
+	var out []SequenceMove
+	for _, s := range sequences {
+		if noted(&s.Sequence) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// moveSequences moves the sequences that the plan shows an apply to move,
+// or could not read, table by table in the order of the plan (ADR-0045). It
+// hands the database every sequence of a table that has one to move, one
+// that stays with a goal, which the database reads again for its advice, or
+// one whose position the plan does not know, for its advice. It
+// returns every sequence of the plan with what the apply did with it, and
+// the sequences that moved, or may have moved (plan.Sequence.Unknown). A
+// sequence that the plan shows staying for good, as one that cycles, keeps
+// its reason. err is an error of the database that stops the apply; the
+// sequences that moved before it stay moved.
+func moveSequences(ctx context.Context, db Database, p *plan.Plan) (all, moved []SequenceMove, err error) {
+	for i := range p.Tables {
+		t := &p.Tables[i]
+		done := t.Sequences
+		if slices.ContainsFunc(t.Sequences, func(s plan.Sequence) bool { return s.Tries() || s.Goal != "" || s.Next == "" }) {
+			done, err = db.MoveSequences(ctx, t.Name, t.Sequences)
+			for _, s := range done {
+				if s.Moved() || s.Unknown {
+					moved = append(moved, SequenceMove{Table: t.Name, Sequence: s})
+				}
+			}
+			if err != nil {
+				return nil, moved, err
+			}
+			if len(done) != len(t.Sequences) {
+				return nil, moved, fmt.Errorf("the database returned %d sequences of table %s, not %d", len(done), t.Name, len(t.Sequences))
+			}
+		}
+		for _, s := range done {
+			all = append(all, SequenceMove{Table: t.Name, Sequence: s})
+		}
+	}
+	return all, moved, nil
+}
+
+// afterMoves returns err, with the sequences that the apply moved before it,
+// which stay moved although the rows are not written.
+func afterMoves(err error, moved []SequenceMove) error {
+	if len(moved) == 0 {
+		return err
+	}
+	return &SequencesMovedError{Err: err, Moved: moved}
 }
 
 // Writes returns the tables of a plan that have rows to write: rows to

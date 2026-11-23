@@ -99,15 +99,17 @@ func (d *TableDiff) changes() bool {
 // match key, a line for each pending column, a line of the values of
 // on_insert when the table has rows to insert, a line for each row to insert
 // (+), update (~), and delete (-), the counts of the table, and, after them,
-// the lines of EffectLines: what the deletions of the table also do through
-// foreign keys. A table whose mode deletes no row gets the line of
-// UndeclaredLine after its counts, when it holds stored rows that the
-// declaration lacks (ADR-0046). A table that the database does not have yet
-// gets one line. The tables without changes that hold such rows get no
-// block: the lines of UndeclaredGroup name at most five of them after the
-// blocks, and count the others. Other tables without changes get no line,
-// and the summary at the end counts them, with the lines of EffectSummary
-// and UndeclaredSummary. An empty plan prints the lines of EmptyLines.
+// the lines of SequenceLines, the sequences that an apply would move beyond
+// the values that it writes, and the lines of EffectLines: what the
+// deletions of the table also do through foreign keys. A table whose mode
+// deletes no row gets the line of UndeclaredLine after its counts, when it
+// holds stored rows that the declaration lacks (ADR-0046). A table that the
+// database does not have yet gets one line. The tables without changes that
+// hold such rows get no block: the lines of UndeclaredGroup name at most five
+// of them after the blocks, and count the others. Other tables without
+// changes get no line, and the summary at the end counts them, with the lines
+// of EffectSummary and UndeclaredSummary. An empty plan prints the lines of
+// EmptyLines.
 //
 // A value prints as the database prints it, and NULL as NULL. A value that
 // could be misread prints in double quotes with the escapes of Go: an empty
@@ -233,6 +235,9 @@ func writeTable(b *strings.Builder, t *Table) error {
 	}
 	fmt.Fprintf(b, "  %s\n", strings.Join(counts, ", "))
 	if line := UndeclaredLine(t); line != "" {
+		b.WriteString("  " + line + "\n")
+	}
+	for _, line := range SequenceLines(t) {
 		b.WriteString("  " + line + "\n")
 	}
 	for _, line := range EffectLines(t) {

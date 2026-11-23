@@ -174,7 +174,7 @@ kortopi skips, and never runs, what a dump writes around the rows:
 
 - `SET` statements and `SET CONSTRAINTS`;
 - `SELECT pg_catalog.set_config(...)`;
-- `SELECT pg_catalog.setval(...)`: kortopi does not manage sequences;
+- `SELECT pg_catalog.setval(...)`: kortopi runs no `setval` of a file; an apply moves the sequence of a column that it writes values into by its own rules ([kortopi apply](apply.md#sequences));
 - the lines of the psql meta-commands `\restrict` and `\unrestrict`;
 - comments.
 

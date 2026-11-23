@@ -144,8 +144,10 @@ type Session struct {
 	referenced map[uint32]map[uint32]storedRelation
 	// tables holds what Describe learned, for Diff.
 	tables map[declaration.TableName]*tableMeta
-	// temps counts the temporary tables, to name the next one.
-	temps int
+	// temps counts the temporary tables, to name the next one, and
+	// savepoints the savepoints (savepoint).
+	temps      int
+	savepoints int
 	// tempChecked and tempErr remember whether the session can create
 	// temporary tables.
 	tempChecked bool
@@ -185,6 +187,15 @@ type Session struct {
 	// the stored rows that the declaration lacks, before the count, so that
 	// a test can make PostgreSQL end the count (countUndeclared).
 	beforeCount func(ctx context.Context, tx pgx.Tx) error
+	// deferredChecked is true once the apply has run the constraints that
+	// wait for the commit, before its first move of a sequence
+	// (checkDeferred).
+	deferredChecked bool
+	// sequenceHook, when it is set, runs in the savepoint of each statement
+	// on a sequence, right before the statement, with the name of its step
+	// (onSequence), for the tests of a statement that PostgreSQL ends or
+	// that an interrupt stops.
+	sequenceHook func(ctx context.Context, step string, tx pgx.Tx) error
 }
 
 var _ plan.Database = (*Session)(nil)

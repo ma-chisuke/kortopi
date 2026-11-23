@@ -442,22 +442,32 @@ func (s *Session) nextTemp() string {
 // savepoint runs f inside a savepoint. It rolls back to the savepoint when f
 // fails, or when keep is false. When keep is true and f succeeds, it
 // releases the savepoint, so that what f did stays.
+//
+// It releases a savepoint that it rolls back to as well. ROLLBACK TO
+// SAVEPOINT keeps the savepoint, and with it a level of subtransaction that
+// every later statement of the transaction would run in, nested under the
+// levels of the savepoints before it; PostgreSQL gives each such level that
+// writes, or under which a write runs, an ID of its own, and caches 64 of
+// them for a transaction. The savepoints are kortopi's own, named after a
+// count of the session, rather than those of the driver, whose rollback
+// does not release them.
 func (s *Session) savepoint(ctx context.Context, keep bool, f func(tx pgx.Tx) error) error {
 	if s.closed || s.committed {
 		return errors.New("the session has ended")
 	}
-	tx, err := s.tx.Begin(ctx)
-	if err != nil {
+	s.savepoints++
+	name := "kortopi_" + strconv.Itoa(s.savepoints)
+	if _, err := s.tx.Exec(ctx, "SAVEPOINT "+name); err != nil {
 		return fmt.Errorf("start a savepoint: %w", err)
 	}
-	ferr := f(tx)
+	ferr := f(s.tx)
 	if keep && ferr == nil {
-		if err := tx.Commit(ctx); err != nil {
+		if _, err := s.tx.Exec(ctx, "RELEASE SAVEPOINT "+name); err != nil {
 			return fmt.Errorf("release the savepoint: %w", err)
 		}
 		return nil
 	}
-	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+	if _, err := s.tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+name+"; RELEASE SAVEPOINT "+name); err != nil {
 		return errors.Join(ferr, fmt.Errorf("roll back to the savepoint: %w", err))
 	}
 	return ferr

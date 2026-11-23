@@ -8,7 +8,7 @@ The commands are those of [kortopi plan](plan.md), [kortopi apply](apply.md), an
 
 - Standard output gets the plan, of `kortopi plan` and of `kortopi apply`, and the lines of what an apply wrote. Standard error gets the errors, one line each as `kortopi: <message>`, except a failed connection, which adds a line for each attempt to connect ([kortopi plan](plan.md#connect-to-the-database)). It also gets the notes as `note: <message>`, the line of an apply that waits for another apply, and the line of an interrupt that comes after the commit has started.
 - A plan never changes the database, so it can run as often as needed.
-- An apply of a declaration that is applied already changes nothing, and prints the empty plan. A failed apply changed nothing, unless its error says that the outcome of the commit is not known: run `kortopi plan` to see the state then. After an error in the database or in the files, the last line of standard error is `kortopi: nothing was changed`; after a mistake in the flags, the usage of the command ends the output instead. An apply can therefore run again after any failure.
+- An apply of a declaration that is applied already changes nothing, and prints the empty plan. A failed apply changed nothing, unless its error says that the outcome of the commit is not known: run `kortopi plan` to see the state then. After an error in the database or in the files, the last line of standard error is `kortopi: nothing was changed`, which goes on with `but the sequences that the apply had moved before its commit, ...` when a commit failed after the apply moved sequences, which a rollback does not move back ([kortopi apply](apply.md#sequences)); after a mistake in the flags, the usage of the command ends the output instead. An apply can therefore run again after any failure.
 - The settings of the connection come from the environment variables of libpq ([kortopi plan](plan.md#connect-to-the-database)). There is no flag for the password: give it in `PGPASSWORD` from the secrets of the pipeline, or in a password file.
 
 | Command | 0 | 1 | 2 |
@@ -41,6 +41,7 @@ kortopi apply --dir data --lock-timeout 10s
   - what other sessions wrote after the snapshot of the apply, while it ran or after its commit: the lock of kortopi keeps two applies apart, not the application.
 
   The values of a table of mode `insert` beyond its key are compared by neither the apply nor the plan.
+- An apply that writes explicit values into an identity or `serial` column moves the sequence of the column beyond them, last before its commit, so that the application does not take one of them next, and says so after `Applied:` ([kortopi apply](apply.md#sequences)). `SELECT` and `UPDATE` on the sequence allow every move; without the privileges that a move needs, it writes the rows, leaves the sequence, and says what to grant in a note on standard error, with exit status 0. So it does when another session holds a lock on the sequence for more than 5 seconds. An apply that moves a sequence runs the constraints deferred to the commit right before its first move, so that one that fails stops it before any sequence moves.
 - A declared table or column that the schema does not have stops the apply, which then changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). A plan with `--no-pending` before the apply stops on the same names, with the files that declare them, but adds no check that the apply lacks.
 
 ## In a pull request
@@ -101,5 +102,6 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 
 - The script is the difference from one database at one moment: run it against the database that the plan read, soon after the plan ([kortopi plan](plan.md#print-the-plan-as-sql)).
 - Its deletions are comments, which run only when someone removes the comment marks.
+- It ends with the sequences of the columns that it writes explicit values into: a statement that moves a sequence beyond them when the script runs, as an apply by the role of the plan does, and, for a sequence that this role may not read or move, the statement as a comment under the reason. Run the script as the role that planned it, and it never fails on a sequence ([kortopi plan](plan.md#read-the-script)).
 - `--exit-code` works with `--format sql` as with the text: status 2 when the plan is not empty.
 - The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, and such values. It also counts again the stored rows that the declaration lacks, which give no status of their own.

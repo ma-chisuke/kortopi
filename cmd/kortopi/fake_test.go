@@ -45,6 +45,12 @@ type fakeSession struct {
 	after func(call string)
 	// exportable are the tables that Tables returns.
 	exportable []declaration.TableName
+	// sequences holds what Sequences returns for the tables that it names,
+	// whose column id then owns a sequence, and moved what MoveSequences
+	// returns; without it, MoveSequences moves each sequence as the plan
+	// shows.
+	sequences map[declaration.TableName][]plan.Sequence
+	moved     map[declaration.TableName][]plan.Sequence
 
 	described []declaration.TableName
 	// calls holds every call after Describe, such as "Diff app.plans".
@@ -70,13 +76,45 @@ func (s *fakeSession) Describe(_ context.Context, names []declaration.TableName)
 			infos[n] = plan.TableInfo{}
 			continue
 		}
+		_, owns := s.sequences[n]
 		infos[n] = plan.TableInfo{
 			Exists:     true,
-			Columns:    []plan.ColumnInfo{{Name: "id", NotNull: true}, {Name: "name"}},
+			Columns:    []plan.ColumnInfo{{Name: "id", NotNull: true, Sequence: owns, HasDefault: owns}, {Name: "name"}},
 			PrimaryKey: []string{"id"},
 		}
 	}
 	return infos, nil
+}
+
+// Sequences returns what sequences holds for the table. It records no call:
+// the tests of plan.Build show when it is called.
+func (s *fakeSession) Sequences(_ context.Context, table declaration.TableName, _ []string) ([]plan.Sequence, error) {
+	return s.sequences[table], nil
+}
+
+// MoveSequences records the call, and returns what moved holds for the
+// table, or the sequences, each that the apply tries to move read at its
+// goal after the move. With a failure, it returns what moved holds, or the
+// first sequence, as a database whose second move failed.
+func (s *fakeSession) MoveSequences(_ context.Context, table declaration.TableName, sequences []plan.Sequence) ([]plan.Sequence, error) {
+	done := make([]plan.Sequence, len(sequences))
+	for i, seq := range sequences {
+		if seq.Tries() {
+			seq.After = seq.Goal
+		}
+		done[i] = seq
+	}
+	m, ok := s.moved[table]
+	if err := s.record("MoveSequences " + table.String()); err != nil {
+		if ok {
+			return m, err
+		}
+		return done[:1], err
+	}
+	if ok {
+		return m, nil
+	}
+	return done, nil
 }
 
 // Diff returns the difference of the table, without the kinds that the mode

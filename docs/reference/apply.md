@@ -16,7 +16,9 @@ Change the rows of the database to match the declaration: insert, update,
 and delete the rows that a plan shows, in one transaction. The plan is
 printed before the first change, and what was written after the commit.
 When any check or statement fails, nothing is changed. Rows are deleted
-only in tables of mode sync, and only with --allow-delete.
+only in tables of mode sync, and only with --allow-delete. Last before the
+commit, the sequence of a column that the apply writes values into moves
+beyond them; a commit that fails then leaves it moved.
 
 flags:
   --dir <path>      the data directory, which holds the declaration and
@@ -81,6 +83,15 @@ GRANT USAGE ON SCHEMA billing TO deployer;
 GRANT SELECT ON billing.subscriptions TO deployer;
 ```
 
+To move the sequence of an identity or `serial` column that it writes values into, an apply reads it, which needs `SELECT` on the sequence and `USAGE` on its schema, and then takes values from it with `nextval`, which needs `USAGE` or `UPDATE` on the sequence, or, for a move of more than 100,000 values, sets it with `setval`, which needs `UPDATE` ([Sequences](#sequences)).
+Without them, it applies the rows all the same, leaves the sequence where it is, and says what to grant.
+The owner of a table owns the sequences of its identity and `serial` columns, and has these privileges.
+`SELECT` and `UPDATE` allow every move:
+
+```sql
+GRANT SELECT, UPDATE ON SEQUENCE catalog.plans_id_seq TO deployer;
+```
+
 An apply refuses a session whose `session_replication_role` is not `origin`, because the triggers of foreign keys do not fire then.
 An apply with `--allow-delete` that has rows to delete also refuses a session whose `track_counts` is off, before any write: it checks what its deletions did by the counts of the rows that its transaction deleted and updated, which PostgreSQL keeps only with `track_counts` on, as it is by default.
 So does an apply without `--allow-delete` that leaves rows to delete in place in a table that is not partitioned: it checks by the same counts that its writes deleted no row of that table and inserted none but those of its insert ([The check before the commit](#the-check-before-the-commit)).
@@ -96,7 +107,8 @@ So does an apply without `--allow-delete` that leaves rows to delete in place in
 7. From referenced tables to referencing ones, it inserts the missing rows of each table and then updates the rows that differ.
 8. With `--allow-delete`, it follows the foreign keys of the deletions again, after its inserts and updates, and stops when they reach other rows than the plan counted. It then deletes the rows that the declaration lacks, from referencing tables to referenced ones, and a table whose rows to delete a cascade from another table reaches before that table. It checks that the deletions did what the plan counted.
 9. It compares every declared table of the run with the database again, as the plan compared it, and stops when a difference is left but the deletions that it left out. Without `--allow-delete`, it also stops when the writes deleted rows of a table whose rows to delete it leaves in place, or inserted other rows into it than its insert ([The check before the commit](#the-check-before-the-commit)).
-10. It commits, and prints what it wrote.
+10. When a sequence is to move, it runs the constraints that wait for the commit, as the commit would, and stops when one fails. It then moves the sequence of each identity or `serial` column that it wrote explicit values into, beyond those values, and reads it again ([Sequences](#sequences)).
+11. It commits, and prints what it wrote and where the sequences stand, with a note on standard error for each sequence that it left behind.
 
 Each write picks its rows when it runs, with the conditions of the plan, and then writes them, and the apply holds both numbers to the plan, because an apply writes only the rows that its plan shows, with the values that it shows ([The counts of the writes](#the-counts-of-the-writes)):
 
@@ -111,7 +123,7 @@ When another transaction changes the same rows in the meantime, the apply fails 
 An insert names the declared columns and the columns of `on_insert` in `kortopi.toml`, which get their values in every row that it inserts ([Declaration files](declaration.md#kortopitoml)), so every other column gets its default.
 kortopi never updates a column of `on_insert`: a row that exists keeps what it holds.
 An update gives a column whose value does not differ its stored value back, so a value that compares equal keeps its stored text.
-kortopi neither reads nor moves sequences.
+After explicit values in an identity or `serial` column, an apply moves the sequence of the column beyond them, last before its commit ([Sequences](#sequences)).
 
 ### The check before the commit
 
@@ -169,6 +181,95 @@ The database reports how many rows the pick of a write took and how many its sta
 
 An update whose pick takes fewer rows than the plan shows goes on: the other rows held their declared values already, and the check before the commit confirms that the tables are as declared.
 
+### Sequences
+
+A table with an identity or `serial` key is often declared with its IDs, while the application inserts rows with IDs from the sequence of the key.
+After an apply that inserts the declared rows with their IDs, the sequence would give one of those IDs next, and the next insert of the application would fail on the key.
+So an apply moves the sequence, last before its commit, until the value that it gives next lies beyond the values of the column:
+
+```text
+$ kortopi apply --dir data
+billing.fees (upsert, key: id)
+  + id=3  name=express  amount=900
+  1 to insert, 0 to update
+  sequence billing.fees_id_seq of column id: next value 3 -> 4
+
+Plan: 1 to insert, 0 to update, 0 to delete in 1 table.
+
+Applied: 1 inserted, 0 updated, 0 deleted.
+Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
+```
+
+Which sequences:
+
+- The sequence of an identity column, `GENERATED BY DEFAULT` or `ALWAYS`, and the sequence that a column of type `smallint`, `integer`, or `bigint` owns, as `serial`, `smallserial`, and `bigserial` make it, when the default of the column is the next value of that sequence and nothing else.
+- Only when the apply writes explicit values into the column in this run: it inserts rows, and the column is declared or named by `on_insert`, or it updates rows, and an update changes the column.
+
+Where it moves:
+
+- The goal is the first value of the sequence beyond the largest value of the column, as the apply sees the table after its writes, or below the smallest for a sequence that counts down. The move keeps the values of the sequence at its increment: with `INCREMENT 10` and a next value of 25, a largest value of 41 makes the goal 45.
+- A sequence whose next value lies beyond the values of the column already is left alone, and the plan shows no line for it. So is a column that holds no value, and a sequence that gives no more values.
+- A sequence that cycles has no next value beyond the values of the column for good, and is left as it is. So is a sequence whose `MAXVALUE`, or `MINVALUE` for one that counts down, comes before the goal; the plan says which limit to raise or lower, or, when the limit is the largest or smallest value of the type of the sequence, that no value of the type lies beyond it.
+- A plan computes the goal from the stored rows and the declared values. A stored row that the apply updates or deletes counts there with its stored value, so the apply, which computes the goal again after its writes, can move the sequence less far than the plan shows.
+- The number of values of a move is exact at the limits of `bigint`: with `INCREMENT 2` and a next value of 3, a largest value of 9223372036854775806 makes the goal 9223372036854775807.
+
+How it moves, and what can still happen:
+
+- Right before its first move, the apply runs the constraints that wait for the commit, with `SET CONSTRAINTS ALL IMMEDIATE`, as the commit would: the foreign keys that it deferred, and those that are `INITIALLY DEFERRED`. One that fails stops the apply before any sequence moves, and nothing is changed ([A deferred foreign key that fails at the commit](#a-deferred-foreign-key-that-fails-at-the-commit)). An apply that moves no sequence leaves them to the commit.
+- For a move of at most 100,000 values, the apply takes them with `nextval`, which never moves a sequence back, also while other sessions take values from it: a value that another session takes is a value that the move no longer needs. The walk goes on until the value that `nextval` returns lies beyond the column, also when the first values come from the cache of the session of the apply, as an insert of the apply into a column whose default takes a value of the sequence fills it; it calls `nextval` at most as many times as the move takes plus the `CACHE` of the sequence. A move takes about half a millisecond for each thousand values.
+- A longer move sets the sequence with `setval`, in the one statement that read where the sequence stood, after it read the column. It moves the sequence back only if other sessions take more than 100,000 values from it between that read and the `setval`, within the one statement.
+- Each move reads the sequence, moves it, and reads it again, each statement in a savepoint of its own. What the line after the commit says comes from the read after the move: a sequence beyond the column moved, to the value that it gives next to every session; one still behind it stays behind, with how to move it the rest of the way; one that another session set back while the apply moved it is said to be set back. When the read after a move fails, the line says that the sequence moved to a value that is not known.
+- A sequence with `CACHE` above 1 hands each session a block of values. The walk of the apply takes a whole block from it, so it skips up to a block of values more than the goal: with `CACHE 20`, the plan says `next value 3 -> 4`, and the apply says `next value 3 -> 23`. A session that took its block before the move hands those values out after it, and they can be values that the apply wrote.
+- A move is not rolled back with the transaction. When the commit then fails, or an interrupt comes after the moves, the rows are not written and the sequences stay moved, which only skips values, and the last line says so:
+
+  ```text
+  kortopi: nothing was changed but the sequences that the apply had moved before its commit, which a rollback does not move back, so they only skip values: billing.fees_id_seq to next value 4
+  ```
+
+  An interrupt during a move, or during the read after it, or a connection that breaks, stops the apply before it can read the sequence again, and the line names that sequence as one that may have moved forward: `billing.fees_id_seq, which may have moved forward`. When the outcome of the commit is not known ([Read the output](#read-the-output)), a line after the error names the sequences that moved all the same, and a note for each sequence that the apply left behind gives its move, for the case that the commit was made.
+- An interrupt before the moves leaves every sequence where it was.
+- A statement of a move that PostgreSQL ends, as `lock_timeout` does on a lock that another session holds on the sequence, or `statement_timeout` during a long walk, does not stop the apply. `nextval` never gives back the values that it took, so the sequence can stay where it was or stand part way to its goal. The apply reads it again, commits the rows, and says where the sequence stands, why, and how to move it the rest of the way:
+
+  ```text
+  Sequence billing.fees_id_seq of billing.fees (id): next value 2 -> 40002, not to 100001: the statement that moves it failed: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled the statement.
+  ```
+
+- Between the write of an explicit value and the end of the move, a session that takes a value from the sequence can get a value that the apply wrote: its insert waits for the commit of the apply and then fails on the key. During a walk with `nextval`, this lasts up to about 50 milliseconds.
+
+A lock that another session holds on a sequence holds each statement on that sequence up for 5 seconds at most, or for `--lock-timeout` when it is shorter: a plan reads each sequence once, and an apply runs three statements on each sequence that it moves, so a run waits up to that long for each such statement on each locked sequence. Each statement runs with that `lock_timeout`, in its savepoint, which it rolls back and releases, and which gives `lock_timeout` its value again afterwards. A plan whose read PostgreSQL ends says that it could not read the sequence and goes on, and the apply then tries the move all the same ([kortopi plan](plan.md#sequences)). Once the apply has taken a value with `nextval`, it holds the lock of `nextval` on the sequence until its commit.
+
+A sequence that another session dropped, or renamed and replaced with another under its name, after the run began, stops neither: the statements name the sequence by its name, which then names another sequence, or none. The plan says that it could not read the sequence, and the apply leaves it, with a note that says how to find the sequence that the column owns now, with `pg_get_serial_sequence`, and gives the statement that moves it.
+
+Privileges:
+
+- A read of the sequence needs `SELECT` on it and `USAGE` on its schema. A walk with `nextval` needs `USAGE` or `UPDATE` on the sequence, and a `setval` needs `UPDATE`.
+- The plan decides by the move that the position of the sequence calls for. A role that may not read the sequence, or may not make that move, applies the rows all the same, and the plan says why the sequence stays and what to grant. The exit status does not change:
+
+  ```text
+    sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+  ```
+
+- A role that may take values and faces a move of more than 100,000 values gets the advice to be granted `UPDATE`, or the `setval` for a role that may. When the writes of the apply turn the walk of the plan into such a move, the statement of the move fails in its savepoint for want of `UPDATE`, the rows commit, and the line says so.
+- When the writes of the apply turn a `setval` of the plan, which the role may not make, into a walk, which it may, the apply leaves the sequence as its plan shows, and says `the plan showed a move that the role may not make, and an apply makes only the moves that its plan shows`, with the walk to take.
+- The advice names the sequence and its schema as identifiers of SQL, quoted where PostgreSQL needs it. Its statement takes as many values as the move would, which never moves the sequence back; for a move of more than 100,000 values, it is a `setval`, to run while nothing else takes values from the sequence.
+
+After the commit, each sequence that the apply left behind the values of its column, or whose position it does not know, also gets a note on standard error, with what to do from where the apply read the sequence after its writes:
+
+```text
+note: sequence billing.fees_id_seq of column id of table billing.fees: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+```
+
+A sequence whose position the apply does not know, because a read failed before or after the move, or because the role may not read it, gets the statement that the plan as SQL writes for it, on one line, after `move it once it can be read, as a role that may read and update it, with`. It reads the column and the sequence when it runs, and moves the sequence no further than the column needs, so it is the statement to run whatever the position is.
+
+A sequence whose limit comes before the goal says which: its `MAXVALUE` or `MINVALUE`, which a team can raise or lower, or the largest or smallest value of its type, beyond which no value lies. The advice then gives the sequence the type of its column, with `ALTER SEQUENCE ... AS bigint`, when the column takes larger values already, as a `serial` column that became `bigint` does, or gives the column and its sequence the type `bigint`; there is none for `bigint`.
+
+What an apply does not move:
+
+- a sequence that a column uses without owning it, such as a sequence that several tables share, or the sequence of a partitioned table that a declared partition uses;
+- the sequence of a column whose default does more than take the next value, such as `nextval(...) * 10`, or of a column of another type or of a domain;
+- the sequence of a column that the apply writes no explicit value into in this run, even when it is behind, as after an apply of an earlier version of kortopi: the next apply that writes the column moves it;
+- the sequences of tables that the declaration does not hold.
+
 ### The settings of the writes
 
 An apply reads and compares in the settings that a plan pins ([How values are compared](comparison.md#the-settings-of-the-session)), so the declared values and the values of `on_insert` mean the same in every environment.
@@ -195,9 +296,11 @@ In the database, an apply does the following and nothing else, in this order:
 5. When a cycle of foreign keys needs it, it defers their checks with `SET CONSTRAINTS`.
 6. For each write, in one round trip: a statement in the pinned settings picks the rows into one more temporary table, and an insert with values of `on_insert` reads them into another, typed like their columns; `set_config` sets the settings of the session; the insert, the update, or the deletion takes the picked rows; and `set_config` pins the settings again. Before the first deletion, in the pinned settings, it follows the foreign keys of the deletions again. After the deletions, it reads the rows that the walk reached, and the counts of the rows that its transaction deleted and updated in `pg_stat_xact_user_tables`.
 7. In the pinned settings, it runs the queries of the comparison of each declared table of the run again.
-8. It sends the settings of the session and `COMMIT` in one message.
+8. Before the first move of a sequence, in one round trip, `set_config` sets the settings of the session, `SET CONSTRAINTS ALL IMMEDIATE` runs the constraints that wait for the commit, and `set_config` pins the settings again. For each sequence to move, three statements, each in a savepoint of its own that it rolls back and releases, after `set_config` gives `lock_timeout` the bound of a statement on a sequence: one reads the column and the sequence; one reads them again and moves the sequence, with `nextval` or `setval`; and one reads them again after the move. The rollback gives `lock_timeout` its value again, and keeps what `nextval` and `setval` did. A sequence that the plan shows staying for want of a privilege is read once, for the advice ([Sequences](#sequences)).
+9. It sends the settings of the session and `COMMIT` in one message.
 
 Every temporary table is dropped at the commit, and every setting ends with the transaction.
+A move of a sequence lasts: PostgreSQL rolls back neither `nextval` nor `setval`.
 
 ### Foreign keys and cycles
 
@@ -326,6 +429,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   Through foreign keys, the deletion also changed 30 rows.
   ```
 
+- A line for each sequence of the plan follows: where the apply moved it, from where it stood when the move came to where the read after the move found it, or why it left it, without the advice, which a note on standard error gives ([Sequences](#sequences)):
+
+  ```text
+  Applied: 2 inserted, 0 updated, 0 deleted.
+  Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 4.
+  Sequence billing.tax_rates_id_seq of billing.tax_rates (id): next value 5, not moved: its next value lies beyond the values of the column already.
+  ```
+
 - `Applied:` counts the rows that the statements of kortopi wrote, as PostgreSQL reported them. When an update found fewer rows to update than the plan shows, because the other writes of the apply, such as the cascade of a foreign key `ON UPDATE CASCADE` or a trigger, had brought its rows to their declared values, a line says so, and the check before the commit confirmed that the tables are as declared:
 
   ```text
@@ -342,7 +453,7 @@ Applied: 0 inserted, 0 updated, 1 deleted.
 
 - When nothing differs, the apply prints the lines of an empty plan and nothing else: `No changes. The database matches the declaration.`, or, when a table has mode `insert`, holds stored rows that the declaration lacks, or could not have them counted, `No changes. There is nothing to apply.` and the lines that name such tables ([kortopi plan](plan.md#read-the-output)).
 - The plan of an apply counts the stored rows that tables of mode `upsert` and `insert` hold and the declaration lacks, as a plan does, and its lines say only that the mode of the table deletes none of them. The writes of the apply can still delete or change such a row: the cascade of a foreign key from a table whose rows the apply deletes, which the plan shows under that table ([What the deletions also do](plan.md#what-the-deletions-also-do)), the action `ON UPDATE` of a foreign key whose referenced key the apply updates, or a trigger ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). A count that PostgreSQL ends with an error leaves that table without a count, and the apply goes on.
-- After a failure, the errors go to standard error, and the last line is `kortopi: nothing was changed`.
+- After a failure, the errors go to standard error, and the last line is `kortopi: nothing was changed`. When the apply had moved sequences before its commit failed, the line goes on with `but the sequences that the apply had moved before its commit, ...`, and names them, with a sequence whose move an interrupt stopped as one that may have moved forward.
 - When the answer of the commit does not arrive, the apply cannot know whether the changes were made, and does not say that nothing was changed:
 
   ```text
@@ -350,6 +461,15 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   ```
 
   Run `kortopi plan` against the database to see which state it is in, and apply again if needed: an apply of a declaration that is already applied changes nothing.
+  When the apply had moved sequences before the commit, a line after the error names them, since they stay moved whether or not the commit was made:
+
+  ```text
+  kortopi: whether or not the commit was made, the sequences that the apply had moved before it stay moved, which only skips values: billing.fees_id_seq to next value 4
+  ```
+
+  Each sequence that the apply left behind then gets a note that gives its move, for the case that the commit was made: `note: if the commit was made, sequence ...`.
+
+- After a commit, each sequence that the apply left behind the values of its column, or whose position it does not know, gets a note on standard error, after the lines on standard output: `note: sequence ...` with where it stands, why, and what to do ([Sequences](#sequences)).
 
 ## Interrupt an apply
 
@@ -467,7 +587,11 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - The check before the commit reads every declared table of the run a second time, also the tables without changes. It costs less than the comparison of the plan, which loads and checks the declared rows too; [ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md) records a measurement.
 - The count of an update sees only the number of rows. When an update writes as many rows as the plan shows, but one planned row no longer needed the write and one other declared row did, because another write of the apply changed it, kortopi writes that other row back to its declared values, although the plan did not show it. The check before the commit still makes sure that the database is as declared.
 - A deletion must pick as many rows as the plan shows, also when the other writes of the apply did its work: with `--allow-delete`, a trigger of an insert or an update that deletes a row that the plan deletes stops the apply, although the result would be as declared. Delete that row in an apply of its own first.
-- kortopi does not move sequences. After an apply that inserts explicit values into a `serial` or identity column, the next value of its sequence may already be taken.
+- An apply moves the sequence of a column only when it writes explicit values into the column in that run, and only a sequence that the column owns ([Sequences](#sequences)). A sequence that an earlier apply left behind, a sequence that several tables share, and the sequences of tables that the declaration does not hold stay where they are.
+- A move is not rolled back: an apply whose commit fails after it leaves the sequences moved, and their values skipped. So does a move that PostgreSQL ends part way, as `statement_timeout` can end a walk.
+- A move of more than 100,000 values sets the sequence with `setval`, which moves it back if other sessions take more than 100,000 values from it within that one statement. Values that another session took between the writes and the move, or holds in its cache of a sequence with `CACHE` above 1, can still be values that the apply wrote. The walk of a sequence with `CACHE` above 1 skips up to a block of values more than the goal.
+- A lock that another session holds on a sequence for longer than 5 seconds, or than `--lock-timeout` when it is shorter, leaves the sequence where it is, with a note: the apply moves it no later, also when the lock is gone before the commit. Each statement on each locked sequence waits that long.
+- An apply that moves a sequence runs the constraint triggers deferred to the commit before its moves, in its transaction, rather than at the commit.
 - An update fires `UPDATE OF` triggers for every compared column, also those whose value stays the same.
 - An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit. Each of these tables holds a lock until the commit, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default: it then fails with `out of shared memory` and a hint to raise the setting, and nothing is changed.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
@@ -591,6 +715,13 @@ kortopi: tables a.a and a.b reference each other through foreign keys that are n
 
 ```text
 kortopi: commit: insert or update on table "x" violates foreign key constraint "x_y" (detail: ...) (constraint: x_y): a deferred foreign key failed at the commit: a row refers to a row that does not exist, or a deleted row is still referenced
+kortopi: nothing was changed
+```
+
+An apply that moves a sequence runs these constraints right before its first move, so that no sequence moves for an apply that fails, and says so there ([Sequences](#sequences)):
+
+```text
+kortopi: check the deferred constraints before the moves of the sequences: insert or update on table "x" violates foreign key constraint "x_y" (detail: ...) (constraint: x_y): a deferred foreign key failed before the moves of the sequences, as it would at the commit: a row refers to a row that does not exist, or a deleted row is still referenced
 kortopi: nothing was changed
 ```
 
