@@ -81,7 +81,14 @@ type Database interface {
 	// runs between it and Commit but what the commit would run: DiffAgain
 	// and CountLeftOut read, and MoveSequences runs the deferred
 	// constraints, which the commit would run, and moves sequences.
-	CheckEffect(ctx context.Context) error
+	//
+	// The tables of unplanned are those that the settings name in
+	// allow_unplanned_changes and that the plan found as tables of their own
+	// (plan.Plan.UnplannedNames). Their rows may be deleted, updated, and
+	// inserted beyond what the plan counted, never fewer than it counted,
+	// and CheckEffect returns what the deletions did to each of them beyond
+	// the plan, for each table where they did something (ADR-0051).
+	CheckEffect(ctx context.Context, unplanned []declaration.TableName) ([]Unplanned, error)
 
 	// DiffAgain compares the declared rows that Diff loaded for the table of
 	// req with the rows of the table again, after the writes of the apply
@@ -169,6 +176,10 @@ type Options struct {
 	// apply delete or change, over all tables, with the rows that foreign
 	// keys delete or change with them at every depth (ADR-0039). An apply
 	// that would delete or change more stops before it changes anything.
+	// The rows that the deletions delete beyond the plan in the tables of
+	// allow_unplanned_changes count too: the apply counts them after the
+	// deletions, and stops before its commit when they pass the limit
+	// (ADR-0051).
 	MaxDelete int
 	// Planned, when it is not nil, gets the plan as soon as it is computed
 	// and every declared table and column exists: before the guards and the
@@ -200,6 +211,10 @@ type Result struct {
 	// values already (ADR-0042). Any other count that differs from the plan
 	// stops the apply (CheckCount).
 	Uneven []Uneven
+	// Unplanned holds what the deletions did beyond the plan to the tables
+	// of allow_unplanned_changes, sorted by schema and then by name, for each
+	// table where they did something (ADR-0051).
+	Unplanned []Unplanned
 	// Sequences holds each sequence that the plan shows, in the order of
 	// the plan, and what the apply did with it: moved it, or left it where
 	// it was, with the reason (ADR-0045).
@@ -261,6 +276,30 @@ type Uneven struct {
 type Count struct {
 	Picked int
 	Wrote  int
+}
+
+// Unplanned is what the deletions of an apply did to a table of
+// allow_unplanned_changes beyond what its plan counted, by the counts that
+// the database keeps of the rows of the transaction since its first
+// deletion, which hold what the constraints deferred to the commit did too
+// (ADR-0051). The partitions of a partitioned table count with it. They are
+// counts of the database, not rows that the table lost or gained: they hold
+// what a block of a trigger rolled back, and a row that moves to another
+// partition counts as a deletion and an insertion.
+type Unplanned struct {
+	Table declaration.TableName
+	// Deleted counts the deletions in the table beyond those of the rows that
+	// the plan deletes from it and that the effect of the deletions counted,
+	// and Inserted the insertions into it.
+	Deleted  int
+	Inserted int
+	// Updates is the number of updates of rows of the table, which can
+	// update one row more than once, and MostUpdates the most that the
+	// actions SET NULL and SET DEFAULT of the deletions can make, as the plan
+	// counted them. Only the updates beyond MostUpdates are beyond the plan
+	// for certain; within it, the counts cannot tell them apart.
+	Updates     int
+	MostUpdates int
 }
 
 // Written counts the rows that the transaction of an apply deleted from a

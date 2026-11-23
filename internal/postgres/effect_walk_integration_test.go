@@ -263,7 +263,7 @@ func TestEffectsOnLargeTables(t *testing.T) {
 			}
 			t.Logf("the deletion took %v", time.Since(start))
 			start = time.Now()
-			if err := s.CheckEffect(t.Context()); err != nil {
+			if err := s.checkEffect(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.Commit(t.Context()); err != nil {
@@ -313,7 +313,7 @@ func TestEffectsOfNoActionAndRestrict(t *testing.T) {
 					}
 					_, err := s.Delete(t.Context(), req)
 					if err == nil {
-						err = s.CheckEffect(t.Context())
+						err = s.checkEffect(t.Context())
 					}
 					if err == nil {
 						err = s.Commit(t.Context())

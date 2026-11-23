@@ -210,6 +210,60 @@ func TestLoadNamesAreSorted(t *testing.T) {
 	}
 }
 
+// The tables of allow_unplanned_changes come sorted by schema and then by
+// name, whatever the order of the file, with the case of their names. They
+// need no file that declares them, and no section of their own (ADR-0051).
+func TestLoadUnplannedChanges(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		src  string
+		want []declaration.TableName
+	}{
+		{name: "no setting", src: "[tables.\"a.b\"]\nmode = \"sync\"\n"},
+		{name: "no table", src: "allow_unplanned_changes = []\n"},
+		{
+			name: "tables",
+			src:  "allow_unplanned_changes = [\"shop.totals\", \"Audit.Events\", \"shop.category_labels\"]\n\n[tables.\"shop.categories\"]\nmode = \"sync\"\n",
+			want: []declaration.TableName{name("Audit", "Events"), name("shop", "category_labels"), name("shop", "totals")},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := config.Load(writeSettings(t, tt.src))
+			if err != nil {
+				t.Fatalf("Load() error = %v, want none", err)
+			}
+			got := s.UnplannedChanges()
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("UnplannedChanges() = %v, want %v", got, tt.want)
+			}
+			// The names are a copy, and no table of the setting has settings
+			// that a file must declare.
+			if len(got) > 0 {
+				got[0] = name("x", "y")
+				if again := s.UnplannedChanges(); !slices.Equal(again, tt.want) {
+					t.Errorf("UnplannedChanges() after a change of its result = %v, want %v", again, tt.want)
+				}
+			}
+			if err := s.CheckDeclared([]declaration.TableName{name("a", "b"), name("shop", "categories")}); err != nil {
+				t.Errorf("CheckDeclared() = %v, want nil", err)
+			}
+		})
+	}
+
+	var none *config.Settings
+	if got := none.UnplannedChanges(); got != nil {
+		t.Errorf("nil.UnplannedChanges() = %v, want nil", got)
+	}
+	s := config.New(nil, name("b", "x"), name("a", "y"))
+	if got, want := s.UnplannedChanges(), []declaration.TableName{name("a", "y"), name("b", "x")}; !slices.Equal(got, want) {
+		t.Errorf("New().UnplannedChanges() = %v, want %v", got, want)
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
 
@@ -242,12 +296,43 @@ func TestLoadErrors(t *testing.T) {
 		{
 			name: "unknown key at the root",
 			src:  "mode = \"sync\"\n",
-			want: []string{`:1: unknown setting mode: the file holds only sections [tables."<schema>.<table>"]`},
+			want: []string{`:1: unknown setting mode: the file holds allow_unplanned_changes at its top and sections [tables."<schema>.<table>"]`},
 		},
 		{
 			name: "misspelled tables",
 			src:  "[table.\"a.b\"]\nmode = \"sync\"\n",
-			want: []string{`:1: unknown setting table."a.b": the file holds only sections [tables."<schema>.<table>"]`},
+			want: []string{`:1: unknown setting table."a.b": the file holds allow_unplanned_changes at its top and sections [tables."<schema>.<table>"]`},
+		},
+		{
+			name: "allow_unplanned_changes in a section",
+			src:  "[tables.\"a.b\"]\nmode = \"sync\"\nallow_unplanned_changes = [\"a.c\"]\n",
+			want: []string{`:3: unknown setting tables."a.b".allow_unplanned_changes: ` +
+				`allow_unplanned_changes names tables for the whole file, so write it at the top of the file, before the first section`},
+		},
+		{
+			name: "allow_unplanned_changes is not an array",
+			src:  "allow_unplanned_changes = \"a.b\"\n",
+			want: []string{`: allow_unplanned_changes must be an array of names of tables, as in allow_unplanned_changes = ["audit.events"]`},
+		},
+		{
+			name: "allow_unplanned_changes holds a number",
+			src:  "allow_unplanned_changes = [\"a.b\", 1]\n",
+			want: []string{`: allow_unplanned_changes must hold the names of tables as strings, as in allow_unplanned_changes = ["audit.events"]`},
+		},
+		{
+			name: "allow_unplanned_changes names a table without its schema",
+			src:  "allow_unplanned_changes = [\"events\"]\n",
+			want: []string{`: allow_unplanned_changes: table "events": write the name of the table with its schema, as <schema>.<table>`},
+		},
+		{
+			name: "allow_unplanned_changes names a table with two dots",
+			src:  "allow_unplanned_changes = [\"a.b.c\"]\n",
+			want: []string{`: allow_unplanned_changes: table "a.b.c": write the name as <schema>.<table>, with one dot`},
+		},
+		{
+			name: "allow_unplanned_changes names a table twice",
+			src:  "allow_unplanned_changes = [\"a.b\", \"a.c\", \"a.b\"]\n",
+			want: []string{`: allow_unplanned_changes names table "a.b" twice: name each table once`},
 		},
 		{
 			name: "misspelled setting",

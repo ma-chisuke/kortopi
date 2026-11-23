@@ -56,5 +56,6 @@
 | [ADR-0048](ADR-0048-compare-the-schema-that-decides-what-the-deletions-do-after-the-deletions-of-an-apply.ja.md) | apply の削除のあとに、削除のすることを決めるスキーマを、スナップショットが見たものと今のものとで比べる | accepted | 2026-11-22 |
 | [ADR-0049](ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md) | `NOT ENFORCED` の外部キーを、apply の順序から除く | accepted | 2026-11-23 |
 | [ADR-0050](ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) | 同じ外部キーを繰り返す段を、計画の1行にまとめる | accepted | 2026-11-23 |
+| [ADR-0051](ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) | apply の削除が計画を超えて変えてよいテーブルを設定で挙げられるようにし、そこでしたことを報告し、上限に数える | accepted | 2026-11-23 |
 
-<!-- i18n-source: README.md sha256:e1960f9683281b69fd964a38bcf367c3612eaf1afc7bd787c5f0821cb194cff8 -->
+<!-- i18n-source: README.md sha256:99714539534108f9fb7c0704c396ba29340afd21c0757824a77855bc046d80d4 -->

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -124,7 +125,7 @@ func TestApplyAfterADetachConcurrently(t *testing.T) {
 			done := detachConcurrently(t, db)
 			_, err = s.Delete(t.Context(), req)
 			if err == nil {
-				err = s.CheckEffect(t.Context())
+				err = s.checkEffect(t.Context())
 			}
 			if err == nil {
 				err = s.Commit(t.Context())
@@ -169,7 +170,7 @@ func TestDeferredKeyBeforeADetach(t *testing.T) {
 			if _, err := s.Delete(t.Context(), req); err != nil {
 				t.Fatalf("delete: %v", err)
 			}
-			err := s.CheckEffect(t.Context())
+			err := s.checkEffect(t.Context())
 			if err == nil {
 				// What the check let through: a detach after it, and a commit
 				// that skips the partition.
@@ -293,7 +294,7 @@ func TestCheckThatWaitsForACatalog(t *testing.T) {
 
 					ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 					defer cancel()
-					err = s.CheckEffect(ctx)
+					err = s.checkEffect(ctx)
 					// The whole error: the advice of a wait of the apply itself,
 					// which --lock-timeout governs, is not added to it.
 					want := "the check after the deletions reads the schema of the tables that they reach through a second connection, " +
@@ -390,7 +391,7 @@ func TestInterruptDuringTheCheck(t *testing.T) {
 			applyPID := s.pid
 			s.beforeNewestRead = "SELECT t.stubborn()"
 			checked := make(chan error, 1)
-			go func() { checked <- s.CheckEffect(ctx) }()
+			go func() { checked <- s.checkEffect(ctx) }()
 			checkPID := waitForBackend(t, db, "wait_event = 'PgSleep'")
 			interrupt()
 			select {
@@ -490,7 +491,7 @@ func TestInterruptAsTheCheckClosesItsSession(t *testing.T) {
 					}
 				}
 			}
-			if err := s.CheckEffect(ctx); err == nil {
+			if err := s.checkEffect(ctx); err == nil {
 				t.Fatal("the check went on after the interrupt")
 			}
 			err = s.Close(context.Background())
@@ -538,7 +539,7 @@ func TestCheckThatReachesAnotherDatabase(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := db.Query(t, schemaCheckRows)
-			if err := s.CheckEffect(t.Context()); !errors.Is(err, errOtherServer) {
+			if err := s.checkEffect(t.Context()); !errors.Is(err, errOtherServer) {
 				t.Errorf("check: %v\nwant %v", err, errOtherServer)
 			}
 			if err := s.Close(context.Background()); err != nil {
@@ -592,7 +593,7 @@ func TestInterruptAsTheCheckConnects(t *testing.T) {
 			before := db.Query(t, schemaCheckRows)
 			applyPID := s.pid
 			checked := make(chan error, 1)
-			go func() { checked <- s.CheckEffect(ctx) }()
+			go func() { checked <- s.checkEffect(ctx) }()
 			select {
 			case c := <-accepted:
 				t.Cleanup(func() { _ = c.Close() })
@@ -665,7 +666,7 @@ func TestDeferredTriggersOfAnApplyThatDeletes(t *testing.T) {
 			if seen := read(); len(seen) != 0 {
 				t.Fatalf("before the check, the deferred trigger saw %v", seen)
 			}
-			if err := s.CheckEffect(t.Context()); err != nil {
+			if err := s.checkEffect(t.Context()); err != nil {
 				t.Fatalf("check: %v", err)
 			}
 			// The cascade deleted order 2, of the plan legacy.
@@ -713,10 +714,11 @@ func TestDeferredTriggerThatChangesAnotherTable(t *testing.T) {
 			}
 			before := db.Query(t, schemaCheckRows)
 			_, err = applyThrough(t, db.Config, decl, settings, true)
-			want := "after its first deletion, the apply changed 1 row of table public.summary, which the plan did not count: " +
+			want := "after its first deletion, the database counted 1 update in table public.summary for the transaction, which the plan did not count: " +
 				"a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, " +
 				"did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, " +
-				"and the constraint triggers of the tables that the apply writes, for one that changes table public.summary"
+				"and the constraint triggers of the tables that the apply writes, for one that changes table public.summary, " +
+				"or, if it changes table public.summary on purpose, name the table in allow_unplanned_changes of " + filepath.Join(dir, "kortopi.toml")
 			if err == nil || err.Error() != want {
 				t.Errorf("apply = %v\nwant %s", err, want)
 			}

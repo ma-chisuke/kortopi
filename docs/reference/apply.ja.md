@@ -30,7 +30,9 @@ flags:
   --max-delete <n>  with --allow-delete: change nothing when the deletions
                     would delete or change more than n rows, counting the
                     rows that foreign keys delete or change with them, at
-                    every depth (default: 100)
+                    every depth, and the deletions beyond the plan that
+                    the database counts in the tables of
+                    allow_unplanned_changes (default: 100)
   --lock-timeout <duration>
                     stop when a statement waits longer than this for a lock
                     that another session holds, such as 10s, 500ms, or
@@ -111,7 +113,7 @@ GRANT SELECT, UPDATE ON SEQUENCE catalog.plans_id_seq TO deployer;
 5. 計画を標準出力に出す。
 6. 削除の安全策と、外部キーの循環を検査する。計画に削除する行があるときは、セッションの `track_counts` が on であることも検査する。`--allow-delete` があれば削除の確認のためであり、なければ、削除する行を残すテーブルに書き込みがすることを数えるためである。ただし、そうしたテーブルがすべてパーティションテーブルなら検査しない。
 7. 参照されるテーブルから参照するテーブルへの順に、各テーブルの足りない行を挿入し、それから違う行を更新する。
-8. `--allow-delete` があれば、挿入と更新のあとで削除の外部キーをもう一度たどり、計画が数えたのと違う行に着けば止まる。それから、宣言にない行を削除する。順番は、参照するテーブルから参照されるテーブルへであり、削除する行に別のテーブルからのカスケードが着くテーブルは、そのテーブルより先にする。削除が計画の数えたとおりにしたことを確かめる。
+8. `--allow-delete` があれば、挿入と更新のあとで削除の外部キーをもう一度たどり、計画が数えたのと違う行に着けば止まる。それから、宣言にない行を削除する。順番は、参照するテーブルから参照されるテーブルへであり、削除する行に別のテーブルからのカスケードが着くテーブルは、そのテーブルより先にする。削除が計画の数えたとおりにしたことを確かめる。ただし、`allow_unplanned_changes` が挙げるテーブルでは計画を超えてよく、そこで削除した行を含めて `--max-delete` をもう一度確かめる（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。
 9. その実行の宣言したすべてのテーブルを、計画と同じ比べ方でデータベースともう一度比べ、残った違いが、自分が省いた削除のほかにあれば止まる。`--allow-delete` がなければ、削除する行を残すテーブルの行を書き込みが削除したときや、自分の挿入と違う行をそこに挿入したときにも止まる（[コミット前の比較](#コミット前の比較)）。
 10. 進めるシーケンスがあるときは、コミットを待つ制約をコミットと同じく実行し、失敗すれば止まる。それから、明示的な値を書いた識別列や `serial` の列ごとに、そのシーケンスを書いた値の先へ進め、読み直す（[シーケンス](#シーケンス)）。
 11. コミットし、書いたものとシーケンスの位置を出力する。手前に残したシーケンスごとの注記は、標準エラー出力へ出す。
@@ -329,6 +331,7 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 3. 実行全体の削除が消すか変える行が、`--max-delete`（既定は 100）以下である。数えるのは、すべてのテーブルの削除する行、外部キー `ON DELETE CASCADE` がそれと一緒にすべての段で消す行、`ON DELETE SET NULL` と `SET DEFAULT` が変える行で、どの行も1回だけ数える。
 
 計画は、apply が何かを書く前に、これらの行を数える（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。
+`kortopi.toml` の `allow_unplanned_changes` が挙げるテーブルでは、削除が計画を超えて削除した行も数え、apply はそれを削除のあとに数える（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。
 `--allow-delete` があるときは、次の場合にも、apply はどの書き込みよりも前に止まる。
 
 - 削除が、ロールの読めないテーブルの行を消すか変える。どの段のものであれ、その行は数えられない。
@@ -358,7 +361,7 @@ apply が始まったあとにほかのセッションが外部キー・トリ�
 スキーマの変更は kortopi の前にし、apply の間にはしない（[デプロイでの使い方](#デプロイでの使い方)）。
 比べたあとは、計画の数えた行がすべて消えたか変わったことを確かめる。
 さらに、トランザクションが削除し更新した行の数を確かめる。どのテーブルも計画が数えた行を失ったはずである。その行の更新は、計画が変わると数えた行の数を下回らず、削除の動作が更新しうる回数を上回らないはずである。計画が着かなかったテーブルは、行を失いも変えもしなかったはずである（[削除が消さなかった行と、削除が消したほかの行](#削除が消さなかった行と削除が消したほかの行)）。
-これで、ほかのテーブルの行を消すか、計画が許すより多くの行を更新するトリガーやルールが見つかる（[分かっている制限](#分かっている制限)）。
+これで、ほかのテーブルの行を消すか、計画が許すより多くの行を更新するトリガーやルールが見つかる（[分かっている制限](#分かっている制限)）。ただし、`allow_unplanned_changes` が挙げるテーブルは除き、それは計画を超えて変わってよい（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。
 そのあとコミット前の比較が宣言したテーブルを比べ、削除のトリガーがモード `sync` の宣言したテーブルに加えた行や、そのトリガーが変えた宣言した値を見つける（[コミット前の比較](#コミット前の比較)）。
 計画は、apply が働かせる宣言したテーブルのルールで止まる（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。しかし、カスケードは、それが着くテーブルのルールも働かせる。宣言が持たないテーブルのルールも含む。
 
@@ -434,6 +437,72 @@ Plan: 0 to insert, 0 to update, 1 to delete in 3 tables.
 Applied: 0 inserted, 0 updated, 1 deleted.
 ```
 
+### 計画を超えて変わってよいテーブル
+
+トリガー、ルール、コミットまで遅らせた制約トリガーは、行が削除されたときに、ほかのテーブルの行を消すか変えることがあり、計画はそれをたどれない。
+そのとき、削除のあとの検査が apply を止める。トリガーがチームの望むことをしていても止める。
+`kortopi.toml` の `allow_unplanned_changes` は、それを許すテーブルを挙げる（[宣言のファイル](declaration.ja.md#計画を超えて変わってよいテーブル)）。
+
+`shop.categories` の `AFTER DELETE` のトリガーが、そのカテゴリのラベルを `shop.category_labels` から削除し、`shop.totals` のカテゴリの数を1減らすとする。`shop.category_labels` を結ぶ外部キーはない。設定と apply は次のようになる。
+
+```toml
+allow_unplanned_changes = ["shop.category_labels", "shop.totals"]
+
+[tables."shop.categories"]
+mode = "sync"
+```
+
+```text
+$ kortopi apply --dir data --allow-delete
+shop.categories (sync, key: code)
+  - code=games
+  0 to insert, 0 to update, 1 to delete
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+The deletion may also delete, update, or insert rows of shop.category_labels and shop.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.
+
+Applied: 0 inserted, 0 updated, 1 deleted.
+Unplanned changes in shop.category_labels, by the counts of the database: 2 deletions.
+Unplanned changes in shop.totals, by the counts of the database: 1 update.
+```
+
+この設定がなければ、同じ apply は `shop.category_labels` で止まり、何も変わらない（[削除が消さなかった行と、削除が消したほかの行](#削除が消さなかった行と削除が消したほかの行)）。
+
+数は、PostgreSQL がトランザクションについて持つ `pg_stat_xact_user_tables` の数である。削除・挿入・更新の回数であって、テーブルが失った行や得た行ではない。
+トリガーのブロックが試みてからロールバックしたものも含む。`EXCEPTION` のあるブロックの中で削除に失敗したときがその例である。ほかのパーティションへ動いた行は、削除1回と挿入1回として数える。
+そのため、行とエラーはそれをデータベースの数として伝える。行がすべて残った削除を、行が数えることもある。
+
+この設定のテーブルでは、次のようになる。パーティションテーブルとそのパーティション、トリガーがリフレッシュするマテリアライズドビューも同じである。
+
+- apply は、最初の削除から検査までにデータベースが計画を超えて数えた削除・更新・挿入で止まらない。コミットまで遅らせた制約トリガーのしたことも含む。
+- 数が計画を下回るときは、今までどおり止まる。計画がそこから削除し外部キーが削除する行より少ない削除や、`SET NULL` と `SET DEFAULT` が変える行より少ない更新がそれにあたる。
+  エラーは、この設定が許すのは、データベースがそのテーブルで計画の数えたより多くの削除・更新・挿入を数えることであり、少なく数えることではないと伝える。計画が数えて、変わらずに残った行も apply を止める。
+- そこでデータベースが数えた計画を超える削除は、計画の数えた行と一緒に `--max-delete` で数える。計画はそれを知りえないので、apply は削除のあとで上限をもう一度確かめ、超えればコミットの前に止まる（[上限を超える削除](#上限を超える削除)）。
+  その数は消えた行を超えうるので、この確認は止める側に倒れる。更新は数えない。データベースが数えるのは更新の回数であり、更新が変える行ではない。1つの行が何回も更新されることもある。
+- コミットのあと、計画を超えたものが数として表れるテーブルごとに、1行がその数を伝える。計画を超える削除、挿入、更新である。
+  削除の `SET NULL` か `SET DEFAULT` も行を更新するテーブルがある。そこでは、それらの動作のしうる回数より更新が多いときだけ更新を数え、その最多を添える。たとえば `Unplanned changes in t.events, by the counts of the database: 7 updates, at most 5 of them by foreign keys.` となる。
+  計画を超えたもののないテーブルには、行がない。
+- 削除の `SET NULL` か `SET DEFAULT` がパーティションキーの列を設定するテーブルは、それでも計画に合わせる。PostgreSQL は、動作がほかのパーティションへ動かした行を削除と挿入として数え、それはトリガーが削除した行と挿入した別の行と、数からは見分けられないからである。エラーはそれを伝える。
+
+テーブルを挙げることで手放すのは、トリガーが残した数えた行を、トリガーのほかの働きと見分けることである。
+検査は数えた行を識別子で見つけるので、`BEFORE DELETE` のトリガーが更新して `NULL` を返して残した行は、もうそこにあるとはみなされない。その行が残ったことを示すのは、削除の回数だけである。
+挙げたテーブルでは、データベースが数えるほかのどの削除も、それを埋め合わせる。実際の削除でも、トリガーのブロックがロールバックした削除でも同じである。
+そのため挙げたテーブルについては、`Through foreign keys, ...` の行と計画が、そこで起きたより多くを伝えうる。それらが削除したと示す行が、変わって残っていることがある。
+成り立つのは、削除と更新の回数が計画の数えたものを下回らないことと、変わらずに残った数えた行が apply を止めることである。
+挙げたテーブルについて、計画のまとまりとその行が伝えるのは、外部キーだけがするはずのことである（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。
+
+今と同じ厳しさのままのもの：
+
+- 設定が挙げないテーブルは、どれも今までどおり apply を止める。削除のあとの検査と、それが見ないものとして[分かっている制限](#分かっている制限)が挙げるものも今までどおりである。
+  テーブルを挙げれば apply が通る場合は、エラーがそのテーブルの挙げ方を伝える。数が計画を下回るときと、削除が行をパーティションの間で動かしうるテーブルでは、この助言をしない。設定が挙げられない、名前にドットを含むテーブルについては、代わりにそう伝える。
+- 削除のあとのスキーマの比較は、実行中にほかのセッションが変えた外部キー・トリガー・ルール・パーティションで apply を止める（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
+- apply の書き込みの行数。apply の後続の削除が選ぶ行を消すトリガーは、apply を止める（[計画と違う行を見つける削除](#計画と違う行を見つける削除)）。
+- コミット前の比較は、この設定の宣言したテーブルを含め、宣言したすべてのテーブルを比べる。そのため、そうしたテーブルも宣言のとおりに終わらなければならない（[コミット前の比較](#コミット前の比較)）。
+- `--allow-delete` がないとき、apply が削除する行をそのまま残すモード `sync` のテーブルは、設定がそれを挙げても、行を失わず、その挿入の行のほかに行を得てはならない。削除する行のない apply は数を確かめないので、この設定はそこでは何も変えない。
+
+この設定に要るものは、apply がすでに要るものだけである。計画は、そのテーブルのどれがデータベースにあるかを `pg_class` と `pg_namespace` から読み、どのロールもそれを読める。数は、検査がどのみち読むものである。
+終了コードは変わらない。
+
 ## 出力の読み方
 
 - 最初に、`kortopi plan` と同じ形の計画を標準出力に出す。計画は最初の書き込みより前に出すので、そのあと apply が失敗しても残る。計画ができる前の失敗では、標準出力には何も出ない。ファイル・設定・接続・テーブルの誤り、スキーマの変更を待つテーブル、挿入する行が値を得られない列、削除が消すか変える宣言した行である。
@@ -443,6 +512,14 @@ Applied: 0 inserted, 0 updated, 1 deleted.
   ```text
   Applied: 0 inserted, 0 updated, 1 deleted.
   Through foreign keys, the deletion also changed 30 rows.
+  ```
+
+- データベースの数に計画を超えたものが表れる `allow_unplanned_changes` のテーブルごとに、1行が続く。スキーマ、次に名前の順に並ぶ。
+  計画を超える削除、挿入、更新を、トランザクションについてデータベースが数えたとおりに伝える。それはテーブルが失った行や得た行ではない（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。
+
+  ```text
+  Unplanned changes in shop.category_labels, by the counts of the database: 2 deletions.
+  Unplanned changes in shop.totals, by the counts of the database: 1 update.
   ```
 
 - 計画の各シーケンスについて1行が続く。apply がシーケンスを、進めるときにあった位置から、進めたあとに読んだ位置へ進めたことを示す。進めなかったときは、その理由を示す。助言は含めず、それは標準エラー出力の注記が伝える（[シーケンス](#シーケンス)）。
@@ -611,6 +688,8 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。たどる処理は段ごとに問い合わせを流すので、自分自身を参照するテーブルの行の連なりでは、連なりの行ごとに1段の費用がかかる。計画がそれらの段を1行にまとめるときも同じである。
 - 計画は、apply と同じく、一時テーブルと宣言したテーブルのロックを終わるまで持つ。テーブルの数がとても多い宣言では、サーバーの `max_locks_per_transaction` を上げる必要がありうる。
 - トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。トリガーやルールがする範囲の中の更新は見えない。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査の前に動き、それが消すか変える行もほかの行と一緒に数える。宣言したテーブルについては、件数では見えないものをコミット前の比較が見る。更新の書く値と、モード `sync` のテーブルでは、削除する行の数として見る、トリガーが挿入する行である。
+- `allow_unplanned_changes` のテーブルでは、チームが想定したものに限らず、どのトリガー・ルール・遅らせた制約トリガーも、計画を超えて行を削除・更新・挿入してよい（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。計画が挙げるのはテーブルであって行ではなく、数はコミットのあとに出る。その数はデータベースの数であり、トリガーのブロックがロールバックしたものと、パーティションの間の移動の両方の半分を含む。
+  そうしたテーブルでは、トリガーが更新して残した数えた行を、トリガーのほかの働きと apply は見分けられない。そのため、`Through foreign keys, ...` の行と計画が、そこで起きたより多くを伝えうる。計画を超えた更新は、データベースが行ではなく更新の回数を数えるので、どの上限にも数えない。パーティションを含めるには、そのツリーの最上位のパーティションテーブルを挙げるしかなく、それはツリーのすべてのパーティションを含む。名前にドットを含むテーブルは挙げられない。削除の `SET NULL` か `SET DEFAULT` が行をパーティションの間で動かしうるテーブルは、それでも計画に合わせる。
 - コミット前の比較が比べるのは、その実行の宣言が持つものだけである。宣言が挙げない列、`on_insert` の値、宣言しないテーブル、`--schema` を付けた実行のスキーマの外の宣言したテーブルは比べない。モード `insert` のテーブルのキー以外の値と、宣言が持たない保存された行も比べない。ただし、モード `sync` のテーブルの削除する行は数え、`--allow-delete` がなければトランザクションの数でも確かめる。削除のない apply では、コミットまで遅らせた制約トリガーは比較のあとに働くので、それが変えるものも比べない。削除をする apply は、削除のあとの検査の前にそうしたトリガーを動かすので、比較はそれがしたことを見る。
 - `--allow-delete` がなければ、削除する行を apply が残すモード `sync` のパーティションテーブルは、その行の数だけで確かめる。そうした行を1行消して別の1行を足すトリガーは通る。PostgreSQL は、テーブルのパーティションの間を移る行を削除と挿入として数える。そのため、その数では2つを区別できない。カスケードがテーブルの中で移す行を理由に、apply を止めるわけにもいかない。宣言したパーティションは自分の数を持ち、それで確かめる。
 - 外部キー `ON UPDATE CASCADE` でつながる宣言した2つのテーブルが一緒に変わるのは、カスケードする列が参照するテーブルの照合キーにないときだけである。キーにあるなら、参照されるキーを先に変える。2つのテーブルが2つのスキーマにあればそのスキーマだけの apply で、そうでなければ自分の `UPDATE` で変える（[コミット前の比較](#コミット前の比較)）。
@@ -658,6 +737,13 @@ kortopi: nothing was changed
 
 ```text
 kortopi: the apply would delete or change 31 rows, more than the limit of 1: 1 row of m.kind to delete, and 30 rows that ON DELETE SET NULL or SET DEFAULT changes (30 rows of b.facts): check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete 31
+kortopi: nothing was changed
+```
+
+`allow_unplanned_changes` のテーブルでデータベースが数えた計画を超える削除は、削除のあとに数える。計画が上限に収まっていた apply も、そこでコミットの前に止まる（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。
+
+```text
+kortopi: the deletions of the apply come to 3, more than the limit of 2: 1 row of shop.categories to delete, and 2 deletions beyond the plan in tables that allow_unplanned_changes names, by the counts of the database (2 in shop.category_labels), so the apply stops before its commit: a count of the database can exceed the rows that are gone, since it holds what a block of a trigger rolled back and both halves of a move between partitions: check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete 3
 kortopi: nothing was changed
 ```
 
@@ -942,12 +1028,23 @@ kortopi: nothing was changed
 
 ```text
 kortopi: the deletions did not delete or change 1 row of table t.lines that the plan counted: another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: run the apply again, and if this happens again, check the triggers and the rules of table t.lines
-kortopi: after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive
-kortopi: after its first deletion, the apply updated rows of table t.events 2 times, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.events
+kortopi: after its first deletion, the database counted 1 deletion in table t.archive for the transaction, and the plan counted 0: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.archive, or, if it changes table t.archive on purpose, name the table in allow_unplanned_changes of data/kortopi.toml
+kortopi: after its first deletion, the database counted 2 updates in table t.events for the transaction, and the plan allows 1: a trigger or a rule of a table that the deletions reach, or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, so nothing was written: check the triggers and the rules of the tables that the deletions reach, and the constraint triggers of the tables that the apply writes, for one that changes table t.events, or, if it changes table t.events on purpose, name the table in allow_unplanned_changes of data/kortopi.toml
 ```
 
-数は最初の削除からのトランザクションのものである。そのため、コミットまで遅らせた制約トリガーがしたことも含む。apply の挿入や更新が遅らせたものも同じである。apply はそれらをこれらの検査の前に動かすからである。
+数は、最初の削除からトランザクションについてデータベースが持つものである。そのため、コミットまで遅らせた制約トリガーがしたことも含む。apply の挿入や更新が遅らせたものも同じである。apply はそれらをこれらの検査の前に動かすからである。
+数は行ではない。トリガーのブロックがロールバックしたものを含み、ほかのパーティションへ動いた行を削除1回と挿入1回として数える。
 テーブルを変えたトリガーやルールは、apply が書いたテーブルの制約トリガーのように、別のテーブルのものでありうる。そのため、助言はそれを探す場所を伝える。
+トリガーが意図してそのテーブルの行を削除し、更新し、挿入するなら、そのテーブルを `allow_unplanned_changes` に挙げる（[計画を超えて変わってよいテーブル](#計画を超えて変わってよいテーブル)）。設定で apply が通る場合は、助言がそう伝える。名前にドットを含むテーブルについては、代わりに `allow_unplanned_changes` がそれを挙げられないと伝える。
+
+この設定のテーブルの数が計画を下回るときは、apply は止まる。削除の `SET NULL` か `SET DEFAULT` が行をパーティションの間で動かしうるテーブルは計画に合わせる。どちらも、次のようにエラーが理由を伝える。
+
+```text
+kortopi: after its first deletion, the database counted 0 updates in table shop.reviews for the transaction, and the plan allows 1: ...: allow_unplanned_changes of data/kortopi.toml names table shop.reviews, which lets the database count more deletions, updates, and insertions in it than the plan counted, but not fewer
+kortopi: after its first deletion, the database counted 1 deletion and 2 insertions in table shop.shelves for the transaction, and the plan counted 0 deletions, and one more deletion and one insertion for each row that SET NULL or SET DEFAULT moves to another partition: ...: allow_unplanned_changes of data/kortopi.toml names table shop.shelves, but SET NULL or SET DEFAULT of the deletions can move its rows to another partition, which its counts cannot tell from a row that a trigger deletes and another that it inserts, so the apply holds it to the plan
+```
+
+1つ目では、外部キーの動作が動く前に、`shop.categories` のトリガーが、`SET NULL` が変えるはずのレビューを削除した。
 
 別のトランザクションが起こした原因は、apply をもう一度実行すれば消える。トリガーやルールは、毎回同じことをする。
 apply が始まったあとにほかのセッションが足した外部キー・パーティションや、無効にした外部キーのトリガーは、これらの検査より前に apply を止める（[apply の実行中にスキーマが変わったとき](#apply-の実行中にスキーマが変わったとき)）。
@@ -977,6 +1074,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:9c040228146f87a3c041c96214eb2f8b17eb6674a25382e86f742802798aa8e3 -->
+<!-- i18n-source: apply.md sha256:e11abc9ed9fc78aac29628d3fd1b50c4b97e6205a5241a06e93b020f25f2ac0e -->

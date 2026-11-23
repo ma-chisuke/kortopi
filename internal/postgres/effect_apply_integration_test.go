@@ -91,7 +91,7 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 					setUp: `CREATE FUNCTION t.forget() RETURNS trigger LANGUAGE plpgsql AS $$
 						BEGIN DELETE FROM t.archive WHERE order_id = OLD.id; RETURN OLD; END $$;
 						CREATE TRIGGER forget AFTER DELETE ON t.orders FOR EACH ROW EXECUTE FUNCTION t.forget();`,
-					wantErr: "after its first deletion, the apply deleted 1 row of table t.archive, and the plan counted 0" + beyondCauses + "t.archive",
+					wantErr: "after its first deletion, the database counted 1 deletion in table t.archive for the transaction, and the plan counted 0" + beyondCauses + "t.archive",
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestApplyEffectAfterConcurrentChanges(t *testing.T) {
 					before := dump(t, db, tables...)
 					_, err = s.Delete(t.Context(), req)
 					if err == nil {
-						err = s.CheckEffect(t.Context())
+						err = s.checkEffect(t.Context())
 					}
 					if err == nil {
 						err = s.Commit(t.Context())
@@ -239,7 +239,7 @@ func TestApplyEffectAfterConcurrentChangesOfUpdates(t *testing.T) {
 					before := dump(t, db, tables...)
 					_, err = s.Delete(t.Context(), req)
 					if err == nil {
-						err = s.CheckEffect(t.Context())
+						err = s.checkEffect(t.Context())
 					}
 					if err == nil {
 						err = s.Commit(t.Context())
@@ -371,7 +371,7 @@ func TestApplyEffectWithoutRoomForAnotherKey(t *testing.T) {
 						}
 					}
 					if err == nil {
-						err = s.CheckEffect(t.Context())
+						err = s.checkEffect(t.Context())
 					}
 					if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
 						t.Errorf("apply: %v\nwant %s", err, tt.wantErr)

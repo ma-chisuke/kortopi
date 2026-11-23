@@ -144,7 +144,7 @@ func TestApplyAfterSchemaChanges(t *testing.T) {
 					before := db.Query(t, schemaCheckRows)
 					_, err := s.Delete(t.Context(), req)
 					if err == nil {
-						err = s.CheckEffect(t.Context())
+						err = s.checkEffect(t.Context())
 						// The second session of the check is gone, whatever
 						// the check found.
 						waitNoSecondSession(t, db, s)

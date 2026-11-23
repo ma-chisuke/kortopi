@@ -67,8 +67,8 @@ func TestApplyEffectThatMovesRowsBetweenPartitions(t *testing.T) {
 						CREATE TRIGGER open AFTER DELETE ON m.region FOR EACH ROW EXECUTE FUNCTION m.open();`,
 					keep:  "id,code\n1,east\n3,south\n",
 					steps: []string{"m.region 1 SET NULL t.shop.shop_region_id_fkey(region_id) -> m.region set region_id: 2"},
-					wantErr: "after its first deletion, the apply deleted 2 rows of table t.shop and inserted 3, and the plan counted 0 deleted, " +
-						"and one more deleted and one inserted for each row that SET NULL or SET DEFAULT moves to another partition",
+					wantErr: "after its first deletion, the database counted 2 deletions and 3 insertions in table t.shop for the transaction, " +
+						"and the plan counted 0 deletions, and one more deletion and one insertion for each row that SET NULL or SET DEFAULT moves to another partition",
 					wantRows: []string{"t.shop_1 1 1", "t.shop_2 2 2", "t.shop_2 3 2"},
 				},
 			} {

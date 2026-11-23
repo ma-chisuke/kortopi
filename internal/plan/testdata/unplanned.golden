@@ -1,0 +1,12 @@
+shop.categories (sync, key: code)
+  - code=games
+  - code=toys
+  0 to insert, 0 to update, 2 to delete
+  Through foreign keys, the deletions of these rows also reach other rows:
+    3 rows of shop.items (category) reference them through items_category_fkey, ON DELETE CASCADE, so the deletions delete these rows too.
+
+Plan: 0 to insert, 0 to update, 2 to delete in 1 table.
+Through foreign keys, the deletions also delete 3 rows.
+The deletions may also delete, update, or insert rows of audit.events, shop.category_labels, shop.totals, stats.a, stats.b, and 1 more table beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.
+The database has no tables shop.archive and stats."my view", which allow_unplanned_changes in kortopi.toml names.
+Partitions are checked with the partitioned tables at the top of their trees, so allow_unplanned_changes in kortopi.toml does not cover partitions audit.log_1 of audit.log and audit.log_2 of audit.log: name audit.log instead.

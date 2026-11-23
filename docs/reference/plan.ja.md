@@ -601,6 +601,23 @@ Through foreign keys ON DELETE NO ACTION or RESTRICT, 15 rows make the deletions
 What the deletions do through 6 foreign keys is not known.
 ```
 
+計画は外部キーをたどるが、ほかのテーブルの行を消すか変えるトリガー・ルール・コミットまで遅らせた制約トリガーはたどれない。
+`kortopi.toml` の `allow_unplanned_changes` が、計画の示すものを超えて削除が行を変えてよいテーブルを挙げるとき（[宣言のファイル](declaration.ja.md#計画を超えて変わってよいテーブル)）、外部キーの行のあとの多くとも3行が、次のようにそれを伝える。
+
+```text
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+The deletion may also delete, update, or insert rows of shop.category_labels and shop.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.
+The database has no table shop.archive, which allow_unplanned_changes in kortopi.toml names.
+A partition is checked with the partitioned table at the top of its tree, so allow_unplanned_changes in kortopi.toml does not cover partition audit.log_1 of audit.log: name audit.log instead.
+```
+
+- 1行目は、`--allow-delete` 付きの apply が計画を超えて変わることを許し、コミットのあとに報告するテーブルを挙げる（[kortopi apply](apply.ja.md#計画を超えて変わってよいテーブル)）。
+- 2行目は、設定のテーブルのうちデータベースにないものを挙げる。これは誤りではない。スキーマの変更がそれを足すかもしれないからである。
+- 3行目は、ツリーの最上位のパーティションテーブルを挙げずに設定が挙げたパーティションを挙げる。apply はその行を最上位のパーティションテーブルと一緒に数えるので、設定はそれを含まない。
+- 各行はテーブルを多くとも5つ挙げ、ほかは `and 3 more tables` のように数える。
+- 削除する行のない計画は、これらの行をどれも出さず、これらの行は終了コードを変えない。
+- この設定のテーブルについて、まとまりと外部キーの行が伝えるのは、外部キーだけがするはずのことである。それらが数える行を、トリガーが先に削除することがある。削除を失敗させると数えた行も同じであり、そのとき apply はコミットする。
+
 削除が消す宣言した行や、削除が宣言した列を設定する宣言した行は、まとまりの行ではなく誤りである。計画は失敗し、その行と、それを宣言したファイルを挙げる（[kortopi apply](apply.ja.md#削除とぶつかる宣言した行)）。
 モード `insert` のテーブルは、保存された行をキーだけで比べる。そのため、そこで保存された行が誤りになるのは、削除がそのキーの列を設定するときだけであり、ほかの列の変更はまとまりの行になる。
 [kortopi apply](apply.ja.md#削除の安全策) は、削除の上限にこの件数を使う。参照される列の更新には件数を示さない。
@@ -675,7 +692,13 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### スクリプトの読み方
 
-- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行と、宣言にない保存された行をまとめた行も添える。冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。そのあとに、宣言にない保存された行を持つテーブルのグループをコメントで示す。挙げるテーブルは多くとも5つで、残りは1行で数える（[宣言にない保存された行](#宣言にない保存された行)）。
+- 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行、`allow_unplanned_changes` の行（[削除がほかの行にすること](#削除がほかの行にすること)）、宣言にない保存された行をまとめた行も添える。設定がテーブルを含むときは、さらに次の1行が続く。
+
+  ```text
+  The script does not check or report what the deletions change beyond the plan; an apply reports it, and counts its deletions against --max-delete.
+  ```
+
+  冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。そのあとに、宣言にない保存された行を持つテーブルのグループをコメントで示す。挙げるテーブルは多くとも5つで、残りは1行で数える（[宣言にない保存された行](#宣言にない保存された行)）。
 - コメントに続く3つの `SET LOCAL` の文は、スクリプトのリテラルの読み方を変える設定を、トランザクションの終わりまで固定する（[スクリプトの値](#スクリプトの値)）。スクリプトが `on_insert` の値を持つときは、コメントが「but those of on_insert」と添えて、それらの値を設定が固定しないことを示す。セッションは、それらの値を自分の設定で読む。
 - 適用が循環の外部キーを遅らせるときは、`SET CONSTRAINTS ... DEFERRED` が続く（[kortopi apply](apply.ja.md#外部キーと循環)）。スキーマのほかのテーブルが、同じ名前の遅らせられない制約を持てば、計画は適用と同じエラーで失敗する（[kortopi apply](apply.ja.md#同じ名前の制約)）。
 - テーブルは、適用の順に、参照されるテーブルから参照するテーブルへと続く。各テーブルの上には、件数のコメント1行を置く。テーブルの挿入する行には `INSERT` を1つ書き、各行をそれぞれ1行に置く。更新する行ごとに `UPDATE` を1つ書き、値の違う列だけを設定する。
@@ -790,7 +813,7 @@ kortopi: write the plan as SQL: table s.t: column "v" holds a value that is not 
 
 - ロックを取らない。そのため、同時に動く適用を待たない。
 - 各文が書く行の数を計画と照らし合わせず、適用のようにコミットの前に宣言したテーブルをもう一度比べることもしない（[kortopi apply](apply.ja.md#書き込みの行数)）。トランザクションは実行する側のものであり、kortopi は文とそのコミットの間に手順を挟めないからである。行が計画と違うデータベースでは、行の見つからない更新や削除は、エラーなしに何も変えない。挿入がキーで失敗することもある。文のすることを変えるトリガーや、計画のあとに作られたルール、たとえば宣言した値を書き換えるトリガーにも、次の計画まで気づかない。計画のときにあるルールは、計画を止める（[宣言のファイル](declaration.ja.md#ルールを持つテーブル)）。
-- `--max-delete` を当てはめず、挿入と更新のあとで削除の外部キーをもう一度たどることも、削除がしたことを確かめることもしない。
+- `--max-delete` を当てはめず、挿入と更新のあとで削除の外部キーをもう一度たどることも、削除がしたことを確かめることもしない。`allow_unplanned_changes` のテーブルで削除が計画を超えて変えたものも報告しない。
 - 更新は値の違う列だけを設定する。そのため、要るのはそれらの列に対する `UPDATE` だけであり、`UPDATE OF` のトリガーもそれらの列でしか働かない。
 - 1つの文で1行を更新する。適用は、テーブルの行を1つの文で更新する。PostgreSQL は、遅らせていない外部キーと、遅らせていなくても `DEFERRABLE` な一意制約を、各文の終わりに検査する。そのため、テーブルのすべての行が変わって初めて成り立つ変更は、適用では動き、スクリプトでは失敗する。そうした一意制約の値を2つの行で入れ替える変更や、同じテーブルのほかの行が参照する値（親カテゴリのコードなど）をその参照と一緒に変える変更である。1つのトランザクションで実行すれば、スクリプトは失敗し、何も変えない。対処は2つある。apply を実行するか、制約を `DEFERRABLE` と宣言し、更新より前の `SET CONSTRAINTS ... DEFERRED` によって、スクリプトのトランザクションの中で遅らせるかである。遅らせられない一意制約は行ごとに検査される。そのため、その値の入れ替えは適用でもできない。
 - 順序と遅らせるキーは、`--allow-delete` のある適用と同じく削除も数えて決める。そのため、削除のコメントを外しても、スクリプトの順序は正しいままである。
@@ -848,6 +871,6 @@ fi
 `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`grep` が行を見つけないときも、シェルは止まらない。その `grep` は `if` の条件だからである。
 失敗した計画はエラーを標準エラー出力へ出す。定期実行のログは、そのエラーもそのまま含む。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:8b7db681f8c8902f591567d41f85ead23af7c8b696215a7020d9983229c6743d -->
+<!-- i18n-source: plan.md sha256:2d8c71c6cd17ef00d3fc596a653b43392efc40400472709ea0b84c12ff872c59 -->

@@ -240,6 +240,17 @@ func TestRunPlan(t *testing.T) {
 			wantConnect: true,
 		},
 		{
+			// The lines of allow_unplanned_changes change no exit status: a
+			// plan with deletions is a plan with changes (ADR-0051).
+			name:        "deletions with unplanned changes, with exit code",
+			files:       with(twoTables, unplannedPlans),
+			args:        []string{"--exit-code"},
+			session:     &fakeSession{diffs: goldAndOld, missing: noArchive},
+			wantCode:    exitChanges,
+			wantStdout:  planOfGoldAndOldWithUnplanned,
+			wantConnect: true,
+		},
+		{
 			name:    "pending table with exit code",
 			files:   twoTables,
 			args:    []string{"--exit-code"},

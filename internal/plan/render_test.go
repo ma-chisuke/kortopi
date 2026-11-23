@@ -496,6 +496,34 @@ func TestRender(t *testing.T) {
 		},
 		{name: "effect", plan: effectPlan()},
 		{
+			// The tables of allow_unplanned_changes, after the lines of the
+			// effect: at most five of them, the names that the database has
+			// no table of, and the partitions whose partitioned table at the
+			// top the setting does not name. A partition whose partitioned
+			// table it names gets no line (ADR-0051).
+			name: "unplanned",
+			plan: &Plan{
+				Tables: []Table{{
+					Name: name("shop", "categories"), Mode: config.ModeSync, Key: []string{"code"},
+					Diff:   TableDiff{Deletes: []Row{{Key: values("games")}, {Key: values("toys")}}},
+					Effect: Effect{Steps: []Step{step(1, name("shop", "items"), "items_category_fkey", name("shop", "categories"), "CASCADE", 3, "category")}},
+				}},
+				Unplanned: []UnplannedTable{
+					{Name: name("audit", "events")},
+					{Name: name("audit", "events_2026"), Top: name("audit", "events")},
+					{Name: name("audit", "log_1"), Top: name("audit", "log")},
+					{Name: name("audit", "log_2"), Top: name("audit", "log")},
+					{Name: name("shop", "archive"), Missing: true},
+					{Name: name("shop", "category_labels")},
+					{Name: name("shop", "totals")},
+					{Name: name("stats", "a")},
+					{Name: name("stats", "b")},
+					{Name: name("stats", "c")},
+					{Name: name("stats", "my view"), Missing: true},
+				},
+			},
+		},
+		{
 			// The sequences of the columns that a plan writes explicit values
 			// into, after the counts and before the effect of the deletions
 			// (ADR-0045).

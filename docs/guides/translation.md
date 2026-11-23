@@ -276,3 +276,5 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | impact (of a bug) | 影響 |
 | notification (on GitHub) | 通知 |
 | private vulnerability reporting, security advisory (on GitHub) | 脆弱性の非公開報告、セキュリティアドバイザリ |
+| materialized view | マテリアライズドビュー |
+| refresh (a materialized view) | リフレッシュする |

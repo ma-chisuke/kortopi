@@ -234,8 +234,15 @@ func insertsOnInsert(p *plan.Plan) bool {
 const onInsertNote = "The database reads the values of on_insert when the script runs, in the settings of its session: " +
 	"a value such as now is the time of the transaction that runs the script."
 
+// unplannedNote follows the lines of the tables of allow_unplanned_changes in
+// the header of a script (ADR-0051). The script runs in a transaction that
+// kortopi does not hold, so nothing checks what its deletions change.
+const unplannedNote = "The script does not check or report what the deletions change beyond the plan; " +
+	"an apply reports it, and counts its deletions against --max-delete."
+
 // writeHeader writes the header comment: where the plan comes from, its
-// counts, the line that sums up the stored rows that the declaration lacks
+// counts, the lines of the tables of allow_unplanned_changes (ADR-0051), the
+// line that sums up the stored rows that the declaration lacks
 // in tables whose modes delete no row (ADR-0046), how to run the script, the
 // tables and columns that wait for the schema change, and, after them, the
 // lines of the tables that hold such rows, at most five of them and a line
@@ -256,6 +263,12 @@ func writeHeader(b *bytes.Buffer, p *plan.Plan, h Header) {
 		inserts, updates, deletes, plural(len(p.Tables), "table", "tables")))
 	for _, line := range p.EffectSummary() {
 		comment(b, line)
+	}
+	for _, line := range p.UnplannedLines() {
+		comment(b, line)
+	}
+	if len(p.UnplannedNames()) > 0 {
+		comment(b, unplannedNote)
 	}
 	if line := p.UndeclaredSummary(); line != "" {
 		comment(b, line)

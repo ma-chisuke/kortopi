@@ -45,11 +45,32 @@ type InsertValue struct {
 	Value  string
 }
 
+// UnplannedKey is the key of kortopi.toml that names the tables whose rows
+// the deletions of an apply may delete, update, or insert beyond what its
+// plan counts (ADR-0051).
+const UnplannedKey = "allow_unplanned_changes"
+
 // Settings is the content of kortopi.toml.
 type Settings struct {
 	// file is the path of the settings file, for messages.
 	file   string
 	tables map[declaration.TableName]Table
+	// unplanned holds the tables of UnplannedKey, sorted by schema and then
+	// by name.
+	unplanned []declaration.TableName
+}
+
+// UnplannedChanges returns the tables that the file names in
+// allow_unplanned_changes, sorted by schema and then by name (ADR-0051): an
+// apply that deletes does not stop on the rows of such a table that its
+// transaction deletes, updates, or inserts beyond what its plan counted, and
+// reports them. A table there needs neither a file that declares it nor a
+// section of its own.
+func (s *Settings) UnplannedChanges() []declaration.TableName {
+	if s == nil {
+		return nil
+	}
+	return slices.Clone(s.unplanned)
 }
 
 // Table returns the settings of a table. A table that the file does not
@@ -75,8 +96,11 @@ func (s *Settings) Names() []declaration.TableName {
 	for name := range s.tables {
 		names = append(names, name)
 	}
-	slices.SortFunc(names, func(a, b declaration.TableName) int {
-		return cmp.Or(cmp.Compare(a.Schema, b.Schema), cmp.Compare(a.Name, b.Name))
-	})
+	slices.SortFunc(names, compareNames)
 	return names
+}
+
+// compareNames orders tables by schema and then by name.
+func compareNames(a, b declaration.TableName) int {
+	return cmp.Or(cmp.Compare(a.Schema, b.Schema), cmp.Compare(a.Name, b.Name))
 }

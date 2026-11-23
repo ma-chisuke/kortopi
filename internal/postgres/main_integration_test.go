@@ -33,6 +33,13 @@ func eachServer(t *testing.T) []*pgtest.Server {
 	return pgtest.Servers()
 }
 
+// checkEffect runs CheckEffect without tables of allow_unplanned_changes, as
+// an apply of settings without the key does, and returns its error.
+func (s *Session) checkEffect(ctx context.Context) error {
+	_, err := s.CheckEffect(ctx, nil)
+	return err
+}
+
 // testDB is a database that one test owns.
 type testDB struct {
 	*pgtest.DB

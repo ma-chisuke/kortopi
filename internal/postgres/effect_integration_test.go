@@ -110,7 +110,7 @@ func effectAndApply(t *testing.T, db testDB, s *Session, reqs []plan.DiffRequest
 			t.Fatalf("Delete(%s): %v", req.Table.Name, err)
 		}
 	}
-	if err := s.CheckEffect(t.Context()); err != nil {
+	if err := s.checkEffect(t.Context()); err != nil {
 		t.Fatalf("CheckEffect: %v", err)
 	}
 	if err := s.Commit(t.Context()); err != nil {

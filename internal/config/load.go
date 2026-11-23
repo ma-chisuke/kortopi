@@ -20,8 +20,10 @@ import (
 
 // fileTOML is the shape of kortopi.toml. Decoding rejects every key that the
 // shape lacks, so that a misspelled setting does not pass silently.
+// Unplanned is checked after decoding, as the settings of a table are.
 type fileTOML struct {
-	Tables map[string]tableTOML `toml:"tables"`
+	Unplanned any                  `toml:"allow_unplanned_changes"`
+	Tables    map[string]tableTOML `toml:"tables"`
 }
 
 // tableTOML holds the settings of one table as the file writes them. Their
@@ -37,10 +39,15 @@ type tableTOML struct {
 const validModes = `"insert", "upsert", or "sync"`
 
 // New returns settings that hold the given tables, as if a settings file had
-// mentioned them. A table whose Mode is empty gets mode upsert. It serves
-// callers that build settings without a file, such as tests.
-func New(tables map[declaration.TableName]Table) *Settings {
+// mentioned them, and the tables of unplanned in allow_unplanned_changes. A
+// table whose Mode is empty gets mode upsert. It serves callers that build
+// settings without a file, such as tests.
+func New(tables map[declaration.TableName]Table, unplanned ...declaration.TableName) *Settings {
 	s := &Settings{file: FileName, tables: make(map[declaration.TableName]Table, len(tables))}
+	if len(unplanned) > 0 {
+		s.unplanned = slices.Clone(unplanned)
+		slices.SortFunc(s.unplanned, compareNames)
+	}
 	for name, t := range tables {
 		if t.Mode == "" {
 			t.Mode = ModeUpsert
@@ -100,6 +107,13 @@ func parse(path string, src []byte) (*Settings, error) {
 	if err := dec.Decode(&doc); err != nil {
 		return nil, decodeError(path, err)
 	}
+	var unplanned []declaration.TableName
+	if doc.Unplanned != nil {
+		var err error
+		if unplanned, err = parseUnplanned(doc.Unplanned); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
 	tables := make(map[declaration.TableName]Table, len(doc.Tables))
 	for _, raw := range slices.Sorted(maps.Keys(doc.Tables)) {
 		name, err := parseName(raw)
@@ -112,7 +126,37 @@ func parse(path string, src []byte) (*Settings, error) {
 		}
 		tables[name] = t
 	}
-	return &Settings{file: path, tables: tables}, nil
+	return &Settings{file: path, tables: tables, unplanned: unplanned}, nil
+}
+
+// unplannedExample is how allow_unplanned_changes is written, for messages.
+const unplannedExample = `as in ` + UnplannedKey + ` = ["audit.events"]`
+
+// parseUnplanned checks the tables of allow_unplanned_changes, each named as
+// <schema>.<table> once, and returns them sorted by schema and then by name
+// (ADR-0051). An empty array names no table, as a file without the key does.
+func parseUnplanned(raw any) ([]declaration.TableName, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array of names of tables, %s", UnplannedKey, unplannedExample)
+	}
+	names := make([]declaration.TableName, 0, len(items))
+	for _, item := range items {
+		raw, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s must hold the names of tables as strings, %s", UnplannedKey, unplannedExample)
+		}
+		name, err := parseName(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: table %q: %w", UnplannedKey, raw, err)
+		}
+		if slices.Contains(names, name) {
+			return nil, fmt.Errorf("%s names table %q twice: name each table once", UnplannedKey, raw)
+		}
+		names = append(names, name)
+	}
+	slices.SortFunc(names, compareNames)
+	return names, nil
 }
 
 // parseName splits the name of a section of the file into its schema and its
@@ -289,7 +333,11 @@ func unknownSetting(key toml.Key) string {
 	name := formatKey(key)
 	switch {
 	case len(key) == 0 || key[0] != "tables":
-		return fmt.Sprintf(`unknown setting %s: the file holds only sections [tables."<schema>.<table>"]`, name)
+		return fmt.Sprintf(`unknown setting %s: the file holds %s at its top and sections [tables."<schema>.<table>"]`, name, UnplannedKey)
+	case len(key) == 3 && key[2] == UnplannedKey:
+		// A key after the first section belongs to that section.
+		return fmt.Sprintf("unknown setting %s: %s names tables for the whole file, so write it at the top of the file, before the first section",
+			name, UnplannedKey)
 	case len(key) >= 3 && !strings.Contains(key[1], "."):
 		// [tables.facility.rooms] is two nested tables, not one name.
 		return fmt.Sprintf("unknown setting %s: write the name of the table in quotes, as in [tables.%s]", name, strconv.Quote(key[1]+"."+key[2]))

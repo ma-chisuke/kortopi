@@ -11,7 +11,9 @@ import (
 // RenderSummary writes what an apply wrote, for the lines after its plan,
 // which Options.Planned shows: a blank line and the count of the rows
 // inserted, updated, and deleted, and a line of the rows that the deletions
-// also deleted and changed through foreign keys (ADR-0039). When updates
+// also deleted and changed through foreign keys (ADR-0039), and a line for
+// each table of allow_unplanned_changes that the deletions changed beyond
+// the plan, with what they did there (ADR-0051). When updates
 // found fewer rows to update than the plan shows, a line says which, and that
 // the other writes of the apply had done their work already, as the check
 // before the commit confirmed (ADR-0042). A line follows for each sequence
@@ -40,6 +42,9 @@ func RenderSummary(w io.Writer, r *Result) error {
 				deletions = "deletion"
 			}
 			fmt.Fprintf(&b, "Through foreign keys, the %s also %s.\n", deletions, reach)
+		}
+		for _, u := range r.Unplanned {
+			b.WriteString(unplannedLine(u) + "\n")
 		}
 		for _, line := range unevenLines(r.Uneven) {
 			b.WriteString(line + "\n")
@@ -110,6 +115,34 @@ func NotesOf(sequences []SequenceMove) []string {
 // has, and one whose position the apply does not know.
 func noted(s *plan.Sequence) bool {
 	return s.Advice != "" || s.Unread || s.Unknown
+}
+
+// unplannedLine returns the line of what the deletions did beyond the plan to
+// a table of allow_unplanned_changes (ADR-0051), as in "Unplanned changes in
+// shop.category_labels, by the counts of the database: 2 deletions." It
+// claims no more than the counts show, which are counts of the database for
+// the transaction and not rows that the table lost or gained: the deletions
+// beyond those that the plan counted, the insertions, and the updates. The
+// database counts what a block of a trigger rolled back too, and a row that
+// moves to another partition as a deletion and an insertion. In a table
+// where the actions SET NULL and SET DEFAULT of the deletions can update rows
+// too, only the updates beyond their most are beyond the plan for certain.
+func unplannedLine(u Unplanned) string {
+	var parts []string
+	if u.Deleted > 0 {
+		parts = append(parts, plural(u.Deleted, "deletion", "deletions"))
+	}
+	if u.Inserted > 0 {
+		parts = append(parts, plural(u.Inserted, "insertion", "insertions"))
+	}
+	if u.Updates > u.MostUpdates {
+		updates := plural(u.Updates, "update", "updates")
+		if u.MostUpdates > 0 {
+			updates += fmt.Sprintf(", at most %d of them by foreign keys", u.MostUpdates)
+		}
+		parts = append(parts, updates)
+	}
+	return "Unplanned changes in " + plan.FormatTable(u.Table) + ", by the counts of the database: " + joinAnd(parts) + "."
 }
 
 // unevenLines returns the line of the updates that found fewer rows to
