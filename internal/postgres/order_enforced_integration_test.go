@@ -134,6 +134,10 @@ func TestOrderLeavesOutKeysNotEnforced(t *testing.T) {
 		t.Run(srv.Name, func(t *testing.T) {
 			tests := []orderCase{
 				{name: "a key that PostgreSQL enforces", keys: []apply.ForeignKey{lead}, wantErr: refused},
+				// A key NOT VALID has not checked the stored rows, and checks
+				// every row that a write gives it: it is enforced.
+				{name: "a key NOT VALID", clauses: "NOT VALID", keys: []apply.ForeignKey{lead}, wantErr: refused},
+				{name: "a deferrable key NOT VALID", clauses: "DEFERRABLE NOT VALID", keys: []apply.ForeignKey{with(lead, true, false)}},
 				{name: "a deferrable key that PostgreSQL enforces", clauses: "DEFERRABLE", keys: []apply.ForeignKey{with(lead, true, false)}},
 			}
 			if srv.Major >= enforcedSince {
@@ -292,6 +296,39 @@ func TestApplyAfterAnotherSessionEnforcesAKey(t *testing.T) {
 						}
 					}
 				})
+			}
+		})
+	}
+}
+
+// A key NOT VALID, which PostgreSQL checks on every row that a write gives
+// it, orders the tables: app.zones comes before app.cities, against the
+// order of the names, so the city inserts after its zone, on every version
+// (ADR-0049).
+func TestOrderFollowsKeysNotValid(t *testing.T) {
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			db := database(t, srv)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.zones (id integer PRIMARY KEY);
+				CREATE TABLE app.cities (id integer PRIMARY KEY, zone_id integer);
+				ALTER TABLE app.cities ADD CONSTRAINT cities_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES app.zones NOT VALID;
+			`)
+			dir := writeFiles(t, map[string]string{"app/zones.csv": "id\n1\n", "app/cities.csv": "id,zone_id\n10,1\n"})
+			cities, zones := csvTable("app", "cities", "id", "zone_id"), csvTable("app", "zones", "id")
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{cities, zones}}
+			settings := config.New(map[declaration.TableName]config.Table{cities.Name: {Mode: config.ModeUpsert}, zones.Name: {Mode: config.ModeUpsert}})
+			keys, _ := planScript(t, db, decl, settings)
+			want := []apply.ForeignKey{{Name: "cities_zone_id_fkey", Table: cities.Name, References: zones.Name}}
+			if !slices.Equal(keys, want) {
+				t.Errorf("ForeignKeys = %+v, want %+v", keys, want)
+			}
+			if r, err := runApply(t, db, decl, settings); err != nil || r.Inserted != 2 {
+				t.Fatalf("apply = %+v, %v, want 2 inserted", r, err)
+			}
+			if got, want := dump(t, db, "app.cities", "app.zones"), []string{"app.cities (10,1)", "app.zones (1)"}; !slices.Equal(got, want) {
+				t.Errorf("rows after the apply = %v, want %v", got, want)
 			}
 		})
 	}
