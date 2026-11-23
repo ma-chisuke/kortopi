@@ -70,6 +70,11 @@ func TestApplyUnplannedChanges(t *testing.T) {
 				return ": allow_unplanned_changes of {settings} names table " + table +
 					", which lets the database count more deletions, updates, and insertions in it than the plan counted, but not fewer"
 			}
+			keepItem := `CREATE TABLE shop.items (id int PRIMARY KEY, category text REFERENCES shop.categories ON DELETE CASCADE, note text);
+				INSERT INTO shop.items VALUES (1, 'games', NULL);
+				CREATE FUNCTION shop.keep_item() RETURNS trigger LANGUAGE plpgsql AS $$
+				BEGIN UPDATE shop.items SET note = 'kept', category = NULL WHERE id = OLD.id; RETURN NULL; END $$;
+				CREATE TRIGGER keep_item BEFORE DELETE ON shop.items FOR EACH ROW EXECUTE FUNCTION shop.keep_item();`
 			shelves := `CREATE TABLE shop.shelves (id int, category text REFERENCES shop.categories ON DELETE SET NULL) PARTITION BY LIST (category);
 				CREATE TABLE shop.shelves_books PARTITION OF shop.shelves FOR VALUES IN ('books');
 				CREATE TABLE shop.shelves_games PARTITION OF shop.shelves FOR VALUES IN ('games');
@@ -218,6 +223,20 @@ func TestApplyUnplannedChanges(t *testing.T) {
 						"another transaction deleted it or pointed it at another row while the apply ran, or a trigger BEFORE DELETE or BEFORE UPDATE " +
 						"that returns NULL or a rule of a table that the deletions reach kept it, so nothing was written: " +
 						"run the apply again, and if this happens again, check the triggers and the rules of table shop.items",
+				},
+				{
+					// A counted row that a trigger keeps with an update is no
+					// longer found by its identity, and only the count of the
+					// deletions, below what the plan counted, stops the apply.
+					name:      "a counted row that a trigger keeps with an update",
+					setUp:     keepItem,
+					unplanned: []string{"shop.items"},
+					wantErr:   counts("0 deletions in table shop.items for the transaction, and the plan counted 1", "shop.items", named("shop.items")),
+				},
+				{
+					name:    "a counted row that a trigger keeps with an update, without the setting",
+					setUp:   keepItem,
+					wantErr: counts("0 deletions in table shop.items for the transaction, and the plan counted 1", "shop.items", ""),
 				},
 				{
 					// A trigger that deletes a row that SET NULL changes, before
