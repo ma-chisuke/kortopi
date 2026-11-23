@@ -29,6 +29,10 @@ func TestOptionsConnString(t *testing.T) {
 			"host='h' port='5433' user='u' dbname='app'",
 		},
 		{Options{User: `o'brien`, Database: `back\slash and space`}, `user='o\'brien' dbname='back\\slash and space'`},
+		// The settings of the dialect come first, so that the fields
+		// override them.
+		{Options{settings: "password='pw' sslmode='disable'"}, "password='pw' sslmode='disable'"},
+		{Options{Host: "h", settings: "host='other' password='pw'"}, "host='other' password='pw' host='h'"},
 	}
 	for _, tt := range tests {
 		if got := tt.opts.connString(); got != tt.want {
@@ -81,6 +85,17 @@ func TestOptionsConnConfig(t *testing.T) {
 	}
 	if cfg.Host != "flaghost" || cfg.Port != 6000 || cfg.User != "o'brien" || cfg.Database != "flagdb" || cfg.Password != "flagpassword" {
 		t.Errorf("from the options: %s:%d %s %s %s", cfg.Host, cfg.Port, cfg.User, cfg.Database, cfg.Password)
+	}
+
+	// The settings of the dialect override the environment, and the fields
+	// override the settings.
+	cfg, err = Options{Host: "flaghost", settings: "host='sethost' dbname='setdb' password='setpassword' options='-c lock_timeout=2s'"}.connConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "flaghost" || cfg.Port != 5432 || cfg.User != "envuser" || cfg.Database != "setdb" || cfg.Password != "setpassword" ||
+		cfg.RuntimeParams["options"] != "-c lock_timeout=2s" {
+		t.Errorf("from the settings: %s:%d %s %s %s %q", cfg.Host, cfg.Port, cfg.User, cfg.Database, cfg.Password, cfg.RuntimeParams["options"])
 	}
 
 	if _, err := (Options{Port: "not a port"}).connConfig(); err == nil || !strings.Contains(err.Error(), "read the connection settings") {

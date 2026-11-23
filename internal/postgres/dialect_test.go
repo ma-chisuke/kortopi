@@ -24,6 +24,7 @@ func TestDialectOpen(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
+		dialect Dialect
 		opts    dialect.Options
 		wantErr string
 	}{
@@ -31,10 +32,12 @@ func TestDialectOpen(t *testing.T) {
 		{name: "database", opts: dialect.Options{Host: "db.example.test"}, wantErr: "the name of the database is missing"},
 		{name: "user", opts: dialect.Options{User: "app password=secret", Database: "shop"}, wantErr: "the user of the connection looks like a connection string"},
 		{name: "apply and export", opts: dialect.Options{Database: "shop", Apply: true, Export: true}, wantErr: "a session is for an apply or for an export, not for both"},
+		// The settings of the dialect reach the connection.
+		{name: "settings", dialect: Dialect{settings: "port='not a port'"}, opts: dialect.Options{Database: "shop"}, wantErr: "read the connection settings: the port is not a number"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, err := Dialect{}.Open(t.Context(), tt.opts)
+			s, err := tt.dialect.Open(t.Context(), tt.opts)
 			if s != nil || err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Open(%+v) = %v, %v, want no session and an error with %q", tt.opts, s, err, tt.wantErr)
 			}

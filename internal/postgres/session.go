@@ -53,6 +53,9 @@ type Options struct {
 	// (dialect.Options.GiveUp). It may be nil.
 	GiveUp <-chan struct{}
 
+	// settings are the settings of the connection of Dialect.settings, which
+	// connString writes before the fields of the connection above.
+	settings string
 	// cancelWait, when it is not zero, replaces the constant of the same
 	// name, so that a test can wait less.
 	cancelWait time.Duration
@@ -451,9 +454,12 @@ func attemptHost(text string) string {
 	return text[start+2 : end]
 }
 
-// connString returns the fields of o that are set as a connection string of
-// keywords and values. pgx takes the other settings from the environment, and
-// looks up the password for the final host, port, database, and user.
+// connString returns the settings of o and the fields of the connection of o
+// that are set as a connection string of keywords and values. pgx takes the
+// other settings from the environment, and looks up the password for the
+// final host, port, database, and user. Of two values of a keyword, pgx
+// takes the later: the fields come last, so that they override the
+// settings, as they override the environment.
 func (o Options) connString() string {
 	fields := [...][2]string{
 		{"host", o.Host},
@@ -461,20 +467,22 @@ func (o Options) connString() string {
 		{"user", o.User},
 		{"dbname", o.Database},
 	}
-	var b strings.Builder
-	for _, f := range fields {
-		if f[1] == "" {
-			continue
-		}
-		if b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteString(f[0])
-		b.WriteString("='")
-		b.WriteString(strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(f[1]))
-		b.WriteByte('\'')
+	var parts []string
+	if o.settings != "" {
+		parts = append(parts, o.settings)
 	}
-	return b.String()
+	for _, f := range fields {
+		if f[1] != "" {
+			parts = append(parts, keywordValue(f[0], f[1]))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// keywordValue returns one setting of a connection string, with its value
+// quoted.
+func keywordValue(keyword, value string) string {
+	return keyword + "='" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 
 // ConnectConfig connects with cfg, in place of the fields of opts that name
