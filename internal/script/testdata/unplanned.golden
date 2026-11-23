@@ -1,0 +1,15 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+-- The deletion may also delete, update, or insert rows of geo.labels and geo.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.
+-- The database has no table geo.archive, which allow_unplanned_changes in kortopi.toml names.
+-- The script does not check or report what the deletions change beyond the plan; an apply counts it against --max-delete and reports it.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- geo.regions: 1 to delete
+-- DELETE FROM geo.regions WHERE (1);

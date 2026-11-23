@@ -30,6 +30,10 @@ import (
 // deletions again, after the inserts and updates, and stops when it differs
 // from the effect of the plan (ADR-0039). After the deletions, and before the
 // commit, it lets the database check that they did what the effect counted.
+// The tables that the settings name in allow_unplanned_changes may change
+// beyond the plan there, and Result.Unplanned says how: the rows that the
+// deletions delete beyond the plan count against Options.MaxDelete, which
+// Run checks again then (ADR-0049).
 //
 // Last, before the commit, Run lets the database compare every declared
 // table again, and stops when a difference is left that the run does not
@@ -170,7 +174,10 @@ func Run(ctx context.Context, decl *declaration.Declaration, settings *config.Se
 			}
 			r.Deleted += c.Wrote
 		}
-		if err := db.CheckEffect(ctx); err != nil {
+		if r.Unplanned, err = db.CheckEffect(ctx, p.UnplannedNames()); err != nil {
+			return nil, err
+		}
+		if err := checkDeletesAfter(p, opts.MaxDelete, r.Unplanned); err != nil {
 			return nil, err
 		}
 	}
@@ -328,18 +335,81 @@ func pending(p *plan.Plan, settingsFile string) error {
 // any action, a foreign key whose triggers are disabled, since PostgreSQL
 // would neither run its action nor check it.
 func checkDeletes(p *plan.Plan, limit int) error {
-	var errs, direct []string
-	var deletes, cascaded, changed int
-	cascadedBy := make(map[declaration.TableName]int)
-	changedBy := make(map[declaration.TableName]int)
+	c, errs := countDeletes(p)
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "\n"))
+	}
+	if c.total() <= limit {
+		return nil
+	}
+	verb := "delete"
+	if c.changed > 0 {
+		verb = "delete or change"
+	}
+	return fmt.Errorf("the apply would %s %s, more than the limit of %d: %s: "+
+		"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete %d",
+		verb, rows(c.total()), limit, listGroups(c.groups()), c.total())
+}
+
+// checkDeletesAfter checks the limit on the rows that an apply deletes again
+// after its deletions, before its commit, with the rows that they deleted
+// beyond the plan in the tables of allow_unplanned_changes, which the plan
+// cannot count (ADR-0049). The rows that the plan counts passed the limit
+// before the first write already. Updates beyond the plan do not count: the
+// database counts updates, which can change one row more than once, and
+// not the rows that they change.
+func checkDeletesAfter(p *plan.Plan, limit int, unplanned []Unplanned) error {
+	var beyond int
+	by := make(map[declaration.TableName]int)
+	for _, u := range unplanned {
+		if u.Deleted > 0 {
+			beyond += u.Deleted
+			by[u.Table] += u.Deleted
+		}
+	}
+	c, _ := countDeletes(p)
+	total := c.total() + beyond
+	if beyond == 0 || total <= limit {
+		return nil
+	}
+	verb := "deleted"
+	if c.changed > 0 {
+		verb = "deleted or changed"
+	}
+	groups := append(c.groups(), rows(beyond)+" that they deleted beyond the plan in tables that "+config.UnplannedKey+" names ("+byTable(by)+")")
+	return fmt.Errorf("the deletions of the apply %s %s, more than the limit of %d: %s, so the apply stops before its commit: "+
+		"check the triggers and the rules that delete rows of these tables, and if the deletions are right, raise the limit with --max-delete %d",
+		verb, rows(total), limit, listGroups(groups), total)
+}
+
+// deleteCounts are the rows that the deletions of a plan delete and change,
+// as the limit on deletions counts them (ADR-0039).
+type deleteCounts struct {
+	// direct holds the rows to delete of each table, as in "1 row of
+	// m.plan", and deletes their number.
+	direct  []string
+	deletes int
+	// cascaded and changed count the rows that ON DELETE CASCADE deletes and
+	// that SET NULL and SET DEFAULT change, and cascadedBy and changedBy
+	// count them by table.
+	cascaded, changed     int
+	cascadedBy, changedBy map[declaration.TableName]int
+}
+
+// countDeletes counts the rows that the deletions of p delete and change,
+// and returns the error of each step whose effect is not known, which the
+// limit cannot count.
+func countDeletes(p *plan.Plan) (deleteCounts, []string) {
+	c := deleteCounts{cascadedBy: make(map[declaration.TableName]int), changedBy: make(map[declaration.TableName]int)}
+	var errs []string
 	for i := range p.Tables {
 		t := &p.Tables[i]
 		n := len(t.Diff.Deletes)
 		if n == 0 {
 			continue
 		}
-		deletes += n
-		direct = append(direct, rows(n)+" of "+t.Name.String())
+		c.deletes += n
+		c.direct = append(c.direct, rows(n)+" of "+t.Name.String())
 		for j := range t.Effect.Steps {
 			step := &t.Effect.Steps[j]
 			if !step.Deletes() && !step.Changes() && step.Unknown != plan.TriggersDisabled {
@@ -350,40 +420,41 @@ func checkDeletes(p *plan.Plan, limit int) error {
 				continue
 			}
 			if step.Deletes() {
-				cascadedBy[step.Table] += step.Rows
-				cascaded += step.Rows
+				c.cascadedBy[step.Table] += step.Rows
+				c.cascaded += step.Rows
 			} else {
-				changedBy[step.Table] += step.Rows
-				changed += step.Rows
+				c.changedBy[step.Table] += step.Rows
+				c.changed += step.Rows
 			}
 		}
 	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "\n"))
-	}
-	total := deletes + cascaded + changed
-	if total <= limit {
-		return nil
-	}
+	return c, errs
+}
 
-	groups := []string{joinAnd(direct) + " to delete"}
-	if cascaded > 0 {
-		groups = append(groups, rows(cascaded)+" that ON DELETE CASCADE deletes with them ("+byTable(cascadedBy)+")")
+// total is the number of rows that the limit counts.
+func (c deleteCounts) total() int {
+	return c.deletes + c.cascaded + c.changed
+}
+
+// groups says what makes up the number, each kind once with its tables.
+func (c deleteCounts) groups() []string {
+	groups := []string{joinAnd(c.direct) + " to delete"}
+	if c.cascaded > 0 {
+		groups = append(groups, rows(c.cascaded)+" that ON DELETE CASCADE deletes with them ("+byTable(c.cascadedBy)+")")
 	}
-	if changed > 0 {
-		groups = append(groups, rows(changed)+" that ON DELETE SET NULL or SET DEFAULT changes ("+byTable(changedBy)+")")
+	if c.changed > 0 {
+		groups = append(groups, rows(c.changed)+" that ON DELETE SET NULL or SET DEFAULT changes ("+byTable(c.changedBy)+")")
 	}
-	what := groups[0]
-	if len(groups) > 1 {
-		what = strings.Join(groups[:len(groups)-1], ", ") + ", and " + groups[len(groups)-1]
+	return groups
+}
+
+// listGroups joins the groups of the error of the limit, which can hold
+// lists of their own, with commas and a last "and".
+func listGroups(groups []string) string {
+	if len(groups) == 1 {
+		return groups[0]
 	}
-	verb := "delete"
-	if changed > 0 {
-		verb = "delete or change"
-	}
-	return fmt.Errorf("the apply would %s %s, more than the limit of %d: %s: "+
-		"check the rows to delete with kortopi plan, and if they are right, raise the limit with --max-delete %d",
-		verb, rows(total), limit, what, total)
+	return strings.Join(groups[:len(groups)-1], ", ") + ", and " + groups[len(groups)-1]
 }
 
 // byTable returns the counts of rows of each table, sorted by the names of

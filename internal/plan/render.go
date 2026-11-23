@@ -108,8 +108,8 @@ func (d *TableDiff) changes() bool {
 // hold such rows get no block: the lines of UndeclaredGroup name at most five
 // of them after the blocks, and count the others. Other tables without
 // changes get no line, and the summary at the end counts them, with the lines
-// of EffectSummary and UndeclaredSummary. An empty plan prints the lines of
-// EmptyLines.
+// of EffectSummary, UnplannedLines, and UndeclaredSummary. An empty plan
+// prints the lines of EmptyLines.
 //
 // A value prints as the database prints it, and NULL as NULL. A value that
 // could be misread prints in double quotes with the escapes of Go: an empty
@@ -155,6 +155,9 @@ func Render(w io.Writer, p *Plan) error {
 	fmt.Fprintf(&b, "Plan: %d to insert, %d to update, %d to delete in %s.\n",
 		inserts, updates, deletes, count(len(p.Tables), "table", "tables"))
 	for _, line := range p.EffectSummary() {
+		b.WriteString(line + "\n")
+	}
+	for _, line := range p.UnplannedLines() {
 		b.WriteString(line + "\n")
 	}
 	if line := p.UndeclaredSummary(); line != "" {

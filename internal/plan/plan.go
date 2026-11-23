@@ -61,6 +61,32 @@ type Database interface {
 	// table, for a table with rows to insert or to update. An implementation
 	// reads the sequences, and moves none of them.
 	Sequences(ctx context.Context, table declaration.TableName, columns []string) ([]Sequence, error)
+
+	// Unplanned reports what the database knows about each table that the
+	// settings name in allow_unplanned_changes, in the order of names
+	// (ADR-0049): whether it has a table of the name, and, for a partition,
+	// the partitioned table at the top of its tree, with which an apply
+	// checks the counts of the partition. Build calls it once, after Effects,
+	// for a plan with rows to delete. An implementation reads the catalogs,
+	// and no row of a table.
+	Unplanned(ctx context.Context, names []declaration.TableName) ([]UnplannedTable, error)
+}
+
+// UnplannedTable is a table that the settings name in
+// allow_unplanned_changes, as the database knows it (ADR-0049).
+type UnplannedTable struct {
+	Name declaration.TableName
+	// Missing is true when the database has no table of the name: none at
+	// all, or a relation of another kind, such as a view.
+	Missing bool
+	// Top names, for a partition, the partitioned table at the top of its
+	// tree. It is the zero name for a table that is no partition.
+	Top declaration.TableName
+}
+
+// Partition reports whether the table is a partition.
+func (u UnplannedTable) Partition() bool {
+	return u.Top != declaration.TableName{}
 }
 
 // RefusedValue is a value of on_insert that the database does not read by
@@ -299,4 +325,10 @@ type Table struct {
 type Plan struct {
 	// Tables are sorted by schema and then by name.
 	Tables []Table
+	// Unplanned holds the tables that the settings name in
+	// allow_unplanned_changes, as the database knows them, sorted by schema
+	// and then by name, for a plan with rows to delete (ADR-0049). It is
+	// empty for a plan without them: only the check after the deletions of an
+	// apply lets such tables change beyond the plan.
+	Unplanned []UnplannedTable
 }

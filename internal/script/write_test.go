@@ -273,6 +273,32 @@ func TestWrite(t *testing.T) {
 			header: Header{Dir: "data", Database: "shop"},
 		},
 		{
+			// The lines of the tables of allow_unplanned_changes stand in the
+			// header, with the note that the script neither checks nor reports
+			// what they say (ADR-0049).
+			name: "unplanned",
+			plan: &plan.Plan{
+				Tables: []plan.Table{table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("1")})},
+				Unplanned: []plan.UnplannedTable{
+					{Name: tn("geo", "archive"), Missing: true},
+					{Name: tn("geo", "labels")},
+					{Name: tn("geo", "totals")},
+				},
+			},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			// A setting that covers no table of the database gets no note.
+			name: "unplanned_without_tables",
+			plan: &plan.Plan{
+				Tables:    []plan.Table{table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("1")})},
+				Unplanned: []plan.UnplannedTable{{Name: tn("geo", "archive"), Missing: true}},
+			},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
 			name: "pending",
 			plan: &plan.Plan{Tables: []plan.Table{
 				{Name: tn("billing", "discounts"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 2},

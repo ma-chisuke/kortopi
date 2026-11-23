@@ -76,6 +76,131 @@ func TestBuildEffects(t *testing.T) {
 	}
 }
 
+// Build asks the database about the tables of allow_unplanned_changes once,
+// in the order of the settings, for a plan with rows to delete, and keeps
+// what it learns in the plan (ADR-0049). A plan without rows to delete asks
+// nothing: no check that the setting lifts runs then.
+func TestBuildUnplanned(t *testing.T) {
+	t.Parallel()
+
+	labels, totals, archive := name("shop", "labels"), name("shop", "totals"), name("shop", "archive")
+	log, log1 := name("audit", "log"), name("audit", "log_1")
+	db := &fakeDB{
+		infos: map[declaration.TableName]TableInfo{tableT: existing([]string{"id"}, "id")},
+		diffs: map[declaration.TableName]TableDiff{tableT: {Deletes: []Row{{Key: []Value{{Text: "9"}}}}}},
+		unplanned: map[declaration.TableName]UnplannedTable{
+			archive: {Name: archive, Missing: true},
+			log1:    {Name: log1, Top: log},
+		},
+	}
+	decl := &declaration.Declaration{Tables: []declaration.Table{csvTable(tableT, "id")}}
+	settings := config.New(map[declaration.TableName]config.Table{tableT: {Mode: config.ModeSync}}, totals, log1, labels, archive)
+	p, err := Build(t.Context(), decl, settings, db, Options{})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	want := []UnplannedTable{{Name: log1, Top: log}, {Name: archive, Missing: true}, {Name: labels}, {Name: totals}}
+	if !reflect.DeepEqual(db.unplannedCalls, [][]declaration.TableName{{log1, archive, labels, totals}}) || !reflect.DeepEqual(p.Unplanned, want) {
+		t.Errorf("Unplanned calls = %v, plan = %+v, want one call and %+v", db.unplannedCalls, p.Unplanned, want)
+	}
+	if got := p.UnplannedNames(); !reflect.DeepEqual(got, []declaration.TableName{labels, totals}) {
+		t.Errorf("UnplannedNames() = %v, want %s and %s", got, labels, totals)
+	}
+
+	// Without rows to delete, or without tables in the setting, Build does not
+	// ask.
+	db.unplannedCalls = nil
+	db.diffs = map[declaration.TableName]TableDiff{tableT: {Inserts: []Row{{Key: []Value{{Text: "1"}}}}}}
+	if p, err := Build(t.Context(), decl, settings, db, Options{}); err != nil || db.unplannedCalls != nil || p.Unplanned != nil {
+		t.Errorf("Build() without deletions: Unplanned calls %v, plan %+v, error %v", db.unplannedCalls, p, err)
+	}
+	db.diffs = map[declaration.TableName]TableDiff{tableT: {Deletes: []Row{{Key: []Value{{Text: "9"}}}}}}
+	none := config.New(map[declaration.TableName]config.Table{tableT: {Mode: config.ModeSync}})
+	if p, err := Build(t.Context(), decl, none, db, Options{}); err != nil || db.unplannedCalls != nil || p.Unplanned != nil {
+		t.Errorf("Build() without the setting: Unplanned calls %v, plan %+v, error %v", db.unplannedCalls, p, err)
+	}
+
+	// An error of the database stops the plan.
+	db.unplannedErr = errors.New("connection reset")
+	if _, err := Build(t.Context(), decl, settings, db, Options{}); !errors.Is(err, db.unplannedErr) {
+		t.Errorf("Build() error = %v, want %v", err, db.unplannedErr)
+	}
+}
+
+// The lines of the tables of allow_unplanned_changes agree with the number
+// of the rows to delete and of the tables, and name the one partitioned
+// table to name instead (ADR-0049).
+func TestUnplannedLines(t *testing.T) {
+	t.Parallel()
+
+	deletion := []Table{{Name: tableT, Diff: TableDiff{Deletes: []Row{{Key: []Value{{Text: "9"}}}}}}}
+	for _, tt := range []struct {
+		name      string
+		unplanned []UnplannedTable
+		want      []string
+	}{
+		{name: "none"},
+		{
+			name:      "one table",
+			unplanned: []UnplannedTable{{Name: name("shop", "totals")}},
+			want:      []string{"The deletion may also delete, update, or insert rows of shop.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows."},
+		},
+		{
+			name:      "one missing table",
+			unplanned: []UnplannedTable{{Name: name("shop", "archive"), Missing: true}},
+			want:      []string{"The database has no table shop.archive, which allow_unplanned_changes in kortopi.toml names."},
+		},
+		{
+			name: "six missing tables",
+			unplanned: []UnplannedTable{
+				{Name: name("a", "t1"), Missing: true}, {Name: name("a", "t2"), Missing: true}, {Name: name("a", "t3"), Missing: true},
+				{Name: name("a", "t4"), Missing: true}, {Name: name("a", "t5"), Missing: true}, {Name: name("a", "t6"), Missing: true},
+			},
+			want: []string{"The database has no tables a.t1, a.t2, a.t3, a.t4, a.t5, and 1 more, which allow_unplanned_changes in kortopi.toml names."},
+		},
+		{
+			name: "six tables",
+			unplanned: []UnplannedTable{
+				{Name: name("a", "t1")}, {Name: name("a", "t2")}, {Name: name("a", "t3")}, {Name: name("a", "t4")}, {Name: name("a", "t5")}, {Name: name("a", "t6")},
+			},
+			want: []string{"The deletion may also delete, update, or insert rows of a.t1, a.t2, a.t3, a.t4, a.t5, and 1 more table beyond what the plan shows, " +
+				"which allow_unplanned_changes in kortopi.toml allows."},
+		},
+		{
+			name:      "one partition",
+			unplanned: []UnplannedTable{{Name: name("audit", "log_1"), Top: name("audit", "log")}},
+			want: []string{"A partition is checked with the partitioned table at the top of its tree, " +
+				"so allow_unplanned_changes in kortopi.toml does not cover partition audit.log_1 of audit.log: name audit.log instead."},
+		},
+		{
+			name: "partitions of two tables",
+			unplanned: []UnplannedTable{
+				{Name: name("audit", "log_1"), Top: name("audit", "log")}, {Name: name("audit", "sub_1"), Top: name("audit", "events")},
+			},
+			want: []string{"Partitions are checked with the partitioned tables at the top of their trees, " +
+				"so allow_unplanned_changes in kortopi.toml does not cover partitions audit.log_1 of audit.log and audit.sub_1 of audit.events: name those tables instead."},
+		},
+		{
+			name:      "a partition of a named table",
+			unplanned: []UnplannedTable{{Name: name("audit", "log")}, {Name: name("audit", "log_1"), Top: name("audit", "log")}},
+			want:      []string{"The deletion may also delete, update, or insert rows of audit.log beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows."},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := &Plan{Tables: deletion, Unplanned: tt.unplanned}
+			if got := p.UnplannedLines(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("UnplannedLines() =\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+	var none *Plan
+	if got := none.UnplannedLines(); got != nil {
+		t.Errorf("nil.UnplannedLines() = %q, want nil", got)
+	}
+}
+
 // A declared row that the deletions would delete or change is a mistake of
 // the declaration, reported with the other mistakes that the difference
 // shows, with the file that declares the row.

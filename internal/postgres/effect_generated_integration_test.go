@@ -57,7 +57,7 @@ func TestEffectsThroughAGeneratedColumn(t *testing.T) {
 			before := dump(t, db, "m.plan", "t.sub", "t.usage")
 			_, err := s.Delete(t.Context(), req)
 			if err == nil {
-				err = s.CheckEffect(t.Context())
+				err = s.checkEffect(t.Context())
 			}
 			if want := "after its first deletion, the apply changed 2 rows of table t.usage, which the plan did not count"; err == nil || !strings.HasPrefix(err.Error(), want) {
 				t.Errorf("apply: %v\nwant %s", err, want)

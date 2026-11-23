@@ -167,7 +167,7 @@ func applyAll(ctx context.Context, s *Session, reqs []plan.DiffRequest, allowDel
 			}
 			r.deleted += n
 		}
-		if err := s.CheckEffect(ctx); err != nil {
+		if err := s.checkEffect(ctx); err != nil {
 			return r, err
 		}
 	}

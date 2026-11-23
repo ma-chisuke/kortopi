@@ -112,6 +112,78 @@ func TestRunEffectAgain(t *testing.T) {
 	}
 }
 
+// The check after the deletions gets the tables of allow_unplanned_changes
+// that the plan found as tables of their own, and the apply keeps what the
+// deletions did beyond the plan there. The rows that they deleted beyond the
+// plan count against --max-delete, which the apply checks again before its
+// commit (ADR-0049).
+func TestRunUnplannedChanges(t *testing.T) {
+	t.Parallel()
+
+	labels, totals, archive, log1 := tn("shop.labels"), tn("shop.totals"), tn("shop.archive"), tn("audit.log_1")
+	sync := config.New(map[declaration.TableName]config.Table{parent: {Mode: config.ModeSync}}, totals, labels, archive, log1)
+	diffs := map[declaration.TableName]plan.TableDiff{parent: {Deletes: deletesOf(1)}}
+	planned := map[declaration.TableName]plan.Effect{parent: {Steps: []plan.Step{
+		cascadeStep("b.orders", "orders_parent", 2),
+		{Level: 1, Table: tn("b.reviews"), Columns: []string{"parent_id"}, Constraint: "reviews_parent", References: parent, OnDelete: "SET NULL", Set: []string{"parent_id"}, Rows: 1},
+	}}}
+	decl := &declaration.Declaration{Tables: []declaration.Table{csv("z.parent")}}
+	beyond := []Unplanned{{Table: labels, Deleted: 2}, {Table: totals, Updates: 1}}
+	for _, tt := range []struct {
+		name      string
+		maxDelete int
+		wantErr   string
+	}{
+		{name: "within the limit", maxDelete: 6},
+		{
+			// The plan counts 4 rows, within the limit, and the deletions
+			// delete 2 more.
+			name: "beyond the limit", maxDelete: 5,
+			wantErr: "the deletions of the apply deleted or changed 6 rows, more than the limit of 5: 1 row of z.parent to delete, " +
+				"2 rows that ON DELETE CASCADE deletes with them (2 rows of b.orders), 1 row that ON DELETE SET NULL or SET DEFAULT changes (1 row of b.reviews), " +
+				"and 2 rows that they deleted beyond the plan in tables that allow_unplanned_changes names (2 rows of shop.labels), " +
+				"so the apply stops before its commit: check the triggers and the rules that delete rows of these tables, " +
+				"and if the deletions are right, raise the limit with --max-delete 6",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db := &fakeDB{
+				diffs: diffs, effects: planned, beyond: beyond,
+				missing: map[declaration.TableName]bool{archive: true}, partitionOf: map[declaration.TableName]declaration.TableName{log1: tn("audit.log")},
+			}
+			r, err := Run(t.Context(), decl, sync, db, Options{AllowDelete: true, MaxDelete: tt.maxDelete})
+			if want := []declaration.TableName{labels, totals}; !reflect.DeepEqual(db.checkedUnplanned, want) {
+				t.Errorf("CheckEffect got %v, want %v", db.checkedUnplanned, want)
+			}
+			if tt.wantErr == "" {
+				if err != nil || !reflect.DeepEqual(r.Unplanned, beyond) || !slices.Contains(db.calls, "Commit") {
+					t.Errorf("Run() = %+v, %v, want a commit and %+v", r, err, beyond)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantErr {
+				t.Errorf("Run() error =\n%v\nwant\n%s", err, tt.wantErr)
+			}
+			if i := slices.Index(db.calls, "CheckEffect"); i < 0 || i != len(db.calls)-1 {
+				t.Errorf("calls = %v, want CheckEffect last, and no comparison or commit after it", db.calls)
+			}
+		})
+	}
+
+	// Without deletions beyond the plan, the limit is that of the plan.
+	db := &fakeDB{diffs: diffs, effects: planned, beyond: []Unplanned{{Table: totals, Updates: 40}}}
+	if _, err := Run(t.Context(), decl, sync, db, Options{AllowDelete: true, MaxDelete: 4}); err != nil {
+		t.Errorf("Run() with updates beyond the plan alone: %v", err)
+	}
+	// Without --allow-delete, nothing is checked after the deletions.
+	db = &fakeDB{diffs: diffs, effects: planned, beyond: beyond}
+	if r, err := Run(t.Context(), decl, sync, db, Options{}); err != nil || r.Unplanned != nil || slices.Contains(db.calls, "CheckEffect") {
+		t.Errorf("Run() without --allow-delete = %+v, %v, calls %v", r, err, db.calls)
+	}
+}
+
 // The check after the deletions gets a context that an interrupt cancels,
 // and an interrupt during it rolls back: only the commit runs to its end.
 func TestRunInterruptedDuringTheCheck(t *testing.T) {

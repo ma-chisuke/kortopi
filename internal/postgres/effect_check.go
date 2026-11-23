@@ -1,14 +1,18 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/ma-chisuke/kortopi/internal/apply"
+	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
 )
 
@@ -87,24 +91,59 @@ func (s *Session) writtenRows(ctx context.Context, byTop bool) (map[uint32]writt
 // table that the deletions reach made the deletions delete or change. A plan
 // stops on the rules of the declared tables that its apply would fire
 // (ADR-0038), but not on those of the other tables that a cascade reaches.
-func (s *Session) CheckEffect(ctx context.Context) (err error) {
+//
+// A table of unplanned, which the settings name in allow_unplanned_changes,
+// may lose, gain, and change rows beyond what the plan counted, and its
+// partitions with it (ADR-0049): the third check holds it only to the least
+// that the plan counted, the rows that it deletes and the rows that SET NULL
+// and SET DEFAULT change. CheckEffect returns what the deletions did beyond
+// the plan to each such table, sorted by name. The first two checks hold for
+// it as for any table, and so does the third for a table whose counts cannot
+// tell a row that SET NULL or SET DEFAULT moves to another partition from a
+// row that a trigger deletes and another that it inserts.
+func (s *Session) CheckEffect(ctx context.Context, unplanned []declaration.TableName) (_ []apply.Unplanned, err error) {
 	defer s.explainWait(ctx, &err)
 	if !s.apply {
-		return errNotApply
+		return nil, errNotApply
 	}
 	if s.effect == "" || !s.deletesChecked {
-		return nil
+		return nil, nil
 	}
 	if err := s.runDeferred(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.checkSchema(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.checkReachedRows(ctx); err != nil {
-		return err
+		return nil, err
 	}
-	return s.checkWrittenRows(ctx)
+	named, err := s.unplannedTops(ctx, unplanned)
+	if err != nil {
+		return nil, err
+	}
+	return s.checkWrittenRows(ctx, named)
+}
+
+// unplannedTops returns the tables of unplanned that the snapshot shows as
+// ordinary or partitioned tables that are no partitions, by their OIDs: the
+// OID of the partitioned table at the top of a relation, by which
+// checkWrittenRows adds up the counts, is that of such a table.
+func (s *Session) unplannedTops(ctx context.Context, unplanned []declaration.TableName) (map[uint32]declaration.TableName, error) {
+	tops := make(map[uint32]declaration.TableName, len(unplanned))
+	if len(unplanned) == 0 {
+		return tops, nil
+	}
+	relations, err := s.unplannedRelations(ctx, unplanned)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range relations {
+		if r.oid != 0 && r.top == (declaration.TableName{}) {
+			tops[r.oid] = r.name
+		}
+	}
+	return tops, nil
 }
 
 // deferredWhat says what the statement of runDeferred does, in its errors.
@@ -255,11 +294,13 @@ func (s *Session) checkReachedRows(ctx context.Context) error {
 
 // checkWrittenRows compares the rows that the deletions deleted and changed
 // in each table, by the counters of the transaction, with the rows that the
-// plan deletes and that Effects counted.
-func (s *Session) checkWrittenRows(ctx context.Context) error {
+// plan deletes and that Effects counted, and returns what they did beyond
+// the plan to the tables of tops, by their OIDs, which allow_unplanned_changes
+// names (ADR-0049).
+func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declaration.TableName) ([]apply.Unplanned, error) {
 	now, err := s.writtenRows(ctx, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// expected holds the rows that the deletions delete and change in each
 	// table, by the partitioned table at the top of each relation.
@@ -269,20 +310,20 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			pg_catalog.count(*) FILTER (WHERE x.kind OPERATOR(pg_catalog.=) '`+kindChanged+`')
 		FROM `+s.effect+` AS x GROUP BY 1`)
 	if err != nil {
-		return fmt.Errorf("read the rows that the deletions reached: %w", err)
+		return nil, fmt.Errorf("read the rows that the deletions reached: %w", err)
 	}
 	for rows.Next() {
 		var oid uint32
 		var w written
 		if err := rows.Scan(&oid, &w.deleted, &w.updated); err != nil {
 			rows.Close()
-			return fmt.Errorf("read the rows that the deletions reached: %w", err)
+			return nil, fmt.Errorf("read the rows that the deletions reached: %w", err)
 		}
 		expected[oid] = w
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read the rows that the deletions reached: %w", err)
+		return nil, fmt.Errorf("read the rows that the deletions reached: %w", err)
 	}
 	for _, lt := range s.loaded {
 		if lt.deletes == 0 {
@@ -324,6 +365,7 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			upper[g.top] -= g.pairs
 		}
 	}
+	var beyond []apply.Unplanned
 	for _, oid := range oids {
 		want := expected[oid]
 		most := upper[oid]
@@ -342,7 +384,25 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			gone = moved >= 0 && got.inserted == moved
 		}
 		changes := got.updated + moved
+		// A table of allow_unplanned_changes may lose, gain, and change rows
+		// beyond the plan, but not fewer than the plan counted (ADR-0049). In
+		// a table where a change can move a row to another partition, the
+		// counts cannot tell such a move from a row that a trigger deleted and
+		// another that it inserted, so the table is held to the plan.
+		unplanned, named := tops[oid]
+		lifted := named && !s.effectMoves[oid]
+		short := got.deleted < want.deleted || changes < want.updated
 		switch {
+		case lifted && !short:
+			if u := (apply.Unplanned{
+				Table: unplanned, Deleted: int(got.deleted - want.deleted), Inserted: int(got.inserted), Updates: int(got.updated), MostUpdates: int(most),
+			}); u.Deleted > 0 || u.Inserted > 0 || u.Updates > u.MostUpdates {
+				beyond = append(beyond, u)
+			}
+			continue
+		case lifted:
+			// Rows that the plan counted, and that the deletions did not delete
+			// or change.
 		case !gone:
 			// Rows that a cascade would delete and a trigger or a rule kept,
 			// or rows that the deletions reached beyond the plan.
@@ -358,7 +418,7 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 		if err := s.tx.QueryRow(ctx, `SELECT n.nspname::pg_catalog.text, c.relname::pg_catalog.text
 			FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 			WHERE c.oid = $1`, oid).Scan(&name.Schema, &name.Name); err != nil {
-			return fmt.Errorf("read the name of a table that the deletions changed: %w", err)
+			return nil, fmt.Errorf("read the name of a table that the deletions changed: %w", err)
 		}
 		what := fmt.Sprintf("deleted %d %s of table %s, and the plan counted %d", got.deleted, plural(got.deleted, "row", "rows"), name, want.deleted)
 		allows := strconv.FormatInt(want.updated, 10)
@@ -366,11 +426,12 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 			allows = fmt.Sprintf("from %d to %d", want.updated, most)
 		}
 		switch {
+		case lifted && got.deleted < want.deleted:
 		case !gone && s.effectMoves[oid] && moved >= 0:
 			what = fmt.Sprintf("deleted %d %s of table %s and inserted %d, and the plan counted %d deleted, "+
 				"and one more deleted and one inserted for each row that SET NULL or SET DEFAULT moves to another partition",
 				got.deleted, plural(got.deleted, "row", "rows"), name, got.inserted, want.deleted)
-		case !gone:
+		case !gone && !lifted:
 		case most == 0:
 			what = fmt.Sprintf("changed %d %s of table %s, which the plan did not count", changes, plural(changes, "row", "rows"), name)
 		case s.effectMoves[oid]:
@@ -386,11 +447,28 @@ func (s *Session) checkWrittenRows(ctx context.Context) error {
 		// deferred to the commit did too, of any write of the apply, since
 		// runDeferred ran them first. The trigger or the rule that changed the
 		// table can belong to another table, so the advice names where to
-		// look for it.
-		return fmt.Errorf("after its first deletion, the apply %s: a trigger or a rule of a table that the deletions reach, "+
+		// look for it, and, for rows beyond the plan, names the setting that
+		// lets them be (ADR-0049).
+		settingsFile := filepath.Join(s.dir, config.FileName)
+		var setting string
+		switch {
+		case named && s.effectMoves[oid]:
+			setting = fmt.Sprintf(": %s of %s names table %s, but SET NULL or SET DEFAULT of the deletions can move its rows to another partition, "+
+				"which its counts cannot tell from a row that a trigger deletes and another that it inserts, so the apply holds it to the plan",
+				config.UnplannedKey, settingsFile, name)
+		case named:
+			setting = fmt.Sprintf(": %s of %s names table %s, which lets the deletions do more to it than the plan counted, but not less",
+				config.UnplannedKey, settingsFile, name)
+		case !short && !s.effectMoves[oid]:
+			setting = fmt.Sprintf(", or, if it changes table %s on purpose, name the table in %s of %s", name, config.UnplannedKey, settingsFile)
+		}
+		return nil, fmt.Errorf("after its first deletion, the apply %s: a trigger or a rule of a table that the deletions reach, "+
 			"or a constraint trigger deferred to the commit, which the apply runs before this check, did other than the plan shows, "+
 			"so nothing was written: check the triggers and the rules of the tables that the deletions reach, "+
-			"and the constraint triggers of the tables that the apply writes, for one that changes table %s", what, name)
+			"and the constraint triggers of the tables that the apply writes, for one that changes table %s%s", what, name, setting)
 	}
-	return nil
+	slices.SortFunc(beyond, func(a, b apply.Unplanned) int {
+		return cmp.Or(cmp.Compare(a.Table.Schema, b.Table.Schema), cmp.Compare(a.Table.Name, b.Table.Name))
+	})
+	return beyond, nil
 }

@@ -141,6 +141,24 @@ func TestRenderSummary(t *testing.T) {
 		// apply moved it, as the database read it after the move, or why it
 		// left it, without the advice, which the notes give (ADR-0045).
 		{name: "sequences", result: sequencesResult},
+		// Each table of allow_unplanned_changes that the deletions changed
+		// beyond the plan gets a line, after the line of the foreign keys.
+		// The updates count as updates, and beyond the most that SET NULL and
+		// SET DEFAULT can make alone (ADR-0049).
+		{name: "unplanned", result: &Result{
+			Plan: &plan.Plan{
+				Tables: []plan.Table{plansTable},
+				Unplanned: []plan.UnplannedTable{
+					{Name: tn("billing.invoices")}, {Name: tn("shop.category_labels")}, {Name: tn("shop.quiet")}, {Name: tn("shop.totals")},
+				},
+			},
+			Inserted: 1, Updated: 1, Deleted: 1, Committed: true,
+			Unplanned: []Unplanned{
+				{Table: tn("billing.invoices"), Deleted: 1, Inserted: 2, Updates: 7, MostUpdates: 5},
+				{Table: tn("shop.category_labels"), Deleted: 2},
+				{Table: tn("shop.totals"), Updates: 1},
+			},
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

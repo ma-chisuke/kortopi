@@ -98,6 +98,29 @@ const planOfGoldAndOld = "app.plans (sync, key: id)\n" +
 	"Plan: 1 to insert, 0 to update, 1 to delete in 2 tables.\n" +
 	"1 table without changes is not shown.\n"
 
+var (
+	// labels and totals are tables that the trigger of a deletion changes,
+	// and unplannedPlans names them in allow_unplanned_changes, with
+	// shop.archive, which the database does not have (ADR-0049).
+	labels, totals = declaration.TableName{Schema: "shop", Name: "labels"}, declaration.TableName{Schema: "shop", Name: "totals"}
+	noArchive      = map[declaration.TableName]bool{{Schema: "shop", Name: "archive"}: true}
+	unplannedPlans = map[string]string{
+		"kortopi.toml": "allow_unplanned_changes = [\"shop.totals\", \"shop.labels\", \"shop.archive\"]\n\n[tables.\"app.plans\"]\nmode = \"sync\"\n",
+	}
+)
+
+// planOfGoldAndOldWithUnplanned is the plan of goldAndOld with the settings
+// of unplannedPlans, when the database does not have shop.archive.
+const planOfGoldAndOldWithUnplanned = "app.plans (sync, key: id)\n" +
+	"  + id=2  name=Gold\n" +
+	"  - id=3\n" +
+	"  1 to insert, 0 to update, 1 to delete\n" +
+	"\n" +
+	"Plan: 1 to insert, 0 to update, 1 to delete in 2 tables.\n" +
+	"The deletion may also delete, update, or insert rows of shop.labels and shop.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.\n" +
+	"The database has no table shop.archive, which allow_unplanned_changes in kortopi.toml names.\n" +
+	"1 table without changes is not shown.\n"
+
 // renamedPlan is the difference of a database whose plan 1 has another
 // name, Bronze.
 var renamedPlan = map[declaration.TableName]plan.TableDiff{plans: {
@@ -221,6 +244,49 @@ func TestRunApply(t *testing.T) {
 			wantCode:   exitOK,
 			wantStdout: planOfGoldAndOld + "\nApplied: 1 inserted, 0 updated, 1 deleted.\n",
 			wantCalls:  append(diffs, "PrepareDeletes", "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
+		},
+		{
+			// The plan names the tables of allow_unplanned_changes, and the
+			// apply says what the deletions did beyond the plan there
+			// (ADR-0049).
+			name:     "deletions with unplanned changes",
+			files:    with(twoTables, unplannedPlans),
+			args:     []string{"--allow-delete"},
+			session:  &fakeSession{diffs: goldAndOld, missing: noArchive, beyond: []apply.Unplanned{{Table: labels, Deleted: 2}, {Table: totals, Updates: 1}}},
+			wantCode: exitOK,
+			wantStdout: planOfGoldAndOldWithUnplanned +
+				"\nApplied: 1 inserted, 0 updated, 1 deleted.\n" +
+				"Unplanned changes in shop.labels: 2 rows deleted.\n" +
+				"Unplanned changes in shop.totals: 1 update.\n",
+			wantCalls: append(diffs, "PrepareDeletes", "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
+		},
+		{
+			// The rows that the deletions deleted beyond the plan pass the
+			// limit after the deletions: the apply stops before its commit.
+			name:       "unplanned deletions over the limit",
+			files:      with(twoTables, unplannedPlans),
+			args:       []string{"--allow-delete", "--max-delete", "2"},
+			session:    &fakeSession{diffs: goldAndOld, missing: noArchive, beyond: []apply.Unplanned{{Table: labels, Deleted: 2}, {Table: totals, Updates: 1}}},
+			wantCode:   exitError,
+			wantStdout: planOfGoldAndOldWithUnplanned,
+			wantStderr: "kortopi: the deletions of the apply deleted 3 rows, more than the limit of 2: 1 row of app.plans to delete, " +
+				"and 2 rows that they deleted beyond the plan in tables that allow_unplanned_changes names (2 rows of shop.labels), " +
+				"so the apply stops before its commit: check the triggers and the rules that delete rows of these tables, " +
+				"and if the deletions are right, raise the limit with --max-delete 3\n" + nothingChanged,
+			wantCalls: append(diffs, "PrepareDeletes", "ForeignKeys", "Insert app.plans", "Delete app.plans", "CheckEffect"),
+		},
+		{
+			// Without --allow-delete, the plan says the same, and nothing
+			// checks the counts.
+			name:     "deletions left out with unplanned changes",
+			files:    with(twoTables, unplannedPlans),
+			session:  &fakeSession{diffs: goldAndOld, missing: noArchive, beyond: []apply.Unplanned{{Table: labels, Deleted: 2}}},
+			wantCode: exitOK,
+			wantStdout: planOfGoldAndOldWithUnplanned +
+				"\n" +
+				"Applied: 1 inserted, 0 updated, 0 deleted.\n" +
+				"Not deleted: 1 row of 1 table. Run apply with --allow-delete to delete it.\n",
+			wantCalls: append(diffs, "PrepareLeftOut", "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "CountLeftOut", "Commit"),
 		},
 		{
 			name:       "deletions over the limit",

@@ -1,0 +1,18 @@
+catalog.plans (sync, key: code)
+  + code=team  name=Team
+  ~ code=pro  name: Pro -> "Pro Plan"
+  - code=legacy
+  1 to insert, 1 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of billing.invoices (plan_code) references it through invoices_plan_code_fkey, ON DELETE SET NULL, so the deletion sets plan_code of this row to NULL.
+    2 rows of billing.subscriptions (plan_code) reference it through subscriptions_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes these rows too.
+
+Plan: 1 to insert, 1 to update, 1 to delete in 1 table.
+Through foreign keys, the deletion also deletes 2 rows and changes 1 row.
+The deletion may also delete, update, or insert rows of billing.invoices, shop.category_labels, shop.quiet, and shop.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.
+
+Applied: 1 inserted, 1 updated, 1 deleted.
+Through foreign keys, the deletion also deleted 2 rows and changed 1 row.
+Unplanned changes in billing.invoices: 1 row deleted, 2 rows inserted, and 7 updates, at most 5 of them by foreign keys.
+Unplanned changes in shop.category_labels: 2 rows deleted.
+Unplanned changes in shop.totals: 1 update.

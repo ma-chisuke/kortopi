@@ -41,10 +41,16 @@ type fakeDB struct {
 	// and sequencesErr makes it fail.
 	sequences    map[declaration.TableName][]Sequence
 	sequencesErr error
+	// unplanned holds what Unplanned reports for the tables that it names;
+	// another table exists and is no partition. unplannedErr makes it fail.
+	unplanned    map[declaration.TableName]UnplannedTable
+	unplannedErr error
 
 	describes [][]declaration.TableName
-	requests  []DiffRequest
-	counted   []declaration.TableName
+	// unplannedCalls holds the names of each call of Unplanned.
+	unplannedCalls [][]declaration.TableName
+	requests       []DiffRequest
+	counted        []declaration.TableName
 	// checked holds the values of each call of CheckValues.
 	checked map[declaration.TableName][]config.InsertValue
 	// effected holds the names of each call of Effects.
@@ -59,6 +65,21 @@ func (f *fakeDB) Sequences(_ context.Context, table declaration.TableName, colum
 	}
 	f.sequenced[table] = slices.Clone(columns)
 	return f.sequences[table], f.sequencesErr
+}
+
+func (f *fakeDB) Unplanned(_ context.Context, names []declaration.TableName) ([]UnplannedTable, error) {
+	f.unplannedCalls = append(f.unplannedCalls, slices.Clone(names))
+	if f.unplannedErr != nil {
+		return nil, f.unplannedErr
+	}
+	out := make([]UnplannedTable, len(names))
+	for i, n := range names {
+		out[i] = UnplannedTable{Name: n}
+		if u, ok := f.unplanned[n]; ok {
+			out[i] = u
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeDB) Effects(_ context.Context, names []declaration.TableName) (Effects, error) {

@@ -51,6 +51,9 @@ type fakeSession struct {
 	// shows.
 	sequences map[declaration.TableName][]plan.Sequence
 	moved     map[declaration.TableName][]plan.Sequence
+	// beyond holds what CheckEffect returns for the tables of
+	// allow_unplanned_changes that it gets.
+	beyond []apply.Unplanned
 
 	described []declaration.TableName
 	// calls holds every call after Describe, such as "Diff app.plans".
@@ -191,8 +194,29 @@ func (s *fakeSession) Delete(_ context.Context, req plan.DiffRequest) (apply.Cou
 	return s.write("Delete "+req.Table.Name.String(), len(s.diffs[req.Table.Name].Deletes))
 }
 
-func (s *fakeSession) CheckEffect(context.Context) error {
-	return s.record("CheckEffect")
+// CheckEffect records the call, and returns what beyond holds for the tables
+// of allow_unplanned_changes that it gets.
+func (s *fakeSession) CheckEffect(_ context.Context, unplanned []declaration.TableName) ([]apply.Unplanned, error) {
+	if err := s.record("CheckEffect"); err != nil {
+		return nil, err
+	}
+	var out []apply.Unplanned
+	for _, u := range s.beyond {
+		if slices.Contains(unplanned, u.Table) {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+// Unplanned reports each table that is not missing as a table of its own.
+// It records no call: the tests of plan.Build show when it is called.
+func (s *fakeSession) Unplanned(_ context.Context, names []declaration.TableName) ([]plan.UnplannedTable, error) {
+	out := make([]plan.UnplannedTable, len(names))
+	for i, n := range names {
+		out[i] = plan.UnplannedTable{Name: n, Missing: s.missing[n]}
+	}
+	return out, nil
 }
 
 // DiffAgain returns what left holds for the table, or what a database leaves

@@ -58,6 +58,13 @@ type fakeDB struct {
 	// each sequence as the plan shows.
 	sequences map[declaration.TableName][]plan.Sequence
 	moved     map[declaration.TableName][]plan.Sequence
+	// partitionOf holds the partitioned table at the top of the tree of each
+	// partition that it names, for Unplanned. beyond holds what CheckEffect
+	// returns for the tables of allow_unplanned_changes that it gets, and
+	// checkedUnplanned the tables that it got.
+	partitionOf      map[declaration.TableName]declaration.TableName
+	beyond           []Unplanned
+	checkedUnplanned []declaration.TableName
 	// fail makes a call return an error, by call.
 	fail map[string]error
 	// cancel is called after the call that it names.
@@ -232,10 +239,33 @@ func (f *fakeDB) Delete(_ context.Context, req plan.DiffRequest) (Count, error) 
 	return f.write("Delete", req, len(f.diffs[req.Table.Name].Deletes))
 }
 
-// CheckEffect records the call, with the error of its context.
-func (f *fakeDB) CheckEffect(ctx context.Context) error {
+// CheckEffect records the call, with the error of its context and the tables
+// of allow_unplanned_changes that it got, and returns what beyond holds for
+// those tables.
+func (f *fakeDB) CheckEffect(ctx context.Context, unplanned []declaration.TableName) ([]Unplanned, error) {
 	f.checkErr = ctx.Err()
-	return f.record("CheckEffect")
+	f.checkedUnplanned = slices.Clone(unplanned)
+	if err := f.record("CheckEffect"); err != nil {
+		return nil, err
+	}
+	var out []Unplanned
+	for _, u := range f.beyond {
+		if slices.Contains(unplanned, u.Table) {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+// Unplanned reports each table that is not missing as a table of its own,
+// and the tables of partitionOf as partitions of theirs. It records no call:
+// the tests of plan.Build show when it is called.
+func (f *fakeDB) Unplanned(_ context.Context, names []declaration.TableName) ([]plan.UnplannedTable, error) {
+	out := make([]plan.UnplannedTable, len(names))
+	for i, n := range names {
+		out[i] = plan.UnplannedTable{Name: n, Missing: f.missing[n], Top: f.partitionOf[n]}
+	}
+	return out, nil
 }
 
 // DiffAgain records the call, with the error of its context, and returns
