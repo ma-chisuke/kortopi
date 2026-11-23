@@ -30,7 +30,9 @@ flags:
   --max-delete <n>  with --allow-delete: change nothing when the deletions
                     would delete or change more than n rows, counting the
                     rows that foreign keys delete or change with them, at
-                    every depth (default: 100)
+                    every depth, and the deletions beyond the plan that
+                    the database counts in the tables of
+                    allow_unplanned_changes (default: 100)
   --lock-timeout <duration>
                     stop when a statement waits longer than this for a lock
                     that another session holds, such as 10s, 500ms, or

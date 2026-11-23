@@ -2,7 +2,7 @@
 -- It is the difference at the moment of the plan: 0 to insert, 0 to update, 1 to delete in 1 table.
 -- The deletion may also delete, update, or insert rows of geo.labels and geo.totals beyond what the plan shows, which allow_unplanned_changes in kortopi.toml allows.
 -- The database has no table geo.archive, which allow_unplanned_changes in kortopi.toml names.
--- The script does not check or report what the deletions change beyond the plan; an apply counts it against --max-delete and reports it.
+-- The script does not check or report what the deletions change beyond the plan; an apply reports it, and counts its deletions against --max-delete.
 -- Run the statements in one transaction.
 
 -- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.

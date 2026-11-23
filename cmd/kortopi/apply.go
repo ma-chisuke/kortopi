@@ -20,7 +20,9 @@ var applyOnlyFlags = "  --allow-delete    delete the rows that the declaration l
 	"  --max-delete <n>  with --allow-delete: change nothing when the deletions\n" +
 	"                    would delete or change more than n rows, counting the\n" +
 	"                    rows that foreign keys delete or change with them, at\n" +
-	"                    every depth (default: " + strconv.Itoa(apply.DefaultMaxDelete) + ")\n"
+	"                    every depth, and the deletions beyond the plan that\n" +
+	"                    the database counts in the tables of\n" +
+	"                    allow_unplanned_changes (default: " + strconv.Itoa(apply.DefaultMaxDelete) + ")\n"
 
 // applyFlags lists the flags of apply, for its help.
 var applyFlags = sourceFlags("apply") + applyOnlyFlags + lockTimeoutFlag + connectionFlags

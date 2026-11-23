@@ -680,7 +680,7 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 - 冒頭のコメントは、スクリプトの出どころを示す。データのディレクトリと、名前だけのデータベースである。ホスト・ユーザー・パスワードは決して示さない。スクリプトは計画した時点の差分であり、その件数は計画の件数である。削除が外部キーを通じてほかにすることをまとめた行、`allow_unplanned_changes` の行（[削除がほかの行にすること](#削除がほかの行にすること)）、宣言にない保存された行をまとめた行も添える。設定がテーブルを含むときは、さらに次の1行が続く。
 
   ```text
-  The script does not check or report what the deletions change beyond the plan; an apply counts it against --max-delete and reports it.
+  The script does not check or report what the deletions change beyond the plan; an apply reports it, and counts its deletions against --max-delete.
   ```
 
   冒頭のコメントのあとには、スキーマの変更を待つテーブルと列を、1行ずつコメントで示す。そのあとに、宣言にない保存された行を持つテーブルのグループをコメントで示す。挙げるテーブルは多くとも5つで、残りは1行で数える（[宣言にない保存された行](#宣言にない保存された行)）。
@@ -858,4 +858,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:c110c8c0bec73bc53744f26acacc0341a24a2d03e06d6bc7d144dec1b1deff8c -->
+<!-- i18n-source: plan.md sha256:10215e1fac8480f4fae2ef292bdd1fd03f9b69fa1c10eded9bf2a0f3e3e3acf5 -->

@@ -238,7 +238,7 @@ const onInsertNote = "The database reads the values of on_insert when the script
 // the header of a script (ADR-0051). The script runs in a transaction that
 // kortopi does not hold, so nothing checks what its deletions change.
 const unplannedNote = "The script does not check or report what the deletions change beyond the plan; " +
-	"an apply counts it against --max-delete and reports it."
+	"an apply reports it, and counts its deletions against --max-delete."
 
 // writeHeader writes the header comment: where the plan comes from, its
 // counts, the lines of the tables of allow_unplanned_changes (ADR-0051), the

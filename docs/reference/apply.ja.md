@@ -30,7 +30,9 @@ flags:
   --max-delete <n>  with --allow-delete: change nothing when the deletions
                     would delete or change more than n rows, counting the
                     rows that foreign keys delete or change with them, at
-                    every depth (default: 100)
+                    every depth, and the deletions beyond the plan that
+                    the database counts in the tables of
+                    allow_unplanned_changes (default: 100)
   --lock-timeout <duration>
                     stop when a statement waits longer than this for a lock
                     that another session holds, such as 10s, 500ms, or
@@ -1040,4 +1042,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:d827607db6c4e6a73f5cc3c1ab8ad04c81e627c6c1d72f39ef3c5d12445162ec -->
+<!-- i18n-source: apply.md sha256:c631e0c8013c59381d4fc839ac258d64320c7ada1c1f9625ae851676770ed5eb -->

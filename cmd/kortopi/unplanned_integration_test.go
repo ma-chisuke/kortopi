@@ -101,7 +101,7 @@ func TestApplyUnplannedChangesCommand(t *testing.T) {
 				"-- The deletion may also delete, update, or insert rows of shop.category_labels and shop.totals beyond what the plan shows, " +
 				"which allow_unplanned_changes in kortopi.toml allows.\n" +
 				"-- The database has no table shop.archive, which allow_unplanned_changes in kortopi.toml names.\n" +
-				"-- The script does not check or report what the deletions change beyond the plan; an apply counts it against --max-delete and reports it.\n" +
+				"-- The script does not check or report what the deletions change beyond the plan; an apply reports it, and counts its deletions against --max-delete.\n" +
 				"-- Run the statements in one transaction.\n"; !strings.Contains(stdout, want) {
 				t.Errorf("plan as SQL:\n%s\nwant it to hold\n%s", stdout, want)
 			}
