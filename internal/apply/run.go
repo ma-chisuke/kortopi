@@ -326,9 +326,12 @@ func pending(p *plan.Plan, settingsFile string) error {
 // not read, under CASCADE, SET NULL, or SET DEFAULT, at any depth, a change
 // that an action ON UPDATE of another foreign key would follow, and, under
 // any action, a foreign key whose triggers are disabled, since PostgreSQL
-// would neither run its action nor check it.
+// would neither run its action nor check it. The error says each such step
+// once: a foreign key that the walk meets again at deeper levels, through a
+// cycle of foreign keys, gives the same line (ADR-0050).
 func checkDeletes(p *plan.Plan, limit int) error {
 	var errs, direct []string
+	seen := make(map[string]bool)
 	var deletes, cascaded, changed int
 	cascadedBy := make(map[declaration.TableName]int)
 	changedBy := make(map[declaration.TableName]int)
@@ -346,7 +349,10 @@ func checkDeletes(p *plan.Plan, limit int) error {
 				continue
 			}
 			if step.Unknown != plan.Known {
-				errs = append(errs, unknownEffect(t.Name, step))
+				if e := unknownEffect(t.Name, step); !seen[e] {
+					seen[e] = true
+					errs = append(errs, e)
+				}
 				continue
 			}
 			if step.Deletes() {

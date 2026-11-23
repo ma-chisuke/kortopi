@@ -417,6 +417,7 @@ kortopi: nothing was changed
 ```
 
 上限は、計画が示すとおりに、カスケードのすべての段と、`SET NULL` と `SET DEFAULT` が変える行を数える。注文の明細が 50,000 行あり、その明細に 2,000 件のメモが付いたプランを削除するなら、それらの行をすべて数えるので、既定の上限で止まる。
+1つの外部キーの段をまとめた計画の行も、そのすべての段の行を数える。自分自身を参照するテーブルの 300 行の連なりに沿ってカスケードする行を削除するなら、301 行と数える。計画は、それを2行と削除する行で示す（[kortopi plan](plan.ja.md#削除がほかの行にすること)）。
 
 計画は標準出力に、エラーは標準エラー出力に出るので、端末ではこの順に行が並ぶ。
 契約がもうプランを参照していなければ、apply はプランを削除する。
@@ -607,7 +608,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - 照合キーの値の変更は、削除と挿入になる（ADR-0012）。行は新しい ID を得て、外部キーなしで古い ID を持つ行は何も指さないまま残り、モード `upsert` では古い行が新しい行と並んで残る（[kortopi export](export.ja.md#生成される-id-の代わりの自然キー)）。そして、挿入は削除より先に動く。古い行が持つ別の一意キーの値を新しい行も持つと、挿入はそのキーで失敗する。古い行を前の apply で削除する。古い行を宣言から外して `--allow-delete` 付きで適用し、それから新しい行を宣言すればよい。または、行をその別のキーで照合する。
 - ほかのテーブルが参照する宣言した列を更新すると、それらの外部キーの `ON UPDATE` の動作が働く。計画が外部キーのすることを示すのは、削除についてだけである。削除の `SET NULL` や `SET DEFAULT` が働かせる `ON UPDATE` の動作もたどらず、`--allow-delete` 付きの apply はそこで止まる。
 - 削除がテーブルにすることを数えるには、ロールに、外部キーの列だけでなくテーブル全体に対する `SELECT` が要る。
-- 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。
+- 計画と apply は、アプリケーションが使うデータベースで、削除が着くすべてのテーブルを、すべてのカスケードの最後まで読む。参照する側の列にインデックスのない外部キーでは、たどる段ごとに、参照しているテーブル全体を読む。PostgreSQL 自身の削除も、そうしたテーブルを消える行ごとに1回読む。行を失うテーブルの外部キーには、参照する側の列にインデックスを作る。たどる処理は段ごとに問い合わせを流すので、自分自身を参照するテーブルの行の連なりでは、連なりの行ごとに1段の費用がかかる。計画がそれらの段を1行にまとめるときも同じである。
 - 計画は、apply と同じく、一時テーブルと宣言したテーブルのロックを終わるまで持つ。テーブルの数がとても多い宣言では、サーバーの `max_locks_per_transaction` を上げる必要がありうる。
 - トリガーと、削除が着くテーブルのルールは、計画から見えないところで動く。削除の間にトリガーやルールが挿入する行は数えない。ただし、削除の変更が行を別のパーティションに移しうるテーブルは除く。そこでは各挿入が移る行に対応しなければならないので、そうした挿入は apply を止める。apply は、どのテーブルの更新も、削除の動作が更新しうる回数と比べる。計画が変わると示す行ごとに少なくとも1回、そして、動作が着きうる行とキーの組ごとに多くとも1回である。カスケードも消す行の組も含む。PostgreSQL がそれを先に更新しうるからである。動作がパーティションキーの列を設定するとき、`SET NULL` か `SET DEFAULT` が別のパーティションに移す行も、そうした1回の更新として数える。PostgreSQL はそれを削除して挿入するので、余分な削除はそれぞれ挿入を伴わなければならない。トリガーかルールがそれを超えて更新すれば、apply は止まる。PostgreSQL は、同じ文が消す削除する行や、apply の前の文が消した削除する行を決して更新しないので、そうした行は幅を残さない。トリガーやルールがする範囲の中の更新は見えない。幅があるのは、動作が変える行をカスケードか後の文の計画も消し、動作が先に働くかどうかを PostgreSQL の順が決めるときと、2つのキーが共通の列を設定するときだけである。更新の書く値も見えない。削除が着かないテーブルをトリガーが `TRUNCATE` で空にしても見えない。PostgreSQL は、その行を削除した行として数えないからである。コミットまで遅らせた制約トリガーは検査の前に動き、それが消すか変える行もほかの行と一緒に数える。宣言したテーブルについては、件数では見えないものをコミット前の比較が見る。更新の書く値と、モード `sync` のテーブルでは、削除する行の数として見る、トリガーが挿入する行である。
 - コミット前の比較が比べるのは、その実行の宣言が持つものだけである。宣言が挙げない列、`on_insert` の値、宣言しないテーブル、`--schema` を付けた実行のスキーマの外の宣言したテーブルは比べない。モード `insert` のテーブルのキー以外の値と、宣言が持たない保存された行も比べない。ただし、モード `sync` のテーブルの削除する行は数え、`--allow-delete` がなければトランザクションの数でも確かめる。削除のない apply では、コミットまで遅らせた制約トリガーは比較のあとに働くので、それが変えるものも比べない。削除をする apply は、削除のあとの検査の前にそうしたトリガーを動かすので、比較はそれがしたことを見る。
@@ -668,6 +669,7 @@ kortopi: nothing was changed
 ```
 
 1段目より深いときは、カスケードが行を消し、外部キーが参照するテーブルも、エラーが挙げる。`from rows of b.orders that ON DELETE CASCADE deletes, and the role may not read b.lines as a whole` のようになる。
+外部キーの循環を通じて、たどる処理が1段目より深い複数の段で同じ外部キーに出会っても、この行は1回だけ出る。
 理由ごとに取るべき手順は、[削除の安全策](#削除の安全策)の表のとおりである。
 
 ### 削除とぶつかる宣言した行
@@ -975,6 +977,6 @@ kortopi: nothing was changed
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md) にある。
+この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:c702c7049a3fb7448940d9f7d303841cf6349ca3118030d0d2fdb8ddea4ec871 -->
+<!-- i18n-source: apply.md sha256:9c040228146f87a3c041c96214eb2f8b17eb6674a25382e86f742802798aa8e3 -->

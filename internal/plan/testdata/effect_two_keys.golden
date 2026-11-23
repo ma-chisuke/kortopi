@@ -1,0 +1,11 @@
+m.root (sync, key: code)
+  - code=old
+  0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of m.cat (root) references it through cat_root_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      2 rows of m.cat (copy_of) reference rows of m.cat that the deletion deletes, through cat_copy_of_fkey, ON DELETE CASCADE, at 2 levels, so the deletion deletes these rows too.
+        2 rows of m.cat (parent) reference rows of m.cat that the deletion deletes, through cat_parent_fkey, ON DELETE CASCADE, at 2 levels, so the deletion deletes these rows too.
+      1 row of m.cat (parent) references that row of m.cat through cat_parent_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+Through foreign keys, the deletion also deletes 6 rows.

@@ -55,3 +55,4 @@ Each record states one decision and the reason for it. A later record replaces a
 | [ADR-0047](ADR-0047-stop-a-run-that-read-a-table-that-another-session-changed-after-its-snapshot.md) | Stop a run that read a table that another session rewrote, replaced, or repartitioned after its snapshot | accepted | 2026-11-22 |
 | [ADR-0048](ADR-0048-compare-the-schema-that-decides-what-the-deletions-do-after-the-deletions-of-an-apply.md) | Compare the schema that decides what the deletions do, as the snapshot saw it and as it is, after the deletions of an apply | accepted | 2026-11-22 |
 | [ADR-0049](ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.md) | Leave foreign keys NOT ENFORCED out of the order of an apply | accepted | 2026-11-23 |
+| [ADR-0050](ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.md) | Sum up the levels that repeat a foreign key in one line of the plan | accepted | 2026-11-23 |

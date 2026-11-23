@@ -1,0 +1,10 @@
+m.root (sync, key: code)
+  - code=old
+  0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of m.a (root) references it through a_root_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      3 rows of m.b (a_id) reference rows of m.a that the deletion deletes, through b_a_id_fkey, ON DELETE CASCADE, at 3 levels, so the deletion deletes these rows too.
+        2 rows of m.a (b_id) reference rows of m.b that the deletion deletes, through a_b_id_fkey, ON DELETE CASCADE, at 2 levels, so the deletion deletes these rows too.
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+Through foreign keys, the deletion also deletes 6 rows.

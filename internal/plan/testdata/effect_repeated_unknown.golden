@@ -1,0 +1,12 @@
+app.plans (sync, key: code)
+  - code=legacy
+  0 to insert, 0 to update, 1 to delete
+  Through foreign keys, the deletion of this row also reaches other rows:
+    1 row of app.steps (plan_code) references it through steps_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+      2 rows of app.steps (after_id) reference rows of app.steps that the deletion deletes, through steps_after_id_fkey, ON DELETE CASCADE, at 2 levels, so the deletion deletes these rows too.
+        Rows of app.secret (step_id) may reference rows of app.steps that the deletion deletes, through secret_step_fkey, ON DELETE CASCADE, but the role may not read the table, so what the deletion does to them is not known.
+        3 rows of app.tags (step_id) reference rows of app.steps that the deletion deletes, through tags_step_fkey, ON DELETE SET NULL, at 2 levels, so the deletion sets step_id of these rows to NULL, and foreign key labels_tag_fkey of app.labels references a column that it sets, or a generated column that reads one, so what its ON UPDATE action does is not known.
+
+Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
+Through foreign keys, the deletion also deletes 3 rows and changes 3 rows.
+What the deletion does through 2 foreign keys is not known.

@@ -561,7 +561,21 @@ Through foreign keys, the deletions also delete 52001 rows.
 | `SET DEFAULT` | the deletion sets the columns of these rows to their defaults |
 | `NO ACTION`、`RESTRICT` | the deletion fails while these rows reference them |
 
-- カスケードが消す行も、続けてたどる。これはすべての段で続き、自分自身を参照するテーブルや循環もたどる。n+1 段目の行は、それが参照するテーブルの行を消す最初の n 段目の行の下に、2文字深く字下げして置く。そして、それらの行のどれかを参照する行を数える。n 段目の別の行が消した行を参照する行も含む。
+- カスケードが消す行も、続けてたどる。これはすべての段で続き、自分自身を参照するテーブルや循環もたどる。たどる処理の各ステップは、1つの段の1つの外部キーである。ステップは、前の段が消した行のうち、そのキーが参照するテーブルかそのパーティションにある行を参照する行を数える。どのステップがその行を消したかは問わない。
+- ステップは、そうした行を消した前の段の最初のステップより、2文字深く字下げして置く。それを決めるのはたどる処理であり、キーがパーティションにあるときや、パーティションを参照するときのように、そのステップと別のテーブルを名指すときも同じである。`that row of` と `those rows of` は、キーが参照するテーブルを、そうした行の数に応じて挙げる。
+- 自分自身を参照するテーブルや外部キーの循環を通じて、たどる処理が同じ外部キーを深い段でもう一度たどっても、その段には行を足さない。そのキーで数える行は、キーが最初に現れた上の行にまとめて数え、その行は段の数も示す。それらの段で消える行を参照する行は、その行の下で、キーごとに1行で数える。そうした行とその下の行は、削除が消すテーブルの行を参照すると示す。参照先の行を消す段が1つではないからである。同じテーブルの別の行のあとに続く 300 行の連なりは、次の2行になる。
+
+  ```text
+  app.plans (sync, key: code)
+    - code=legacy
+    0 to insert, 0 to update, 1 to delete
+    Through foreign keys, the deletion of this row also reaches other rows:
+      1 row of app.steps (plan_code) references it through steps_plan_code_fkey, ON DELETE CASCADE, so the deletion deletes this row too.
+        299 rows of app.steps (after_id) reference rows of app.steps that the deletion deletes, through steps_after_id_fkey, ON DELETE CASCADE, at 299 levels, so the deletion deletes these rows too.
+  ```
+
+- 削除が複数の外部キーを通じてたどり着くテーブルには、キーごとに行を置く。2つの行の下に現れるキーには、それぞれの下に行を置く。
+- 行は5つ目の位置より深くは置かず、それより深い行は5つ目に置く。それ以外では、行の位置はその行が始まる段である。ただし、段をまとめた行の下では、位置は段より浅くなる。行は、位置が始まる段を示さないときは、必ずその段を示す。1つのステップの行なら `at level 6`、複数のステップの行なら `at 3 levels from level 8` と示す。
 - `SET NULL` と `SET DEFAULT` の行は、設定する列を挙げる。PostgreSQL 15 以降の列の一覧が挙げる列も同じである。変わる行から先はたどらない。
 - どの外部キーもたどる。宣言したかどうかにかかわらずどのテーブルからでも、どのスキーマからでも、そのテーブル自身からでもたどる。テーブルの1つのパーティションを指すキーも、テーブルの上にあるパーティションテーブルを指すキーも同じである。件数は、照合キーではなく、外部キーの列で、そのキー自身の演算子と照合順序を使って結び付ける。参照しているテーブルが宣言したテーブル自身・そのパーティション・その上にあるパーティションテーブルのどれかなら、その行のうち宣言したテーブルに属する行を、宣言したテーブルの行とみなす。そのため、外部キーをパーティションテーブルに定義してそのパーティションを宣言したときも、その逆のときも、宣言した行を宣言した行として数える。
 - PostgreSQL 18 が許す `NOT ENFORCED` の外部キーは、削除のときに何もしない。PostgreSQL はその動作も検査も働かせないので、まとまりはそれを除く。
@@ -578,7 +592,7 @@ Through foreign keys, the deletions also delete 52001 rows.
 
 - `SET NULL` か `SET DEFAULT` が、別の外部キーの参照する列を変えるときは、その外部キーの `ON UPDATE` の動作がすることは分からないと、行が示す。動作が設定する列を読む格納される生成列は、それとともに変わる。そのため、その生成列を参照するキーも同じに扱う。
 
-`Plan:` の行のあとには、すべてのテーブルをまとめた行を、事実ごとに1行ずつ置く。削除がさらに消し、変える行、削除を失敗させる行、そして波及が分からない外部キーであり、どのキーも1回だけ数える。
+`Plan:` の行のあとには、すべてのテーブルをまとめた行を、事実ごとに1行ずつ置く。削除がさらに消し、変える行、削除を失敗させる行、そして波及が分からない外部キーであり、どのキーも1回だけ数える。まとまりの行の件数を足すと、これらの数になる。
 
 ```text
 Plan: 1 to insert, 0 to update, 4 to delete in 3 tables.
@@ -834,6 +848,6 @@ fi
 `|| status=$?` は、`set -e` のシェルが終了コード 2 で止まらないようにする。`grep` が行を見つけないときも、シェルは止まらない。その `grep` は `if` の条件だからである。
 失敗した計画はエラーを標準エラー出力へ出す。定期実行のログは、そのエラーもそのまま含む。
 
-この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) にある。
+この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:d668c9d259635161f361ceb3cbd393466738e9bbbd5e55a0cf91b68d311e1576 -->
+<!-- i18n-source: plan.md sha256:8b7db681f8c8902f591567d41f85ead23af7c8b696215a7020d9983229c6743d -->

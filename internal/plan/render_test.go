@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -101,6 +102,34 @@ func step(level int, table declaration.TableName, constraint string, references 
 	return s
 }
 
+// linked returns the steps, each beyond level 1 with its parent and the
+// number of rows that it can reference, as the walk gives them for tables
+// without partitions, whose names tell the relations: the parent is the first
+// step of the level before that deletes rows of the table that the step
+// references, and the rows are those that the steps of the level before
+// delete in that table (Step.Parent, Step.Referenced). A step with a parent
+// keeps it, as a test of partitions gives it.
+func linked(steps ...Step) []Step {
+	steps = slices.Clone(steps)
+	for i := range steps {
+		s := &steps[i]
+		if s.Level == 1 || s.Parent != 0 {
+			continue
+		}
+		for j := range steps {
+			p := &steps[j]
+			if p.Level != s.Level-1 || !p.Deletes() || p.Unknown != Known || p.Table != s.References {
+				continue
+			}
+			if s.Parent == 0 {
+				s.Parent = j + 1
+			}
+			s.Referenced += p.Rows
+		}
+	}
+	return steps
+}
+
 // notKnown returns s as a step whose rows were not counted, for reason.
 func notKnown(s Step, reason Unknown) Step {
 	s.Unknown = reason
@@ -117,6 +146,57 @@ func withSet(s Step, set ...string) Step {
 func onUpdate(s Step, constraint string, table declaration.TableName) Step {
 	s.Unknown, s.OnUpdate, s.OnUpdateTable = FollowsOnUpdate, constraint, table
 	return s
+}
+
+// effectPlan returns the plan of the golden file effect: deletions that
+// reach rows through every action, at three levels, with every reason why
+// what a step does is not known.
+func effectPlan() *Plan {
+	return &Plan{Tables: []Table{
+		{
+			Name: name("facility", "room_types"), Mode: config.ModeSync,
+			Key: []string{"code"}, Compare: []string{"name"},
+			Diff: TableDiff{
+				Inserts: []Row{{Key: values("suite"), Values: values("Suite")}},
+				Deletes: []Row{{Key: values("old")}, {Key: values("older")}},
+			},
+			Effect: Effect{Steps: linked(
+				step(1, name("facility", "room_types"), "room_types_replaced_by_fkey", name("facility", "room_types"), "SET NULL", 1, "replaced_by"),
+				step(1, name("facility", "rooms"), "rooms_room_type_fkey", name("facility", "room_types"), "CASCADE", 3, "room_type"),
+				notKnown(step(1, name("reservation", "audit"), "audit_room_type_fkey", name("facility", "room_types"), "NO ACTION", 0, "room_type_id"), NoTableSelect),
+				notKnown(step(1, name("reservation", "blocks"), "blocks_room_type_fkey", name("facility", "room_types"), "CASCADE", 0, "room_type_id"), RowSecurity),
+				step(1, name("reservation", "bookings"), "fk_bookings_room_type", name("facility", "room_types"), "NO ACTION", 12, "room_type_id"),
+				step(1, name("reservation", "holds"), "holds fk", name("facility", "room_types"), "RESTRICT", 2, "room_type", "hotel"),
+				withSet(step(1, name("reservation", "quotes"), "quotes_room_type_fkey", name("facility", "room_types"), "SET DEFAULT", 4, "room_type", "hotel"), "room_type"),
+				step(1, name("reservation", "waits"), "waits_room_type_fkey", name("facility", "room_types"), "SOMETHING NEW", 5, "room_type"),
+				// The rows of facility.rooms that the cascade deletes are
+				// referenced in turn.
+				step(2, name("facility", "desks"), "desks_room_fkey", name("facility", "rooms"), "CASCADE", 40, "room"),
+				step(2, name("facility", "lamps"), "lamps_room_fkey", name("facility", "rooms"), "SET NULL", 1, "room"),
+				notKnown(step(2, name("secret", "keys"), "keys_room_fkey", name("facility", "rooms"), "SET NULL", 0, "room"), NoSchemaUsage),
+				notKnown(step(2, name("facility", "locks"), "locks_room_fkey", name("facility", "rooms"), "CASCADE", 0, "room"), ReferencedUnreadable),
+				notKnown(step(2, name("facility", "signs"), "signs_room_fkey", name("facility", "rooms"), "CASCADE", 0, "room"), TriggersDisabled),
+				step(3, name("facility", "drawers"), "drawers_desk_fkey", name("facility", "desks"), "CASCADE", 80, "desk"),
+				onUpdate(step(3, name("facility", "screws"), "screws_desk_fkey", name("facility", "desks"), "SET NULL", 2, "desk"),
+					"parts_desk_fkey", name("facility", "parts")),
+			)},
+		},
+		{
+			Name: name("geo", "regions"), Mode: config.ModeSync,
+			Key: []string{"code"}, Compare: []string{"name"},
+			Diff: TableDiff{Deletes: []Row{{Key: values("north")}}},
+			Effect: Effect{Steps: linked(
+				step(1, name("geo", "prefectures"), "prefectures_region_fkey", name("geo", "regions"), "NO ACTION", 1, "region"),
+				step(1, name("geo", "stations"), "stations_region_fkey", name("geo", "regions"), "CASCADE", 1, "region"),
+				step(2, name("geo", "exits"), "exits_station_fkey", name("geo", "stations"), "CASCADE", 2, "station"),
+			)},
+		},
+		{
+			// Rows to delete that nothing references have no block.
+			Name: name("geo", "zones"), Mode: config.ModeSync, Key: []string{"code"},
+			Diff: TableDiff{Deletes: []Row{{Key: values("x")}}},
+		},
+	}}
 }
 
 func TestRender(t *testing.T) {
@@ -414,54 +494,7 @@ func TestRender(t *testing.T) {
 				},
 			}},
 		},
-		{
-			name: "effect",
-			plan: &Plan{Tables: []Table{
-				{
-					Name: name("facility", "room_types"), Mode: config.ModeSync,
-					Key: []string{"code"}, Compare: []string{"name"},
-					Diff: TableDiff{
-						Inserts: []Row{{Key: values("suite"), Values: values("Suite")}},
-						Deletes: []Row{{Key: values("old")}, {Key: values("older")}},
-					},
-					Effect: Effect{Steps: []Step{
-						step(1, name("facility", "room_types"), "room_types_replaced_by_fkey", name("facility", "room_types"), "SET NULL", 1, "replaced_by"),
-						step(1, name("facility", "rooms"), "rooms_room_type_fkey", name("facility", "room_types"), "CASCADE", 3, "room_type"),
-						notKnown(step(1, name("reservation", "audit"), "audit_room_type_fkey", name("facility", "room_types"), "NO ACTION", 0, "room_type_id"), NoTableSelect),
-						notKnown(step(1, name("reservation", "blocks"), "blocks_room_type_fkey", name("facility", "room_types"), "CASCADE", 0, "room_type_id"), RowSecurity),
-						step(1, name("reservation", "bookings"), "fk_bookings_room_type", name("facility", "room_types"), "NO ACTION", 12, "room_type_id"),
-						step(1, name("reservation", "holds"), "holds fk", name("facility", "room_types"), "RESTRICT", 2, "room_type", "hotel"),
-						withSet(step(1, name("reservation", "quotes"), "quotes_room_type_fkey", name("facility", "room_types"), "SET DEFAULT", 4, "room_type", "hotel"), "room_type"),
-						step(1, name("reservation", "waits"), "waits_room_type_fkey", name("facility", "room_types"), "SOMETHING NEW", 5, "room_type"),
-						// The rows of facility.rooms that the cascade deletes are
-						// referenced in turn.
-						step(2, name("facility", "desks"), "desks_room_fkey", name("facility", "rooms"), "CASCADE", 40, "room"),
-						step(2, name("facility", "lamps"), "lamps_room_fkey", name("facility", "rooms"), "SET NULL", 1, "room"),
-						notKnown(step(2, name("secret", "keys"), "keys_room_fkey", name("facility", "rooms"), "SET NULL", 0, "room"), NoSchemaUsage),
-						notKnown(step(2, name("facility", "locks"), "locks_room_fkey", name("facility", "rooms"), "CASCADE", 0, "room"), ReferencedUnreadable),
-						notKnown(step(2, name("facility", "signs"), "signs_room_fkey", name("facility", "rooms"), "CASCADE", 0, "room"), TriggersDisabled),
-						step(3, name("facility", "drawers"), "drawers_desk_fkey", name("facility", "desks"), "CASCADE", 80, "desk"),
-						onUpdate(step(3, name("facility", "screws"), "screws_desk_fkey", name("facility", "desks"), "SET NULL", 2, "desk"),
-							"parts_desk_fkey", name("facility", "parts")),
-					}},
-				},
-				{
-					Name: name("geo", "regions"), Mode: config.ModeSync,
-					Key: []string{"code"}, Compare: []string{"name"},
-					Diff: TableDiff{Deletes: []Row{{Key: values("north")}}},
-					Effect: Effect{Steps: []Step{
-						step(1, name("geo", "prefectures"), "prefectures_region_fkey", name("geo", "regions"), "NO ACTION", 1, "region"),
-						step(1, name("geo", "stations"), "stations_region_fkey", name("geo", "regions"), "CASCADE", 1, "region"),
-						step(2, name("geo", "exits"), "exits_station_fkey", name("geo", "stations"), "CASCADE", 2, "station"),
-					}},
-				},
-				{
-					// Rows to delete that nothing references have no block.
-					Name: name("geo", "zones"), Mode: config.ModeSync, Key: []string{"code"},
-					Diff: TableDiff{Deletes: []Row{{Key: values("x")}}},
-				},
-			}},
-		},
+		{name: "effect", plan: effectPlan()},
 		{
 			// The sequences of the columns that a plan writes explicit values
 			// into, after the counts and before the effect of the deletions
@@ -521,27 +554,33 @@ func TestRender(t *testing.T) {
 			if err := Render(&b, tt.plan); err != nil {
 				t.Fatalf("Render() error = %v", err)
 			}
-
-			// The golden files are opened inside testdata only.
-			testdata, err := os.OpenRoot("testdata")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = testdata.Close() }()
-			golden := tt.name + ".golden"
-			if *update {
-				if err := testdata.WriteFile(golden, b.Bytes(), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			want, err := testdata.ReadFile(golden)
-			if err != nil {
-				t.Fatalf("%v (run the test with -update to write it)", err)
-			}
-			if got := b.String(); got != string(want) {
-				t.Errorf("Render() =\n%s\nwant (testdata/%s)\n%s", got, golden, want)
-			}
+			checkGolden(t, tt.name, b.Bytes())
 		})
+	}
+}
+
+// checkGolden fails the test unless got is the content of the golden file
+// testdata/<name>.golden, which -update writes.
+func checkGolden(t *testing.T, name string, got []byte) {
+	t.Helper()
+	// The golden files are opened inside testdata only.
+	testdata, err := os.OpenRoot("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = testdata.Close() }()
+	golden := name + ".golden"
+	if *update {
+		if err := testdata.WriteFile(golden, got, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := testdata.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("%v (run the test with -update to write it)", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("Render() =\n%s\nwant (testdata/%s)\n%s", got, golden, want)
 	}
 }
 

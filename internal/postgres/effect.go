@@ -74,7 +74,10 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 	if !deletes {
 		return out, nil
 	}
-	w := &walk{s: s, table: s.nextTemp(), updates: make(map[uint32]int64), moves: make(map[uint32]bool), read: make(map[uint32]declaration.TableName)}
+	w := &walk{
+		s: s, table: s.nextTemp(), updates: make(map[uint32]int64), moves: make(map[uint32]bool), read: make(map[uint32]declaration.TableName),
+		edges: make(map[int][]edge),
+	}
 	err = s.savepoint(ctx, true, func(tx pgx.Tx) error {
 		w.tx = tx
 		if err := w.partitionTrees(ctx); err != nil {
@@ -102,7 +105,9 @@ func (s *Session) Effects(ctx context.Context, names []declaration.TableName) (_
 					return err
 				}
 			}
-			sortSteps(out.Tables[i].Steps)
+			if err := w.link(ctx, i, &out.Tables[i]); err != nil {
+				return err
+			}
 			slices.SortFunc(out.Tables[i].Reaches, func(a, b declaration.TableName) int {
 				return cmp.Or(cmp.Compare(a.Schema, b.Schema), cmp.Compare(a.Name, b.Name))
 			})
@@ -187,6 +192,9 @@ type walk struct {
 	// read holds the referencing relations whose rows the walk read, by
 	// OID, for the check that they are those of the snapshot (ADR-0047).
 	read map[uint32]declaration.TableName
+	// edges holds, for the effect of each table by its number, the edge of
+	// each step, in the order of the steps, which link reads.
+	edges map[int][]edge
 }
 
 // goneFirst counts the pairs of the most updates of the table at the top
@@ -224,6 +232,9 @@ type edge struct {
 	// inTree is true when the referenced relation is the table of level 0
 	// or one of its partitions, rather than a partitioned table above it.
 	inTree bool
+	// refTargets holds the relations of the level whose rows the key can
+	// reference: the referenced relation, or its partitions.
+	refTargets []uint32
 	// set holds the columns that SET NULL or SET DEFAULT sets.
 	set []string
 	// schemaUsage, tableSelect, and rowSecurity say whether the role may use
@@ -420,7 +431,7 @@ func (w *walk) cascade(ctx context.Context, i int, root *loadedTable, effect *pl
 			}
 			step := w.step(e, lv)
 			if step.Unknown = w.unknown(e, root, lv); step.Unknown != plan.Known {
-				effect.Steps = append(effect.Steps, step)
+				w.add(effect, i, step, e)
 				continue
 			}
 			r := w.refsOf(e)
@@ -438,7 +449,7 @@ func (w *walk) cascade(ctx context.Context, i int, root *loadedTable, effect *pl
 			}
 			if n > 0 {
 				step.Rows = n
-				effect.Steps = append(effect.Steps, step)
+				w.add(effect, i, step, e)
 				reached = true
 			}
 		}
@@ -469,7 +480,7 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 		}
 		step := w.step(e, lv)
 		if step.Unknown = w.unknown(e, root, lv); step.Unknown != plan.Known {
-			effect.Steps = append(effect.Steps, step)
+			w.add(effect, i, step, e)
 			continue
 		}
 		r := w.refsOf(e)
@@ -527,7 +538,7 @@ func (w *walk) others(ctx context.Context, i int, root *loadedTable, lv int, l l
 		}
 		if n > 0 || step.Unknown != plan.Known {
 			step.Rows = n
-			effect.Steps = append(effect.Steps, step)
+			w.add(effect, i, step, e)
 		}
 	}
 	return nil
@@ -592,6 +603,12 @@ func (w *walk) step(e edge, lv int) plan.Step {
 		step.Set = e.set
 	}
 	return step
+}
+
+// add adds step, which follows e, to the effect of the table number i.
+func (w *walk) add(effect *plan.Effect, i int, step plan.Step, e edge) {
+	effect.Steps = append(effect.Steps, step)
+	w.edges[i] = append(w.edges[i], e)
 }
 
 // unknown says why the walk cannot count the rows of e, or returns Known:
@@ -1000,7 +1017,10 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 					UNION ALL SELECT c2.oid FROM pg_catalog.pg_constraint AS c2 JOIN made ON c2.conparentid = made.oid
 				)
 				SELECT FROM pg_catalog.pg_trigger AS tg JOIN made ON tg.tgconstraint = made.oid
-				WHERE (tg.tgtype::pg_catalog.int4 & 8) <> 0 AND tg.tgenabled IN ('D', 'R'))
+				WHERE (tg.tgtype::pg_catalog.int4 & 8) <> 0 AND tg.tgenabled IN ('D', 'R')),
+			ARRAY(SELECT g.oid FROM pg_catalog.unnest($1::pg_catalog.oid[]) AS g(oid)
+				WHERE g.oid = co.confrelid
+					OR g.oid IN (SELECT p.relid::pg_catalog.oid FROM pg_catalog.pg_partition_tree(co.confrelid::pg_catalog.regclass) AS p))
 		FROM pg_catalog.pg_constraint AS co
 		JOIN pg_catalog.pg_class AS r ON r.oid = co.conrelid
 		JOIN pg_catalog.pg_namespace AS n ON n.oid = r.relnamespace
@@ -1024,7 +1044,7 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 		if err := rows.Scan(&e.name, &e.fromOID, &e.table.Schema, &e.table.Name, &partitioned,
 			&e.toOID, &e.toTable.Schema, &e.toTable.Name, &toPartitioned, &action, &e.self, &e.inTree,
 			&e.columns, &e.referenced, &schemas, &ops, &collSchemas, &collNames, &e.set,
-			&schemaUsage, &tableSelect, &e.rowSecurity, &refColumns, &refTable, &e.top, &e.triggersDisabled); err != nil {
+			&schemaUsage, &tableSelect, &e.rowSecurity, &refColumns, &refTable, &e.top, &e.triggersDisabled, &e.refTargets); err != nil {
 			return nil, fmt.Errorf("read the foreign keys that reference the rows to delete: %w", err)
 		}
 		switch {
@@ -1064,13 +1084,92 @@ func (w *walk) edgesTo(ctx context.Context, targets []uint32) ([]edge, error) {
 	return edges, nil
 }
 
-// sortSteps sorts the steps of an effect by level, then by the referencing
-// table, the name of the foreign key, and the referenced table.
-func sortSteps(steps []plan.Step) {
-	slices.SortStableFunc(steps, func(a, b plan.Step) int {
-		return cmp.Or(cmp.Compare(a.Level, b.Level),
-			cmp.Compare(a.Table.Schema, b.Table.Schema), cmp.Compare(a.Table.Name, b.Table.Name),
-			cmp.Compare(a.Constraint, b.Constraint),
-			cmp.Compare(a.References.Schema, b.References.Schema), cmp.Compare(a.References.Name, b.References.Name))
-	})
+// compareSteps orders the steps of an effect by level, then by the
+// referencing table, the name of the foreign key, and the referenced table.
+func compareSteps(a, b *plan.Step) int {
+	return cmp.Or(cmp.Compare(a.Level, b.Level),
+		cmp.Compare(a.Table.Schema, b.Table.Schema), cmp.Compare(a.Table.Name, b.Table.Name),
+		cmp.Compare(a.Constraint, b.Constraint),
+		cmp.Compare(a.References.Schema, b.References.Schema), cmp.Compare(a.References.Name, b.References.Name))
+}
+
+// levelVia names the rows that one level deleted through the foreign keys of
+// one referencing relation (via), in one relation that holds them (rel).
+type levelVia struct {
+	level    int
+	via, rel uint32
+}
+
+// link sorts the steps of the effect of the table number i (compareSteps),
+// and gives each step beyond level 1 its parent and the number of rows that
+// it can reference (plan.Step.Parent, plan.Step.Referenced), from the rows
+// that each level deleted, by the referencing relation of the step that
+// deleted them and the relation that holds them. A foreign key that a
+// partition holds, or that references a partition, names other relations
+// than the step whose rows it references, so the names of the steps do not
+// tell its parent (ADR-0050).
+func (w *walk) link(ctx context.Context, i int, effect *plan.Effect) error {
+	edges := w.edges[i]
+	order := make([]int, len(effect.Steps))
+	for k := range order {
+		order[k] = k
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return compareSteps(&effect.Steps[a], &effect.Steps[b]) })
+	steps := make([]plan.Step, len(order))
+	sorted := make([]edge, len(order))
+	for k, o := range order {
+		steps[k], sorted[k] = effect.Steps[o], edges[o]
+	}
+	effect.Steps = steps
+
+	// deleted counts the rows of each level, referencing relation, and
+	// relation, and inRel those of each level and relation.
+	deleted, inRel := make(map[levelVia]int), make(map[levelVia]int)
+	rows, err := w.tx.Query(ctx, "SELECT level, via, rel, pg_catalog.count(*) FROM "+w.table+
+		" WHERE root OPERATOR(pg_catalog.=) $1 AND kind OPERATOR(pg_catalog.=) '"+kindDeleted+"' GROUP BY level, via, rel", i)
+	if err != nil {
+		return fmt.Errorf("read the rows that the deletions reach: %w", err)
+	}
+	for rows.Next() {
+		var k levelVia
+		var n int
+		if err := rows.Scan(&k.level, &k.via, &k.rel, &n); err != nil {
+			rows.Close()
+			return fmt.Errorf("read the rows that the deletions reach: %w", err)
+		}
+		deleted[k] = n
+		inRel[levelVia{level: k.level, rel: k.rel}] += n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the rows that the deletions reach: %w", err)
+	}
+	// byLevel holds the places of the steps of each level.
+	byLevel := make(map[int][]int)
+	for k := range steps {
+		byLevel[steps[k].Level] = append(byLevel[steps[k].Level], k)
+	}
+	for k := range steps {
+		s := &steps[k]
+		if s.Level == 1 {
+			continue
+		}
+		refs := sorted[k].refTargets
+		for _, rel := range refs {
+			s.Referenced += inRel[levelVia{level: s.Level - 1, rel: rel}]
+		}
+		for _, p := range byLevel[s.Level-1] {
+			parent := &steps[p]
+			if !parent.Deletes() || parent.Unknown != plan.Known {
+				continue
+			}
+			if slices.ContainsFunc(refs, func(rel uint32) bool {
+				return deleted[levelVia{level: s.Level - 1, via: sorted[p].fromOID, rel: rel}] > 0
+			}) {
+				s.Parent = p + 1
+				break
+			}
+		}
+	}
+	return nil
 }
