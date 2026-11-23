@@ -105,3 +105,23 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - It ends with the sequences of the columns that it writes explicit values into: a statement that moves a sequence beyond them when the script runs, as an apply by the role of the plan does, and, for a sequence that this role may not read or move, the statement as a comment under the reason. Run the script as the role that planned it, and it never fails on a sequence ([kortopi plan](plan.md#read-the-script)).
 - `--exit-code` works with `--format sql` as with the text: status 2 when the plan is not empty.
 - The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, and such values. It also counts again the stored rows that the declaration lacks, which give no status of their own.
+
+## The job and the server
+
+Besides the roles of its runs ([kortopi plan](plan.md#what-the-session-needs), [kortopi apply](apply.md#what-an-apply-needs)), a job that runs kortopi needs what this section says.
+
+### Memory
+
+A run that reads a SQL file starts the parser of SQL, which needs memory whatever the size of the file ([Declaration files](declaration.md#encoding-and-size)).
+A plan of each declaration below ran in a container with the memory limit of the row, and no swap beyond it, with the Linux binary for arm64 of kortopi at commit c58064e, against PostgreSQL 18.7:
+
+| Declaration | Memory limit | Result |
+|---|---|---|
+| one SQL file of three rows, 122 bytes | 272 MiB | killed, exit status 137 |
+| one SQL file of three rows, 122 bytes | 280 MiB | the plan, exit status 0 |
+| the same rows in one CSV file | 16 MiB | the plan, exit status 0 |
+| one SQL file of 200,000 rows, 25 MB | 1.5 GiB | killed, exit status 137 |
+| one SQL file of 200,000 rows, 25 MB | 4 GiB | the plan, exit status 0, with a peak of 1.8 GiB |
+
+- Give a job that reads SQL files at least 300 MiB, and more for large SQL files, or declare the tables in CSV files, which kortopi never parses.
+- A run that the system kills for its memory prints nothing, because it gets no chance to, and a shell reports the exit status 137, which stands for the signal SIGKILL. Look at the memory of a job that ends so.

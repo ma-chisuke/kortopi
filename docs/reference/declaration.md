@@ -200,9 +200,12 @@ Every other statement is an error that names its kind: `UPDATE`, `DELETE`, `MERG
 A SQL file is UTF-8 and holds no NUL byte.
 A byte order mark at its start is accepted.
 
-kortopi reads SQL with the parser of PostgreSQL, compiled to WebAssembly.
-Its first use in a run takes up to about a second, and a SQL file of 25 MB took about 10 seconds and about 1 GB of memory in a measurement.
+kortopi reads SQL with the parser of PostgreSQL, compiled to WebAssembly, which it starts at the first SQL file of a run.
+The start takes up to about a second, and memory whatever the size of the file: in a measurement, a plan of a SQL file of three rows needed about 280 MiB, where a plan of the same rows in a CSV file passed in 16 MiB.
+The memory grows with the SQL files: a plan of a SQL file of 25 MB, 200,000 rows as `pg_dump --column-inserts` writes them, took 1.8 GiB at its peak.
+A run that reads no SQL file does not start the parser.
 Declare large tables in CSV files: PostgreSQL reads them with COPY, and kortopi never parses them.
+[Run kortopi from scripts](automation.md#memory) gives the conditions of the measurement, and says what memory to give a job.
 
 ## kortopi.toml
 

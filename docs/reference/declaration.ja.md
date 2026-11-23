@@ -201,9 +201,12 @@ kortopi は、2か所でこれらを見つける。
 SQL ファイルの文字コードは UTF-8 であり、NUL バイトを含まない。
 先頭のバイトオーダーマークは受け付ける。
 
-kortopi は、WebAssembly にした PostgreSQL のパーサで SQL を読む。
-1回の実行で最初に使うときは1秒近くかかる。ある計測では、25 MB の SQL ファイルに約10秒と約1 GB のメモリがかかった。
+kortopi は、WebAssembly にした PostgreSQL のパーサで SQL を読む。パーサは、1回の実行で最初の SQL ファイルを読むときに起動する。
+起動には1秒近くかかり、ファイルの大きさにかかわらずメモリが要る。ある計測では、3行の SQL ファイルの計画に約 280 MiB が要り、同じ行の CSV ファイルの計画は 16 MiB で通った。
+SQL ファイルが大きければ、メモリも増える。`pg_dump --column-inserts` の形で 200,000 行を書いた 25 MB の SQL ファイルの計画は、最大で 1.8 GiB を使った。
+SQL ファイルを読まない実行は、パーサを起動しない。
 大きなテーブルは CSV ファイルで宣言する。CSV ファイルは PostgreSQL が COPY で読み、kortopi は解析しない。
+計測の条件と、ジョブに与えるメモリは、[スクリプトから kortopi を実行する](automation.ja.md#メモリ)にある。
 
 ## kortopi.toml
 
@@ -547,4 +550,4 @@ kortopi: data/facility/room_types.csv:3: the line \. ends the data of COPY on Po
 - 2つの行が持つキー・NOT NULL の列の NULL・現在の時刻を表す語・`\.` の行は、列の受け付けない値と同じく、それを含む最初のテーブルで計画を止める。
 - 挿入する行が値を得られない列と、削除が消すか変える宣言した行は、テーブルを比べたあとに、すべてのテーブルについてまとめて報告する。
 
-<!-- i18n-source: declaration.md sha256:9e3ee597369804370549ae120b4922c184610286f41a15f11a336d4ff30f32cf -->
+<!-- i18n-source: declaration.md sha256:dd66ef6ed43fa6b7e073fadfd19b6fb95246928fa5815c942731ab3d7e11c4af -->
