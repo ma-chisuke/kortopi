@@ -110,6 +110,12 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 
 kortopi を動かすジョブには、実行ごとのロール（[kortopi plan](plan.ja.md#セッションに要るもの)・[kortopi apply](apply.ja.md#apply-に要るもの)）のほかに、この節の述べるものが要る。
 
+### チェックアウト
+
+データのディレクトリは、コミットしたときのバイトのままチェックアウトする。
+`core.autocrlf=true` の Git のように行の終わりを変換すると、改行を持つ値がすべて変わる。そのチェックアウトからの計画はその変更を示し、apply はその変更を書く。
+データのディレクトリのファイルは、`.gitattributes` で変換から外す（[宣言のファイル](declaration.ja.md#行の終わりと-git)）。
+
 ### メモリ
 
 SQL ファイルを読む実行は SQL のパーサを起動し、パーサはファイルの大きさにかかわらずメモリを要する（[宣言のファイル](declaration.ja.md#文字コードと大きさ)）。
@@ -126,4 +132,4 @@ SQL ファイルを読む実行は SQL のパーサを起動し、パーサは�
 - SQL ファイルを読むジョブには 300 MiB 以上を、大きな SQL ファイルならさらに多くを与える。または、テーブルを CSV ファイルで宣言する。kortopi は CSV ファイルを解析しない。
 - メモリのためにシステムが強制終了した実行は、何も出力しない。出力する機会がないからである。シェルは終了コード 137 を報告し、これはシグナル SIGKILL を表す。そう終わったジョブでは、メモリを確かめる。
 
-<!-- i18n-source: automation.md sha256:337911be4ab6ef516265a4c5ad54fdd6df79a582f255c2ec346bdd620496fd82 -->
+<!-- i18n-source: automation.md sha256:e519356b2c2030dbf8f5cd72ef6cbf43d48315ab2d17395c880913ac0a362428 -->

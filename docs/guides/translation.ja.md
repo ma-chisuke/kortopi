@@ -278,5 +278,8 @@
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 | materialized view | マテリアライズドビュー |
 | refresh（マテリアライズドビューを） | リフレッシュする |
+| line break, end of a line | 改行、行の終わり |
+| string constant（SQL の） | 文字列定数 |
+| checkout（Git の）, check out | チェックアウト、チェックアウトする |
 
-<!-- i18n-source: translation.md sha256:15e088b54dd2005b12d17359619677fc3a8dea8efd9b724a1440fa686431bb57 -->
+<!-- i18n-source: translation.md sha256:ed6ae71a1ce2587d179906477f491d49a27398c2ad6db6316593a84cedf6f06e -->

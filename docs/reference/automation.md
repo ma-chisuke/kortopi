@@ -110,6 +110,12 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 
 Besides the roles of its runs ([kortopi plan](plan.md#what-the-session-needs), [kortopi apply](apply.md#what-an-apply-needs)), a job that runs kortopi needs what this section says.
 
+### The checkout
+
+Check out the data directory with the bytes that were committed.
+A conversion of the ends of lines, as Git makes it with `core.autocrlf=true`, changes every value that holds a line break: a plan from that checkout shows the change, and an apply from it writes the change.
+Keep the files of the data directory out of the conversion with a `.gitattributes` ([Declaration files](declaration.md#line-ends-and-git)).
+
 ### Memory
 
 A run that reads a SQL file starts the parser of SQL, which needs memory whatever the size of the file ([Declaration files](declaration.md#encoding-and-size)).

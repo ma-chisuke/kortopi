@@ -278,3 +278,6 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | private vulnerability reporting, security advisory (on GitHub) | 脆弱性の非公開報告、セキュリティアドバイザリ |
 | materialized view | マテリアライズドビュー |
 | refresh (a materialized view) | リフレッシュする |
+| line break, end of a line | 改行、行の終わり |
+| string constant (in SQL) | 文字列定数 |
+| checkout (in Git), check out | チェックアウト、チェックアウトする |
