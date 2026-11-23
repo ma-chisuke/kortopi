@@ -1,0 +1,18 @@
+billing.fees (upsert, key: id)
+  + id=3  code=express
+  + id=4  code=gift
+  2 to insert, 0 to update
+  sequence billing.fees_id_seq of column id: next value 3 -> 5
+  sequence billing.fee_codes of column code: next value 7 -> 8
+
+billing.tax_rates (upsert, key: id)
+  + id=3  name=zero
+  1 to insert, 0 to update
+  sequence billing.tax_rates_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.tax_rates_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."tax_rates_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+
+Plan: 3 to insert, 0 to update, 0 to delete in 2 tables.
+
+Applied: 3 inserted, 0 updated, 0 deleted.
+Sequence billing.fees_id_seq of billing.fees (id): next value 3 -> 23.
+Sequence billing.fee_codes of billing.fees (code): next value 7 -> 50007, not to 90008: the statement that moves it failed: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled the statement.
+Sequence billing.tax_rates_id_seq of billing.tax_rates (id): next value 3, not moved to 4: the role may not take values from the sequence.

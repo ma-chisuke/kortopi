@@ -37,6 +37,10 @@ type fakeDB struct {
 	effects    map[declaration.TableName]Effect
 	conflicts  []Conflict
 	effectsErr error
+	// sequences holds what Sequences returns for the tables that it names,
+	// and sequencesErr makes it fail.
+	sequences    map[declaration.TableName][]Sequence
+	sequencesErr error
 
 	describes [][]declaration.TableName
 	requests  []DiffRequest
@@ -45,6 +49,16 @@ type fakeDB struct {
 	checked map[declaration.TableName][]config.InsertValue
 	// effected holds the names of each call of Effects.
 	effected [][]declaration.TableName
+	// sequenced holds the columns of each call of Sequences, by table.
+	sequenced map[declaration.TableName][]string
+}
+
+func (f *fakeDB) Sequences(_ context.Context, table declaration.TableName, columns []string) ([]Sequence, error) {
+	if f.sequenced == nil {
+		f.sequenced = make(map[declaration.TableName][]string)
+	}
+	f.sequenced[table] = slices.Clone(columns)
+	return f.sequences[table], f.sequencesErr
 }
 
 func (f *fakeDB) Effects(_ context.Context, names []declaration.TableName) (Effects, error) {

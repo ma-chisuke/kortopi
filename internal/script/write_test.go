@@ -75,6 +75,15 @@ func (f *fakeDB) WriteStatements(_ context.Context, w io.Writer, step Step) erro
 				return err
 			}
 		}
+	case Sequences:
+		for _, s := range step.Table.Sequences {
+			if !s.Called() {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "%sMOVE SEQUENCE %s BEYOND %s.%s;\n", prefix, s.Name, step.Table.Name, s.Column); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -108,6 +117,12 @@ func table(name declaration.TableName, mode config.Mode, d plan.TableDiff) plan.
 // withEffect returns t with the steps as the effect of its deletions.
 func withEffect(t plan.Table, steps ...plan.Step) plan.Table {
 	t.Effect = plan.Effect{Steps: steps}
+	return t
+}
+
+// withSequences returns t with the sequences.
+func withSequences(t plan.Table, sequences ...plan.Sequence) plan.Table {
+	t.Sequences = sequences
 	return t
 }
 
@@ -169,6 +184,41 @@ func TestWrite(t *testing.T) {
 			name: "empty_with_mode_insert",
 			plan: &plan.Plan{Tables: []plan.Table{table(plans, config.ModeUpsert, plan.TableDiff{}), table(cities, config.ModeInsert, plan.TableDiff{})}},
 			db:   &fakeDB{},
+		},
+		{
+			// The stored rows that the declaration lacks, as comments
+			// (ADR-0046).
+			name: "empty_with_undeclared_rows",
+			plan: &plan.Plan{Tables: []plan.Table{table(plans, config.ModeUpsert, plan.TableDiff{Undeclared: 1})}},
+			db:   &fakeDB{},
+		},
+		{
+			// The lines of the stored rows that the declaration lacks come
+			// after the lines of the schema change, five tables at most and a
+			// line that counts the others (ADR-0046).
+			name: "undeclared_rows_after_pending",
+			plan: &plan.Plan{Tables: []plan.Table{
+				table(tn("app", "a"), config.ModeUpsert, plan.TableDiff{Undeclared: 1}),
+				table(tn("app", "b"), config.ModeUpsert, plan.TableDiff{Undeclared: 2}),
+				{Name: tn("app", "c"), Mode: config.ModeUpsert, PendingTable: true, DeclaredRows: 2},
+				table(tn("app", "d"), config.ModeUpsert, plan.TableDiff{Undeclared: 3}),
+				table(tn("app", "e"), config.ModeUpsert, plan.TableDiff{Undeclared: 4}),
+				table(tn("app", "f"), config.ModeInsert, plan.TableDiff{Inserts: inserts("1"), Undeclared: 5}),
+				table(tn("app", "g"), config.ModeUpsert, plan.TableDiff{Undeclared: 6}),
+				table(tn("app", "h"), config.ModeUpsert, plan.TableDiff{Uncounted: "PostgreSQL ended the count: ERROR: something"}),
+			}},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			name: "undeclared_rows",
+			plan: &plan.Plan{Tables: []plan.Table{
+				table(cities, config.ModeInsert, plan.TableDiff{Inserts: inserts("10"), Undeclared: 4}),
+				table(plans, config.ModeUpsert, plan.TableDiff{Undeclared: 1}),
+				table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("3")}),
+			}},
+			db:     &fakeDB{},
+			header: Header{Dir: "data", Database: "shop"},
 		},
 		{
 			name: "order",
@@ -252,6 +302,34 @@ func TestWrite(t *testing.T) {
 					config.InsertValue{Column: "created_at", Value: "now"}, config.InsertValue{Column: "note", Value: "line\nbreak"}),
 				withOnInsert(table(regions, config.ModeUpsert, plan.TableDiff{Updates: updates("1")}),
 					config.InsertValue{Column: "created_at", Value: "now"}),
+			}},
+			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
+			header: Header{Dir: "data", Database: "shop"},
+		},
+		{
+			// The sequences that an apply would move, or whose position the
+			// plan could not read, move after every other statement, the
+			// deletions too; one that cycles gets no statement (ADR-0045).
+			name: "sequences",
+			plan: &plan.Plan{Tables: []plan.Table{
+				withSequences(table(cities, config.ModeSync, plan.TableDiff{Inserts: inserts("10"), Deletes: deletes("3")}),
+					plan.Sequence{Column: "id", Name: plan.SequenceName{Schema: "geo", Name: "cities_id_seq"}, Next: "4", Goal: "11"},
+					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "geo", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"},
+					plan.Sequence{
+						Column: "code", Name: plan.SequenceName{Schema: "geo", Name: "codes"}, Next: "2", Goal: "9",
+						Stays: "the role may not take values from the sequence", Advice: "grant the role USAGE on sequence geo.codes",
+					}),
+				withSequences(table(regions, config.ModeUpsert, plan.TableDiff{Updates: updates("1")}),
+					plan.Sequence{
+						Column: "name", Name: plan.SequenceName{Schema: "geo", Name: "names"},
+						Stays: "the role may not read the sequence", Advice: "grant the role SELECT and UPDATE on sequence geo.names",
+					},
+					plan.Sequence{
+						Column: "rank", Name: plan.SequenceName{Schema: "geo", Name: "region_ranks"}, Unread: true,
+						Stays: "PostgreSQL ended the read: lock timeout", Advice: "an apply reads it again, and moves it if it can",
+					}),
+				withSequences(table(plans, config.ModeUpsert, plan.TableDiff{Inserts: inserts("1")}),
+					plan.Sequence{Column: "rank", Name: plan.SequenceName{Schema: "app", Name: "ranks"}, Next: "2", Stays: "the sequence cycles"}),
 			}},
 			db:     &fakeDB{keys: []apply.ForeignKey{citiesOfRegions}},
 			header: Header{Dir: "data", Database: "shop"},

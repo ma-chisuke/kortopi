@@ -193,6 +193,36 @@ func TestRunPlan(t *testing.T) {
 			wantConnect: true,
 		},
 		{
+			// Issue 30: stored rows that the declaration lacks in a table of
+			// mode upsert are no difference for the exit status, and the
+			// plan claims no match (ADR-0046).
+			name:     "stored rows that the declaration lacks, with exit code",
+			files:    twoTables,
+			args:     []string{"--exit-code"},
+			session:  &fakeSession{diffs: map[declaration.TableName]plan.TableDiff{countries: {Undeclared: 1}}},
+			wantCode: exitOK,
+			wantStdout: "No changes. There is nothing to apply.\n" +
+				"geo.countries: 1 stored row is not declared, which mode upsert does not delete\n" +
+				"Not declared: 1 stored row in 1 table, which mode upsert does not delete.\n",
+			wantConnect: true,
+		},
+		{
+			name:     "changes and stored rows that the declaration lacks, with exit code",
+			files:    twoTables,
+			args:     []string{"--exit-code"},
+			session:  &fakeSession{diffs: map[declaration.TableName]plan.TableDiff{plans: {Inserts: newPlan[plans].Inserts, Undeclared: 2}}},
+			wantCode: exitChanges,
+			wantStdout: "app.plans (upsert, key: id)\n" +
+				"  + id=2  name=Gold\n" +
+				"  1 to insert, 0 to update\n" +
+				"  2 stored rows are not declared, which mode upsert does not delete\n" +
+				"\n" +
+				"Plan: 1 to insert, 0 to update, 0 to delete in 2 tables.\n" +
+				"Not declared: 2 stored rows in 1 table, which mode upsert does not delete.\n" +
+				"1 table without changes is not shown.\n",
+			wantConnect: true,
+		},
+		{
 			name:        "changes",
 			files:       twoTables,
 			session:     &fakeSession{diffs: newPlan},

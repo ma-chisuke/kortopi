@@ -1,0 +1,22 @@
+billing.fees (sync, key: id)
+  + id=3  name=express  amount=900
+  - id=1
+  1 to insert, 0 to update, 1 to delete
+  sequence billing.fees_id_seq of column id: next value 3 -> 4
+  sequence billing."fee amount" of column amount: next value -2, not moved: the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is
+  Through foreign keys, the deletion of this row also reaches other rows:
+    2 rows of billing.orders (fee) reference it through orders_fee_fkey, ON DELETE NO ACTION, so the deletion fails while these rows reference it.
+
+billing.tax_rates (upsert, key: name)
+  ~ name=zero  id: 2 -> 30
+  0 to insert, 1 to update
+  sequence billing.tax_rates_id_seq of column id: next value 3, not moved to 31: the role may not take values from the sequence: grant the role USAGE on sequence billing.tax_rates_id_seq, or take 28 values from it as a role that may, with SELECT pg_catalog.nextval('"billing"."tax_rates_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 28)
+
+geo.regions (insert, key: id)
+  + id=7
+  1 to insert
+  sequence geo.regions_id_seq of column id: not moved: the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence geo.regions_id_seq
+  sequence geo.region_codes of column code: could not be read: PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence: an apply reads it again, and moves it if it can
+
+Plan: 2 to insert, 1 to update, 1 to delete in 3 tables.
+Through foreign keys ON DELETE NO ACTION or RESTRICT, 2 rows make the deletion fail.

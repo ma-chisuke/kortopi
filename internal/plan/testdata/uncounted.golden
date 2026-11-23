@@ -1,0 +1,10 @@
+app.big (upsert, key: id)
+  + id=1  name=a
+  1 to insert, 0 to update
+  the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+
+app.codes: 2 stored rows are not declared, which mode insert does not delete
+app.huge: the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+
+Plan: 1 to insert, 0 to update, 0 to delete in 3 tables.
+Not declared: 2 stored rows in 1 table, which mode insert does not delete; the rows of 2 more tables are not counted.

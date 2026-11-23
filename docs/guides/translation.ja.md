@@ -167,9 +167,13 @@
 | domain（型） | ドメイン |
 | interval（型 `interval`）、its parts: months, days, and time | 期間、その部分：月数・日数・時間 |
 | identity column | 識別列 |
+| sequence (of PostgreSQL), next value, increment (of a sequence) | シーケンス、次の値、増分 |
+| move (a sequence forward), move back | 進める、戻す |
 | generated column | 生成列 |
 | partitioned table | パーティションテーブル |
 | partition, attach and detach（パーティションを） | パーティション、アタッチする、デタッチする |
+| storage（テーブルの）、rewrite（新しいストレージを与えるスキーマの変更がテーブルを） | ストレージ、書き換える |
+| MVCC-safe（PostgreSQL のコマンドが） | MVCC に対して安全 |
 | inherit（テーブルを） | 継承する |
 | text form（値の） | テキスト表現 |
 | byte order mark | バイトオーダーマーク |
@@ -273,4 +277,4 @@
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 
-<!-- i18n-source: translation.md sha256:3cdae9a1ffb32abc3f653f868cf30df0cf1005790ee5f75031835f9777470d7c -->
+<!-- i18n-source: translation.md sha256:10f4b05185fb903d57c3831f6f74cc44264a6d7f28b540f4f9d8565dc4b579a9 -->

@@ -1,0 +1,3 @@
+-- No changes: there is nothing to do.
+-- app.plans: 1 stored row is not declared, which mode upsert does not delete
+-- Not declared: 1 stored row in 1 table, which mode upsert does not delete.

@@ -6,4 +6,4 @@ geo.regions (sync, key: code)
 Plan: 0 to insert, 0 to update, 2 to delete in 2 tables.
 1 table without changes is not shown.
 
-Not deleted: 2 rows of 1 table. They are the only differences, so nothing was written. Run apply with --allow-delete to delete them.
+Not deleted: 2 rows of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete them.

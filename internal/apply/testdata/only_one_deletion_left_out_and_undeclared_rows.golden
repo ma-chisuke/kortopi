@@ -1,0 +1,10 @@
+catalog.plans (sync, key: code)
+  - code=legacy
+  0 to insert, 0 to update, 1 to delete
+
+geo.towns: 3 stored rows are not declared, which mode upsert does not delete
+
+Plan: 0 to insert, 0 to update, 1 to delete in 2 tables.
+Not declared: 3 stored rows in 1 table, which mode upsert does not delete.
+
+Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.

@@ -150,6 +150,19 @@ func TestRunApply(t *testing.T) {
 			wantCalls:  diffs,
 		},
 		{
+			// The apply prints the lines of the stored rows that the
+			// declaration lacks with its plan, and does nothing with them
+			// (ADR-0046).
+			name:     "nothing to change but stored rows that the declaration lacks",
+			files:    twoTables,
+			session:  &fakeSession{diffs: map[declaration.TableName]plan.TableDiff{countries: {Undeclared: 3}}},
+			wantCode: exitOK,
+			wantStdout: "No changes. There is nothing to apply.\n" +
+				"geo.countries: 3 stored rows are not declared, which mode upsert does not delete\n" +
+				"Not declared: 3 stored rows in 1 table, which mode upsert does not delete.\n",
+			wantCalls: diffs,
+		},
+		{
 			name:       "changes",
 			files:      twoTables,
 			session:    &fakeSession{diffs: newPlan},
@@ -197,7 +210,7 @@ func TestRunApply(t *testing.T) {
 				"Plan: 0 to insert, 0 to update, 1 to delete in 2 tables.\n" +
 				"1 table without changes is not shown.\n" +
 				"\n" +
-				"Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.\n",
+				"Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.\n",
 			wantCalls: diffs,
 		},
 		{
@@ -258,6 +271,125 @@ func TestRunApply(t *testing.T) {
 			wantStdout: planOfGold,
 			wantStderr: "kortopi: connection reset\n" + nothingChanged,
 			wantCalls:  append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "Commit"),
+		},
+		{
+			// The sequence of a column that the apply writes values into
+			// moves last before the commit (ADR-0045).
+			name:  "a sequence that moves",
+			files: twoTables,
+			session: &fakeSession{diffs: newPlan, sequences: map[declaration.TableName][]plan.Sequence{plans: {
+				{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+			}}},
+			wantCode: exitOK,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1) +
+				"\nApplied: 1 inserted, 0 updated, 0 deleted.\n" +
+				"Sequence app.plans_id_seq of app.plans (id): next value 2 -> 3.\n",
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+		},
+		{
+			// A rollback does not move a sequence back, so the last line
+			// names the sequences that moved before the commit failed.
+			name:  "the commit fails after a sequence moved",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				fail: map[string]error{"Commit": errDB},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: connection reset\n" +
+				"kortopi: nothing was changed but the sequences that the apply had moved before its commit, which a rollback does not move back, " +
+				"so they only skip values: app.plans_id_seq to next value 3\n",
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+		},
+		{
+			// A move that an interrupt stopped before the apply could read
+			// the sequence again may have moved it forward, and the last
+			// line says so.
+			name:  "a move that may have moved the sequence",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				moved: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3", Unknown: true},
+				}},
+				fail: map[string]error{"MoveSequences app.plans": errDB},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: connection reset\n" +
+				"kortopi: nothing was changed but the sequences that the apply had moved before its commit, which a rollback does not move back, " +
+				"so they only skip values: app.plans_id_seq, which may have moved forward\n",
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans"),
+		},
+		{
+			// A sequence that the role may not move stays, and a note on
+			// standard error says what to do after the commit (ADR-0045).
+			name:  "a sequence that the role may not move",
+			files: twoTables,
+			session: &fakeSession{diffs: newPlan, sequences: map[declaration.TableName][]plan.Sequence{plans: {{
+				Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3",
+				Stays: "the role may not take values from the sequence", Advice: "grant the role USAGE on sequence app.plans_id_seq",
+			}}}},
+			wantCode: exitOK,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n"+
+				"  sequence app.plans_id_seq of column id: next value 2, not moved to 3: the role may not take values from the sequence: "+
+				"grant the role USAGE on sequence app.plans_id_seq\n", 1) +
+				"\nApplied: 1 inserted, 0 updated, 0 deleted.\n" +
+				"Sequence app.plans_id_seq of app.plans (id): next value 2, not moved to 3: the role may not take values from the sequence.\n",
+			wantStderr: "note: sequence app.plans_id_seq of column id of table app.plans: next value 2, not moved to 3: " +
+				"the role may not take values from the sequence: grant the role USAGE on sequence app.plans_id_seq\n",
+			wantCalls: append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+		},
+		{
+			// Whether or not the commit was made, the sequences that moved
+			// before it stay moved.
+			name:  "the outcome of the commit is not known after a sequence moved",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				fail: map[string]error{"Commit": fmt.Errorf("commit the apply: %w", apply.ErrUnknownOutcome)},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: commit the apply: " + apply.ErrUnknownOutcome.Error() + "\n" +
+				"kortopi: whether or not the commit was made, the sequences that the apply had moved before it stay moved, " +
+				"which only skips values: app.plans_id_seq to next value 3\n",
+			wantCalls:      append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+			outcomeUnknown: true,
+		},
+		{
+			// If the commit was made, the sequences that the apply left
+			// behind need their moves: a note gives each, with its statement.
+			name:  "the outcome of the commit is not known after a sequence stayed behind",
+			files: twoTables,
+			session: &fakeSession{
+				diffs: newPlan,
+				sequences: map[declaration.TableName][]plan.Sequence{plans: {
+					{Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3"},
+				}},
+				moved: map[declaration.TableName][]plan.Sequence{plans: {{
+					Column: "id", Name: plan.SequenceName{Schema: "app", Name: "plans_id_seq"}, Next: "2", Goal: "3", After: "2",
+					Stays: "the statement that moves it failed: lock timeout", Advice: "take 1 value from it, with SELECT 1",
+				}}},
+				fail: map[string]error{"Commit": fmt.Errorf("commit the apply: %w", apply.ErrUnknownOutcome)},
+			},
+			wantCode:   exitError,
+			wantStdout: strings.Replace(planOfGold, "  1 to insert, 0 to update\n", "  1 to insert, 0 to update\n  sequence app.plans_id_seq of column id: next value 2 -> 3\n", 1),
+			wantStderr: "kortopi: commit the apply: " + apply.ErrUnknownOutcome.Error() + "\n" +
+				"note: if the commit was made, sequence app.plans_id_seq of column id of table app.plans: next value 2, not moved to 3: " +
+				"the statement that moves it failed: lock timeout: take 1 value from it, with SELECT 1\n",
+			wantCalls:      append(diffs, "ForeignKeys", "Insert app.plans", "DiffAgain app.plans", "DiffAgain geo.countries", "MoveSequences app.plans", "Commit"),
+			outcomeUnknown: true,
 		},
 		{
 			name:  "the outcome of the commit is not known",
@@ -374,7 +506,11 @@ func TestRunApply(t *testing.T) {
 			if stdout.String() != tt.wantStdout {
 				t.Errorf("kortopi apply stdout =\n%s\nwant\n%s", stdout.String(), tt.wantStdout)
 			}
-			if code == exitError && !tt.outcomeUnknown && !strings.HasSuffix(stderr.String(), nothingChanged) {
+			// The last line says that nothing was changed, but for sequences
+			// that moved before a failed commit, which it names after "but".
+			lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
+			if last := lines[len(lines)-1] + "\n"; code == exitError && !tt.outcomeUnknown &&
+				last != nothingChanged && !strings.HasPrefix(last, strings.TrimSuffix(nothingChanged, "\n")+" but the sequences ") {
 				t.Errorf("kortopi apply stderr =\n%s\nwant the last line %q", stderr.String(), nothingChanged)
 			}
 			wantStderr := strings.ReplaceAll(tt.wantStderr, "{dir}/", dir+string(filepath.Separator))

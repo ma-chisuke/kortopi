@@ -282,7 +282,9 @@ func (s *Session) Commit(ctx context.Context) (err error) {
 		if s.gaveUp() && !errors.As(err, &pgErr) && !errors.Is(err, pgx.ErrTxCommitRollback) {
 			err = errGaveUp
 		}
-		return commitError(err)
+		// A deferred foreign key that the commit refused ended the
+		// transaction.
+		return s.referencedChange(ctx, commitError(err), true)
 	}
 	s.committed = true
 	return nil
@@ -357,10 +359,17 @@ func (lt *loadedTable) matchKeyIndex(index string) bool {
 // the actions of foreign keys that it fires. The statement runs with the
 // settings of the session, and the others with the pinned settings
 // (execWrite).
+//
+// Before the first write, it reads the tables that the foreign keys of the
+// loaded tables reference, for the error of a write that a foreign key
+// refuses after another session changed such a table (referencedChange).
 func (s *Session) write(ctx context.Context, lt *loadedTable, verb string, prepare []batchStatement, sql string) (apply.Count, error) {
+	if err := s.readReferences(ctx); err != nil {
+		return apply.Count{}, err
+	}
 	pick, wrote, failed, isWrite, err := s.execWrite(ctx, prepare, batchStatement{what: verb + " table " + lt.meta.name.String(), sql: sql})
 	if err != nil {
-		return apply.Count{}, lt.writeFailure(failed, isWrite, verb, err)
+		return apply.Count{}, s.referencedChange(ctx, lt.writeFailure(failed, isWrite, verb, err), false)
 	}
 	return apply.Count{Picked: int(pick.RowsAffected()), Wrote: int(wrote.RowsAffected())}, nil
 }
@@ -429,17 +438,28 @@ func conflict(err *pgconn.PgError) bool {
 	return err.Code == "40001" || err.Code == "40P01"
 }
 
+// deferredForeignKey says what a foreign key that fails when its deferred
+// check runs found.
+const deferredForeignKey = "a row refers to a row that does not exist, or a deleted row is still referenced"
+
+// checkDeferredVerb is the verb of adviceFor for the check of the deferred
+// constraints before the first move of a sequence (checkDeferred).
+const checkDeferredVerb = "check the deferred constraints"
+
 // adviceFor says what to do about the error of PostgreSQL in the statement
 // verb on table, for the common cases.
 func adviceFor(err *pgconn.PgError, verb string, table declaration.TableName) string {
 	switch err.Code {
 	case "40001", "40P01":
 		return ErrConflict.Error()
-	case "23503":
+	case foreignKeyViolation:
 		// The table of the error is the referencing table: for a row to
 		// delete, or for an update of a referenced value, it is another table.
-		if verb == "commit" {
-			return "a deferred foreign key failed at the commit: a row refers to a row that does not exist, or a deleted row is still referenced"
+		switch verb {
+		case "commit":
+			return "a deferred foreign key failed at the commit: " + deferredForeignKey
+		case checkDeferredVerb:
+			return "a deferred foreign key failed before the moves of the sequences, as it would at the commit: " + deferredForeignKey
 		}
 		if verb == "delete from" || (verb == "update" && err.TableName != table.Name) {
 			return "the row is still referenced by other rows: change or remove those rows first, or keep the row in the declaration"

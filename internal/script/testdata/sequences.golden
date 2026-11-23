@@ -1,0 +1,41 @@
+-- Written by kortopi from the data directory data, against the database shop.
+-- It is the difference at the moment of the plan: 2 to insert, 1 to update, 1 to delete in 3 tables.
+-- Run the statements in one transaction.
+
+-- These settings make the values below mean what they meant to the plan. SET LOCAL keeps them until the end of the transaction.
+SET LOCAL settings;
+
+-- app.plans: 1 to insert
+INSERT INTO app.plans (1, n1);
+
+-- geo.regions: 1 to update
+UPDATE geo.regions SET 1 columns WHERE (1);
+
+-- geo.cities: 1 to insert
+INSERT INTO geo.cities (10, n10);
+
+-- The deletions, in the reverse order of the foreign keys. An apply makes them only with --allow-delete,
+-- so they are comments here: remove the "-- " before every line of a statement to run it.
+
+-- geo.cities: 1 to delete
+-- DELETE FROM geo.cities WHERE (3);
+
+-- The sequences of the columns that the statements above write values into, moved as an apply by the role of the plan moves them,
+-- last before its commit. Each statement reads the largest value of its column when it runs, or the smallest for a sequence that
+-- counts down, then its sequence, and takes values from it with nextval until the next one lies beyond them, or, to move it further
+-- than 100000 values, sets it with setval to what it read. It does nothing to a sequence beyond them already, and a move is not
+-- rolled back with the transaction. A statement runs only for a sequence that the plan shows moving, a move that the role of the
+-- plan may make: for a role that may take values from the sequence and may not set it, without setval, which leaves a sequence
+-- that needs more than 100000 values, and says so in the column how of its row. The others are comments under their reason:
+-- remove the "-- " before each line of a statement to run it.
+
+-- geo.cities: sequence geo.cities_id_seq of column id: next value 4 -> 11
+MOVE SEQUENCE geo.cities_id_seq BEYOND geo.cities.id;
+-- geo.cities: sequence geo.ranks of column rank: next value 2, not moved: the sequence cycles
+-- geo.cities: sequence geo.codes of column code: next value 2, not moved to 9: the role may not take values from the sequence: grant the role USAGE on sequence geo.codes
+-- MOVE SEQUENCE geo.codes BEYOND geo.cities.code;
+
+-- geo.regions: sequence geo.names of column name: not moved: the role may not read the sequence: grant the role SELECT and UPDATE on sequence geo.names
+-- MOVE SEQUENCE geo.names BEYOND geo.regions.name;
+-- geo.regions: sequence geo.region_ranks of column rank: could not be read: PostgreSQL ended the read: lock timeout: an apply reads it again, and moves it if it can
+-- MOVE SEQUENCE geo.region_ranks BEYOND geo.regions.rank;

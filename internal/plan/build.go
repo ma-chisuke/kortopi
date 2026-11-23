@@ -32,7 +32,10 @@ import (
 // the deletions of the plan would delete or change through a foreign key,
 // which Build learns when it asks the database for the effect of the
 // deletions, once every table is compared (ADR-0039); such mistakes of all
-// tables are reported together after the comparison. An error of the database stops the
+// tables are reported together after the comparison. For a table whose plan
+// writes explicit values into columns that own a sequence, Build asks the
+// database where the sequences stand and where an apply would move them
+// (ADR-0045). An error of the database stops the
 // build at once. The contract does not tie such an error to one table, so
 // Build cannot tell an error in the rows of one table, after which the next
 // table could still be compared, from an error of the session, such as a
@@ -126,9 +129,14 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 			return nil, joinAfter(errs, err)
 		}
 		tables[i].Diff = diff
+		dt := &decl.Tables[i]
 		if n := len(diff.Inserts); n > 0 {
-			dt := &decl.Tables[i]
 			errs = append(errs, missingValues(dt, dt.Path(decl.Dir), settingsFile, infos[dt.Name], tables[i].OnInsert, n)...)
+		}
+		if columns := writtenColumns(&tables[i], infos[dt.Name]); len(columns) > 0 {
+			if tables[i].Sequences, err = db.Sequences(ctx, dt.Name, columns); err != nil {
+				return nil, joinAfter(errs, err)
+			}
 		}
 	}
 	conflicts, err := effects(ctx, db, decl, tables)

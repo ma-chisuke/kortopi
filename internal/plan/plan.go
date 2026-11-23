@@ -51,6 +51,16 @@ type Database interface {
 	// the plan, also when there is no row to insert. A refused value does not
 	// end the session; any other error is an error of the database.
 	CheckValues(ctx context.Context, table declaration.TableName, values []config.InsertValue) ([]RefusedValue, error)
+
+	// Sequences reports, for the named columns of a table, which own a
+	// sequence and which the plan of the table writes explicit values into,
+	// where each sequence stands and where an apply would move it, beyond
+	// the values of its column after the apply, or why the apply leaves it
+	// where it is (ADR-0045). It leaves out a sequence whose next value lies
+	// beyond those values already. Build calls it after Diff compared the
+	// table, for a table with rows to insert or to update. An implementation
+	// reads the sequences, and moves none of them.
+	Sequences(ctx context.Context, table declaration.TableName, columns []string) ([]Sequence, error)
 }
 
 // RefusedValue is a value of on_insert that the database does not read by
@@ -161,6 +171,12 @@ type ColumnInfo struct {
 	// row, so it may be part of the match key, but an update cannot change
 	// it, so it cannot be a compared column.
 	IdentityAlways bool
+	// Sequence is true for a column that owns a sequence that gives it its
+	// values: an identity column, or a column of an integer type whose
+	// default takes the next value of a sequence that the column owns, as
+	// serial makes it. An apply that writes explicit values into the column
+	// moves the sequence beyond them (ADR-0045).
+	Sequence bool
 }
 
 // DiffRequest names what Diff compares.
@@ -181,6 +197,8 @@ type DiffRequest struct {
 	Pending []string
 	// Updates and Deletes say whether the mode of the table allows these
 	// kinds of change. The database does not compute a kind that is false.
+	// When Deletes is false, the database counts instead the stored rows
+	// that no declared row matches, into TableDiff.Undeclared (ADR-0046).
 	Updates bool
 	Deletes bool
 	// OnInsert holds the values of on_insert whose columns the table has,
@@ -226,6 +244,19 @@ type TableDiff struct {
 	Inserts []Row
 	Updates []Update
 	Deletes []Row
+	// Undeclared counts, for a table whose mode deletes no row, the stored
+	// rows that no declared row matches by the match key: the rows that a
+	// table of mode sync would show as rows to delete (ADR-0046). The mode
+	// deletes none of them, so they are no change of the plan, and a plan
+	// shows only their number. It is 0 for a table of mode sync, whose rows
+	// to delete are those rows.
+	Undeclared int
+	// Uncounted says why the database could not count those rows, as a
+	// phrase of the database package, such as "PostgreSQL ended the count:
+	// ...", or is empty when it counted them. The plan goes on without the
+	// count, so that the count never turns a plan that would succeed into a
+	// failure (ADR-0046).
+	Uncounted string
 }
 
 // Table is the plan of one table.
@@ -256,6 +287,12 @@ type Table struct {
 	// through foreign keys, at every depth (ADR-0039). It is empty for a
 	// table without rows to delete.
 	Effect Effect
+	// Sequences holds the sequences of the columns that the plan of the
+	// table writes explicit values into, which an apply moves beyond those
+	// values, or leaves where they are with the reason, in the order of the
+	// columns of the table (ADR-0045). A sequence whose next value lies
+	// beyond the values of its column already is not among them.
+	Sequences []Sequence
 }
 
 // Plan is the difference between a declaration and a database.

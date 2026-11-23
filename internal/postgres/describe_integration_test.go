@@ -79,14 +79,14 @@ func TestDescribe(t *testing.T) {
 				name("s", "keys"): {
 					Exists: true,
 					Columns: []plan.ColumnInfo{
-						{Name: "id", NotNull: true, IdentityAlways: true, HasDefault: true},
+						{Name: "id", NotNull: true, IdentityAlways: true, HasDefault: true, Sequence: true},
 						{Name: "code", NotNull: true},
 						{Name: "x", NotNull: true},
 						{Name: "y", NotNull: true},
 						{Name: "z"},
 						{Name: "w"},
 						{Name: "doubled", Generated: true, HasDefault: true},
-						{Name: "counter", NotNull: true, HasDefault: true},
+						{Name: "counter", NotNull: true, HasDefault: true, Sequence: true},
 					},
 					PrimaryKey: []string{"id"},
 					// Sorted by the name of the index.
@@ -150,12 +150,12 @@ func TestDescribe(t *testing.T) {
 					Columns: []plan.ColumnInfo{
 						{Name: "plain", NotNull: true},
 						{Name: "with_default", HasDefault: true},
-						{Name: "serial_id", NotNull: true, HasDefault: true},
+						{Name: "serial_id", NotNull: true, HasDefault: true, Sequence: true},
 						{Name: "by_domain", HasDefault: true},
 						{Name: "by_outer", HasDefault: true},
 						{Name: "by_plain"},
-						{Name: "always", NotNull: true, IdentityAlways: true, HasDefault: true},
-						{Name: "by_default", NotNull: true, HasDefault: true},
+						{Name: "always", NotNull: true, IdentityAlways: true, HasDefault: true, Sequence: true},
+						{Name: "by_default", NotNull: true, HasDefault: true, Sequence: true},
 						{Name: "generated", Generated: true, HasDefault: true},
 					},
 				},

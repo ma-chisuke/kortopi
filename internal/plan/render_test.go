@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -38,6 +39,35 @@ func name(schema, table string) declaration.TableName {
 // unchangedTable returns the plan of a table without changes.
 func unchangedTable(schema, table string) Table {
 	return Table{Name: name(schema, table), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"}}
+}
+
+// withUndeclared returns t holding n stored rows that the declaration
+// lacks.
+func withUndeclared(t Table, n int) Table {
+	t.Diff.Undeclared = n
+	return t
+}
+
+// manyUndeclared returns n tables of schema app in mode upsert without
+// changes, the table number i with i stored rows that the declaration lacks,
+// but the table number uncounted, whose such rows are not counted.
+func manyUndeclared(n, uncounted int) []Table {
+	tables := make([]Table, n)
+	for i := range tables {
+		tables[i] = withUndeclared(unchangedTable("app", fmt.Sprintf("t%02d", i+1)), i+1)
+		if i+1 == uncounted {
+			tables[i] = withUncounted(withUndeclared(tables[i], 0))
+		}
+	}
+	return tables
+}
+
+// withUncounted returns t whose stored rows that the declaration lacks the
+// database could not count, because a statement timeout ended the count.
+func withUncounted(t Table) Table {
+	t.Diff.Uncounted = "PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): " +
+		"statement_timeout of the session, or another session, cancelled it: allow the session more time to count them"
+	return t
 }
 
 // insertTable is a table of schema app in mode insert without rows to
@@ -263,6 +293,93 @@ func TestRender(t *testing.T) {
 			}},
 		},
 		{
+			// Issue 30: a table of mode upsert holds a stored row that the
+			// declaration lacks, so the empty plan claims no match
+			// (ADR-0046).
+			name: "no_changes_undeclared",
+			plan: &Plan{Tables: []Table{withUndeclared(unchangedTable("geo", "currency"), 1), unchangedTable("geo", "region")}},
+		},
+		{
+			name: "no_changes_insert_undeclared",
+			plan: &Plan{Tables: []Table{
+				withUndeclared(unchangedTable("app", "a"), 2), withUndeclared(insertTable("b"), 1), insertTable("c"),
+			}},
+		},
+		{
+			// A table with a block shows the stored rows that the
+			// declaration lacks after its counts, a table without one on a
+			// line of its own, and the line after Plan: sums them up.
+			name: "undeclared",
+			plan: &Plan{Tables: []Table{
+				withUndeclared(Table{
+					Name: name("app", "countries"), Mode: config.ModeInsert, Key: []string{"code"}, Compare: []string{"name"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("FR"), Values: values("France")}}},
+				}, 1),
+				withUndeclared(unchangedTable("app", "currencies"), 3),
+				withUndeclared(Table{
+					Name: name("app", "plans"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					PendingColumns: []string{"floor"},
+				}, 2),
+				withUndeclared(Table{
+					Name: name("app", "regions"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}},
+				}, 1000),
+				unchangedTable("app", "towns"),
+			}},
+		},
+		{
+			// A count that the database could not make says why, and the
+			// empty plan claims no match (ADR-0046).
+			name: "no_changes_uncounted",
+			plan: &Plan{Tables: []Table{withUncounted(unchangedTable("app", "big")), unchangedTable("app", "small")}},
+		},
+		{
+			// The summary counts the rows of the tables that the database
+			// counted, and the tables that it did not count.
+			name: "uncounted",
+			plan: &Plan{Tables: []Table{
+				withUncounted(Table{
+					Name: name("app", "big"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("1"), Values: values("a")}}},
+				}),
+				withUndeclared(insertTable("codes"), 2),
+				withUncounted(unchangedTable("app", "huge")),
+			}},
+		},
+		{
+			// Tables without a block that hold stored rows that the
+			// declaration lacks are named in one group, five at most, and a
+			// line counts the others (ADR-0046).
+			name: "undeclared_many",
+			plan: &Plan{Tables: append(manyUndeclared(8, 2), Table{
+				Name: name("geo", "zones"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"name"},
+				Diff: TableDiff{Updates: []Update{{Key: values("1"), Changes: []Change{{Column: "name", Old: text("a"), New: text("b")}}}}, Undeclared: 4},
+			}, unchangedTable("geo", "zz"))},
+		},
+		{
+			name: "no_changes_undeclared_many",
+			plan: &Plan{Tables: manyUndeclared(7, 6)},
+		},
+		{
+			// The deletion of a row of a table of mode sync cascades into a
+			// row of a table of mode upsert that the declaration lacks: the
+			// line of that table says only that its mode deletes none of its
+			// rows, and the effect says what the deletion does to it
+			// (ADR-0039, ADR-0046).
+			name: "undeclared_cascade",
+			plan: &Plan{Tables: []Table{
+				{
+					Name: name("app", "child"), Mode: config.ModeUpsert, Key: []string{"id"}, Compare: []string{"parent_id", "note"},
+					Diff: TableDiff{Undeclared: 1},
+				},
+				{
+					Name: name("app", "parent"), Mode: config.ModeSync, Key: []string{"id"}, Compare: []string{"name"},
+					Diff:   TableDiff{Deletes: []Row{{Key: values("2")}}},
+					Effect: Effect{Steps: []Step{step(1, name("app", "child"), "child_parent_id_fkey", name("app", "parent"), "CASCADE", 1, "parent_id")}},
+				},
+			}},
+		},
+		{
 			// The values of on_insert print with the rows to insert, as the
 			// settings write them, and not for a table without such rows.
 			name: "on_insert",
@@ -342,6 +459,56 @@ func TestRender(t *testing.T) {
 					// Rows to delete that nothing references have no block.
 					Name: name("geo", "zones"), Mode: config.ModeSync, Key: []string{"code"},
 					Diff: TableDiff{Deletes: []Row{{Key: values("x")}}},
+				},
+			}},
+		},
+		{
+			// The sequences of the columns that a plan writes explicit values
+			// into, after the counts and before the effect of the deletions
+			// (ADR-0045).
+			name: "sequences",
+			plan: &Plan{Tables: []Table{
+				{
+					Name: name("billing", "fees"), Mode: config.ModeSync, Key: []string{"id"}, Compare: []string{"name", "amount"},
+					Diff: TableDiff{
+						Inserts: []Row{{Key: values("3"), Values: values("express", "900")}},
+						Deletes: []Row{{Key: values("1")}},
+					},
+					Effect: Effect{Steps: []Step{step(1, name("billing", "orders"), "orders_fee_fkey", name("billing", "fees"), "NO ACTION", 2, "fee")}},
+					Sequences: []Sequence{
+						{Column: "id", Name: SequenceName{Schema: "billing", Name: "fees_id_seq"}, Next: "3", Goal: "4"},
+						{
+							Column: "amount", Name: SequenceName{Schema: "billing", Name: "fee amount"}, Next: "-2",
+							Stays: "the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is",
+						},
+					},
+				},
+				{
+					Name: name("billing", "tax_rates"), Mode: config.ModeUpsert, Key: []string{"name"}, Compare: []string{"id"},
+					Diff: TableDiff{Updates: []Update{{Key: values("zero"), Changes: []Change{{Column: "id", Old: text("2"), New: text("30")}}}}},
+					Sequences: []Sequence{{
+						Column: "id", Name: SequenceName{Schema: "billing", Name: "tax_rates_id_seq"}, Next: "3", Goal: "31",
+						Stays: "the role may not take values from the sequence",
+						Advice: "grant the role USAGE on sequence billing.tax_rates_id_seq, or take 28 values from it as a role that may, with " +
+							`SELECT pg_catalog.nextval('"billing"."tax_rates_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 28)`,
+					}},
+				},
+				{
+					Name: name("geo", "regions"), Mode: config.ModeInsert, Key: []string{"id"},
+					Diff: TableDiff{Inserts: []Row{{Key: values("7")}}},
+					Sequences: []Sequence{
+						{
+							Column: "id", Name: SequenceName{Schema: "geo", Name: "regions_id_seq"},
+							Stays:  "the role may not read the sequence, so kortopi cannot tell where it stands",
+							Advice: "grant the role SELECT and UPDATE on sequence geo.regions_id_seq",
+						},
+						{
+							Column: "code", Name: SequenceName{Schema: "geo", Name: "region_codes"}, Unread: true,
+							Stays: "PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): " +
+								"another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence",
+							Advice: "an apply reads it again, and moves it if it can",
+						},
+					},
 				},
 			}},
 		},

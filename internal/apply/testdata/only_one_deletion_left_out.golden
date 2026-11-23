@@ -4,4 +4,4 @@ catalog.plans (sync, key: code)
 
 Plan: 0 to insert, 0 to update, 1 to delete in 1 table.
 
-Not deleted: 1 row of 1 table. It is the only difference, so nothing was written. Run apply with --allow-delete to delete it.
+Not deleted: 1 row of 1 table. The plan holds nothing else to write, so nothing was written. Run apply with --allow-delete to delete it.

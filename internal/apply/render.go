@@ -14,10 +14,14 @@ import (
 // also deleted and changed through foreign keys (ADR-0039). When updates
 // found fewer rows to update than the plan shows, a line says which, and that
 // the other writes of the apply had done their work already, as the check
-// before the commit confirmed (ADR-0042). When
+// before the commit confirmed (ADR-0042). A line follows for each sequence
+// of the plan: where the apply moved it, as the database read it after the
+// move, or why it left it, without the advice, which SequenceNotes gives
+// (ADR-0045). When
 // deletions were left out, a line counts them, with what they would also
-// do, and names the flag that allows them (ADR-0018); when they were all that
-// differed, that line stands alone and says that nothing was written. An
+// do, and names the flag that allows them (ADR-0018); when the plan held
+// nothing else to write, that line stands alone and says that nothing was
+// written. An
 // apply that found nothing to change writes nothing more than its plan,
 // which says so.
 func RenderSummary(w io.Writer, r *Result) error {
@@ -40,6 +44,10 @@ func RenderSummary(w io.Writer, r *Result) error {
 		for _, line := range unevenLines(r.Uneven) {
 			b.WriteString(line + "\n")
 		}
+		for _, s := range r.Sequences {
+			fmt.Fprintf(&b, "Sequence %s of %s (%s): %s.\n",
+				plan.FormatSequence(s.Name), plan.FormatTable(s.Table), plan.FormatName(s.Column), plan.SequenceState(&s.Sequence))
+		}
 	}
 	if r.SkippedDeletes > 0 {
 		var tables int
@@ -48,13 +56,16 @@ func RenderSummary(w io.Writer, r *Result) error {
 				tables++
 			}
 		}
-		them, only, their := "them", "They are the only differences", "their"
+		them, their := "them", "their"
 		if r.SkippedDeletes == 1 {
-			them, only, their = "it", "It is the only difference", "its"
+			them, their = "it", "its"
 		}
 		fmt.Fprintf(&b, "Not deleted: %s of %s.", rows(r.SkippedDeletes), plural(tables, "table", "tables"))
 		if !wrote {
-			fmt.Fprintf(&b, " %s, so nothing was written.", only)
+			// The plan can hold more than the deletions, such as stored rows
+			// that a mode deletes none of (ADR-0046), but nothing else that
+			// an apply writes.
+			b.WriteString(" The plan holds nothing else to write, so nothing was written.")
 		}
 		if reach := plan.Reach(totals, "delete", "change"); reach != "" {
 			fmt.Fprintf(&b, " Through foreign keys, %s deletion would also %s.", their, reach)
@@ -63,6 +74,42 @@ func RenderSummary(w io.Writer, r *Result) error {
 	}
 	_, err := w.Write(b.Bytes())
 	return err
+}
+
+// SequenceNotes returns a note for each sequence of an apply that its
+// column still calls to move, after the apply, or that the apply could not
+// read (ADR-0045): where the sequence stands, as the apply read it after its
+// move, why it stays there, and what to do, with the statement that moves
+// it by hand, as in "note: sequence billing.fees_id_seq of column id of
+// table billing.fees: next value 3, not moved to 4: the role may not take
+// values from the sequence: grant ..., or take 1 value from it as a role
+// that may, with SELECT ...". A sequence that moved, or that stays for
+// good, as one that cycles, gets none. kortopi prints the notes on standard
+// error after the summary, as an export prints its notes.
+func SequenceNotes(r *Result) []string {
+	return NotesOf(r.Sequences)
+}
+
+// NotesOf returns the notes of SequenceNotes for sequences, as for the
+// sequences that a commit whose outcome is not known may have left behind
+// (SequencesMovedError.Left).
+func NotesOf(sequences []SequenceMove) []string {
+	var notes []string
+	for _, s := range sequences {
+		if !noted(&s.Sequence) {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("note: sequence %s of column %s of table %s: %s",
+			plan.FormatSequence(s.Name), plan.FormatName(s.Column), plan.FormatTable(s.Table), plan.SequenceText(&s.Sequence)))
+	}
+	return notes
+}
+
+// noted reports whether a sequence of the result of an apply gets a note:
+// one with advice, which a sequence left behind the values of its column
+// has, and one whose position the apply does not know.
+func noted(s *plan.Sequence) bool {
+	return s.Advice != "" || s.Unread || s.Unknown
 }
 
 // unevenLines returns the line of the updates that found fewer rows to

@@ -138,6 +138,7 @@ A service file can change this with the settings of libpq for it, which have no 
 ### Wait for a lock
 
 A plan, an apply, and an export wait while another session holds a lock on a table that they read or write, such as a schema change that runs `ALTER TABLE`, or on rows that an apply updates or deletes.
+A schema change that they waited for can change the table that they then read: they stop when it did ([A schema change during a run](#a-schema-change-during-a-run)).
 Without a lock timeout, they wait without limit, and without a word.
 `--lock-timeout` gives the run one, as a duration such as `10s`, `500ms`, or `1m30s`, from `1ms` to `24h`:
 
@@ -158,6 +159,69 @@ A limit that the session set says `as long as lock_timeout of the session allows
 `statement_timeout` of the session ends a statement that runs too long, for whatever reason, a wait for a lock among them. The error then says that the statement was cancelled, by `statement_timeout` or by another session, and names no flag: kortopi has no flag for it.
 Give every run at deploy time a lock timeout, where a run that waits holds up the deployment ([Run kortopi from scripts](automation.md#at-deploy-time)).
 
+### A schema change during a run
+
+A plan, an apply, and an export take their snapshot with the first statement of their transaction, and read every table in it.
+They take no lock on a declared table until they read it, after they have read the catalogs.
+A schema change that another session commits in between is seen by the read, and not by the snapshot.
+A change that gives the table new storage, as the forms of `ALTER TABLE` that rewrite a table, such as `ALTER COLUMN ... TYPE`, and `TRUNCATE` do, makes the table look empty to a transaction whose snapshot predates it: PostgreSQL calls these commands not MVCC-safe.
+
+So right after kortopi first reads the rows of a table, it checks that the table is the one of its snapshot, and stops when another session, after the snapshot:
+
+- rewrote or truncated the table, or a partition of it;
+- dropped or renamed the table, or replaced it with another table of the same name;
+- attached or detached a partition of it, or created or dropped one.
+
+```text
+kortopi: another session rewrote or truncated table geo.postal_codes after the plan began, so what the plan read from the table may not be what it holds: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+The run exits with status 1, also with `--exit-code`, because a table that a schema change emptied for the run is no drift: a plan prints no plan, an apply writes nothing, and an export writes no file.
+Run it again once the schema change has committed.
+
+kortopi checks the declared tables of the run, and the tables that the deletions reach through foreign keys, which a plan reads to count what the deletions also do ([What the deletions also do](#what-the-deletions-also-do)), each right after its first read.
+It checks the declared tables with rows to delete again after it follows the foreign keys, which reads them again.
+The check of the values of `on_insert`, which comes before, names a declared table in a statement that reads none of its rows, in a savepoint that it rolls back, which gives back the lock of the statement: the first read of the rows is the one that the check follows.
+
+Once a run has read a table, it holds a lock on it until it ends.
+The changes that give the table new storage or a new identity wait for that lock: the forms of `ALTER TABLE` that rewrite a table, `TRUNCATE`, `VACUUM FULL`, `CLUSTER`, `DROP TABLE`, `ALTER TABLE ... RENAME`, and `DETACH PARTITION` without `CONCURRENTLY`. So the check sees every such change.
+`ATTACH PARTITION` and `DETACH PARTITION ... CONCURRENTLY` do not wait for it.
+The statements that ran before an attach did not read the rows of the partition, and the last check does not see an attach that comes after it.
+An apply reads the table again in its writes and in its check before the commit, which find the rows of such a partition as rows that the plan did not show ([kortopi apply](apply.md#the-check-before-the-commit)).
+
+A read that fails is checked too, as a read of a column whose type another session changed, or of a table that it dropped, can fail.
+When the table changed, the error gives the error of the read first, and then the change, as what the failure may come from: it starts as the error of the read, and continues so:
+
+```text
+, and another session rewrote or truncated table geo.postal_codes after the plan began, so the failure may come from that change
+```
+
+An apply also checks a table that a foreign key references when the key refuses a write of the apply, also at the commit for a key deferred to it.
+The apply does not read that table itself, but the check of the key reads it in the snapshot, so a table that another session rewrote after the snapshot looks empty to it, and the key refuses a reference to a row that the table holds.
+The error then names the change before the error of PostgreSQL, without the advice to declare the referenced row:
+
+```text
+kortopi: another session rewrote or truncated table m.country after the apply began, and foreign key "city_country_fkey" of table m.city references table m.country, so the check of the key may not have seen its rows: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table m.city: insert or update on table "city" violates foreign key constraint "city_country_fkey" (detail: Key (country)=(FR) is not present in table "country".) (constraint: city_country_fkey)
+kortopi: nothing was changed
+```
+
+A table that another session dropped after the snapshot and before the run reads the catalogs stops the run as it reads them, as does a table that the deletions reach through foreign keys:
+
+```text
+kortopi: another session dropped or replaced table geo.postal_codes while the plan read the catalogs: nothing was changed: run the plan again, and make schema changes before a run of kortopi, not during one
+```
+
+`VACUUM FULL`, `CLUSTER`, and `ALTER TABLE ... SET TABLESPACE` give a table new storage too, but keep its rows: the run read what the table holds.
+kortopi cannot tell them apart from a rewrite in the catalogs, and stops after them as well.
+
+kortopi does not check what leaves the storage of a table as it is:
+
+- A column dropped after the snapshot makes the read fail with the error of PostgreSQL, such as `column s.lat does not exist`.
+- A declared column added after the snapshot is shown as known after the schema is applied, as the snapshot holds the table ([Tables and columns that wait for a schema change](#tables-and-columns-that-wait-for-a-schema-change)), and gives status 2 with `--exit-code`.
+
+Make schema changes before a run of kortopi, not during one.
+In a deployment, apply the schema first and the rows second, one after the other ([kortopi apply](apply.md#in-a-deployment)). A scheduled drift check that meets a schema change fails with status 1, and passes on its next run ([Run kortopi from scripts](automation.md#a-scheduled-drift-check)).
+
 ## What the session needs
 
 A plan loads the declared rows into temporary tables, so its session must be able to write, and it reads every declared table.
@@ -169,6 +233,7 @@ Before it loads a table, kortopi checks in the catalogs, in this order:
 4. Row-level security does not apply to the role on the table: the table has none enabled, or the role has `BYPASSRLS`, or the role owns a table that does not force row-level security.
 
 PostgreSQL itself checks that the role may connect, with `CONNECT` on the database, and grants `CONNECT` and `TEMPORARY` to `PUBLIC` by default.
+To show where an apply would move the sequence of an identity or `serial` column that it writes values into, a plan reads the sequence, with `SELECT` on it and `USAGE` on its schema; without them, the line of the sequence says so, and the plan goes on ([Sequences](#sequences)). The line also says when the role may not make the move: a walk with `nextval` needs `USAGE` or `UPDATE` on the sequence, and a `setval` needs `UPDATE`.
 A table that waits for a schema change needs none of these, except that a CSV file of such a table is counted in a temporary table, which needs the first.
 
 For a role that does nothing but plan:
@@ -213,6 +278,7 @@ In the database, a plan does the following and nothing else:
 - For each value of `on_insert` of a table that exists, before it loads any row, it creates a temporary table of that column alone inside a savepoint, inserts the value into it, and rolls the savepoint back ([Values that only an insert sets](#values-that-only-an-insert-sets)).
 - For each declared table, it creates a temporary table inside a savepoint, loads the declared rows into it, and compares them with the real table. The temporary tables stay until the plan ends, because the effect of the deletions reads the declared rows of every table.
 - When rows are to be deleted, it follows the foreign keys that reference them with queries, and keeps the rows that it reaches, by their identities, in one more temporary table. It deletes no row.
+- For a column with a sequence that its rows to insert or to update write values into, it reads the largest value of the column and where the sequence stands. It calls neither `nextval` nor `setval`.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
 
 Press Ctrl-C to stop a plan, or send it SIGTERM.
@@ -275,21 +341,23 @@ Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.
 | `~ code=pro  name: Pro -> "Pro Plan"` | A row to update: its key, and each column that changes, as `column: stored -> declared`. Columns that do not change are not shown. |
 | `- code=legacy` | A row to delete: its key. Only a table in mode `sync` deletes rows. |
 | `1 to insert, 1 to update, 1 to delete` | The counts of the table, for the kinds of change that its mode computes. |
+| `2 stored rows are not declared, which mode upsert does not delete` | The stored rows that a table of mode `upsert` or `insert` holds and the declaration lacks, none of which the mode deletes ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)). |
+| `sequence catalog.plans_id_seq of column id: next value 3 -> 4` | The sequence of a column that the rows write values into, and where an apply would move it ([Sequences](#sequences)). |
 | `Plan: 3 to insert, 2 to update, 1 to delete in 3 tables.` | The counts of the whole plan, and the number of declared tables in it. |
 
 Tables are sorted by schema and then by name.
 Within a table, the rows to insert come first, then the rows to update, then the rows to delete, each sorted by the match key.
 
 The count line of a table shows only the kinds of change that its mode computes: `insert` shows inserts, `upsert` inserts and updates, and `sync` all three.
-A table in mode `upsert` never prints `0 to delete`, because kortopi never looks for rows to delete in it: rows that the declaration lacks may exist and are left alone.
+A table in mode `upsert` never prints `0 to delete`, because its mode deletes no row: a line counts the stored rows that the declaration lacks instead ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
 
-A table without changes is not shown, and the last line counts such tables:
+A table without changes is not shown, unless it holds stored rows that the declaration lacks, and the last line counts the tables that are not shown:
 
 ```text
 2 tables without changes are not shown.
 ```
 
-When nothing differs and nothing waits for a schema change, the plan is one line:
+When nothing differs, nothing waits for a schema change, no table has mode `insert`, no table holds stored rows that the declaration lacks, and no count of them failed, the plan is one line:
 
 ```text
 No changes. The database matches the declaration.
@@ -305,6 +373,58 @@ When the plan has such a table, the empty plan does not say that the database ma
 No changes. There is nothing to apply.
 A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
 ```
+
+### Stored rows that the declaration lacks
+
+A table of mode `upsert` or `insert` deletes no row, so it can hold stored rows that the declaration lacks: a row that an admin screen added, or a row whose declaration a reverted commit took away.
+A plan counts them, by the match key, as a table of mode `sync` finds its rows to delete, and shows their number, not the rows.
+The mode deletes none of them, so they are no change of the plan.
+
+A table with a block shows the count after its counts.
+The tables without a block that hold such rows are listed in one group after the blocks: the first five of them, in the order of the plan, and one line that counts the others and their rows.
+One line after `Plan:` sums them up:
+
+```text
+geo.regions (upsert, key: code)
+  + code=kanto  name=Kanto
+  1 to insert, 0 to update
+  2 stored rows are not declared, which mode upsert does not delete
+
+geo.currency: 1 stored row is not declared, which mode upsert does not delete
+
+Plan: 1 to insert, 0 to update, 0 to delete in 2 tables.
+Not declared: 3 stored rows in 2 tables, which mode upsert does not delete.
+```
+
+With more than five tables in the group, its last line counts the others, as in `45 more tables hold 45 stored rows that are not declared.`
+
+When nothing else differs, the plan does not say that the database matches the declaration, and gives these lines after its first:
+
+```text
+No changes. There is nothing to apply.
+geo.currency: 1 stored row is not declared, which mode upsert does not delete
+Not declared: 1 stored row in 1 table, which mode upsert does not delete.
+```
+
+- The rows count for no difference: `--exit-code` gives status 0 when they are all that differs ([Exit status and drift](#exit-status-and-drift)). A check that should fail on them can look for the line that starts with `Not declared:`.
+- The lines say only what the mode does. The writes of an apply can still delete or change such a row: the cascade of a foreign key from a table whose rows the apply deletes, as the plan shows under that table ([What the deletions also do](#what-the-deletions-also-do)), the action `ON UPDATE` of a foreign key whose referenced key the apply updates, or a trigger.
+- To list the rows, or to delete them, give the table mode `sync`: a plan then shows each of them as a row to delete, and an apply deletes them only with `--allow-delete`.
+- An apply prints the same lines with its plan.
+
+To count the rows, a plan of a table of mode `upsert` or `insert` now reads the key of every stored row of the table, where it read only the declared keys before, as a plan of mode `sync` reads them to find its rows to delete.
+It needs no privilege beyond those of a plan ([What the session needs](#what-the-session-needs)).
+On one machine, against a table of 200,000 rows, the count took about 6 percent of the time that the comparison of the table took with a declaration of 199,000 of its rows, and 42 to 46 percent with a declaration of 1,000 of them: the comparison of a small declaration of a large table now takes about 1.7 to 1.8 times as long ([ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.md)).
+
+The count runs in a savepoint of its own.
+When PostgreSQL ends it with an error, such as a `statement_timeout` of the role, the plan goes on without it, and the line of the table says so, and why:
+
+```text
+geo.big: the stored rows that are not declared are not counted, because PostgreSQL ended the count: ERROR: canceling statement due to statement timeout (SQLSTATE 57014): statement_timeout of the session, or another session, cancelled it: allow the session more time to count them
+Not declared: the rows of 1 table are not counted.
+```
+
+The exit status is what it would be without the count, and an empty plan with such a table does not say that the database matches the declaration.
+An interrupt during the count, or a connection that breaks, stops the plan as before.
 
 ### Tables and columns that wait for a schema change
 
@@ -371,6 +491,40 @@ Plan: 2 to insert, 1 to update, 0 to delete in 1 table.
 - kortopi never compares these columns, so they never show as a change, and a row that exists keeps what it holds.
 - A column of `on_insert` that the table lacks waits for the schema change, as a declared column does, and its line says where the name comes from: `column floor of on_insert in kortopi.toml: known after the schema is applied`.
 - The plan reads every value of a table that exists by the type of its column before it loads any row, also when no row is to insert. The values of a table that waits for the schema change are checked once the table exists. For each value, inside a savepoint of its own that it rolls back, it makes a temporary table of that column alone, which takes its type from the column of the table, and inserts the value into it. So no other column gets a value or a default, and the role needs `SELECT` on these columns, to read their types, as on the declared columns ([What the session needs](#what-the-session-needs)).
+
+### Sequences
+
+When the rows to insert or to update of a table write values into an identity or `serial` column, an apply moves the sequence of the column beyond them, last before its commit, so that the next insert of the application does not take one of them ([kortopi apply](apply.md#sequences)).
+The plan shows the move after the counts of the table:
+
+```text
+billing.fees (upsert, key: id)
+  + id=3  name=express  amount=900
+  1 to insert, 0 to update
+  sequence billing.fees_id_seq of column id: next value 3 -> 4
+```
+
+- `next value 3 -> 4` is the value that the sequence gives next, and the value that it would give next after the move: the first value of the sequence, at its increment, beyond the largest value of the column, or below the smallest for a sequence that counts down.
+- The plan counts the stored rows and the declared values that the apply would write. A stored row that the apply updates or deletes counts with its stored value, so an apply, which computes the move again after its writes, can move a sequence less far.
+- A sequence that gives values beyond the column already gets no line.
+- A sequence that the apply would leave where it is gets a line that says why, and what to do:
+
+  ```text
+  sequence billing.fees_id_seq of column id: next value 3, not moved to 4: the role may not take values from the sequence: grant the role USAGE on sequence billing.fees_id_seq, or take 1 value from it as a role that may, with SELECT pg_catalog.nextval('"billing"."fees_id_seq"'::pg_catalog.regclass) FROM pg_catalog.generate_series(1, 1)
+  sequence billing.tax_rates_id_seq of column id: not moved: the role may not read the sequence, so kortopi cannot tell where it stands: grant the role SELECT and UPDATE on sequence billing.tax_rates_id_seq
+  sequence billing.codes of column code: next value 1, not moved: the sequence cycles, so it has no next value beyond the values of the column for good, and kortopi leaves it as it is
+  sequence billing.ranks of column rank: next value 1, not moved: the sequence gives no value beyond 100, the largest value of the column, because its MAXVALUE is 100: raise its MAXVALUE
+  sequence billing.levels of column level: next value 1, not moved: the sequence gives no value beyond 32767, the largest value of the column, because 32767 is the largest value of its type smallint: give the column and its sequence the type bigint
+  ```
+
+- The plan reads each sequence with `SELECT` on it and `USAGE` on its schema, and moves none of them. It decides by the move that the position of the sequence calls for whether the role may make it: a walk with `nextval` needs `USAGE` or `UPDATE` on the sequence, and a move of more than 100,000 values, which sets it with `setval`, needs `UPDATE`. A sequence that the role may not read or move does not stop the plan, and the exit status does not change. The advice names the sequence and its schema as identifiers of SQL, quoted where PostgreSQL needs it.
+- The read of a sequence waits for a lock that another session holds on it 5 seconds at most, or for `--lock-timeout` when it is shorter, in a savepoint of its own that gives `lock_timeout` its value again afterwards. When PostgreSQL ends the read, by that bound or another error, the plan says so and goes on, and an apply tries the move all the same:
+
+  ```text
+  sequence billing.fees_id_seq of column id: could not be read: PostgreSQL ended the read: ERROR: canceling statement due to lock timeout (SQLSTATE 55P03): another session held a lock on the sequence for more than 5s, the longest that kortopi waits for a lock on a sequence: an apply reads it again, and moves it if it can
+  ```
+
+- A sequence that another session dropped, or renamed and replaced with another under its name, after the plan began, does not stop the plan either: the plan names the sequence by its name, which names another sequence, or none, then. Its line says `could not be read: another session dropped or replaced the sequence after the run began: plan again, which reads the sequence that the column owns then`.
 
 ### What the deletions also do
 
@@ -503,11 +657,13 @@ INSERT INTO "facility"."rooms" ("id", "room_type", "note") VALUES
 
 ### Read the script
 
-- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan, with the lines that sum up what the deletions also do through foreign keys. After the header come the tables and the columns that wait for a schema change, one comment line each.
+- The header says where the script comes from: the data directory, and the database by its name alone, never a host, a user, or a password. It is the difference at the moment of the plan, and its counts are those of the plan, with the lines that sum up what the deletions also do through foreign keys and the stored rows that the declaration lacks. After the header come the tables and the columns that wait for a schema change, one comment line each, and after them, as comments, the group of the tables that hold stored rows that the declaration lacks, with five tables at most and a line that counts the others ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
 - After a comment, three `SET LOCAL` statements pin, until the end of the transaction, the settings that change how a literal of the script reads ([Values in the script](#values-in-the-script)). When the script holds values of `on_insert`, the comment says that the settings make the values mean what they meant to the plan "but those of on_insert", which the session reads in its own settings.
 - When an apply would defer foreign keys of a cycle, a `SET CONSTRAINTS ... DEFERRED` follows ([kortopi apply](apply.md#foreign-keys-and-cycles)). When another table of the schema has a constraint of the same name that is not deferrable, the plan fails with the error of an apply ([kortopi apply](apply.md#a-constraint-of-the-same-name)).
 - The tables follow in the order of an apply, from referenced tables to referencing ones, each under a comment line with its counts. A table gets one `INSERT` for its rows to insert, each row on a line of its own, and one `UPDATE` for each row to update, which sets only the columns that differ.
-- The deletions come last, in the reverse order, as comments: one `DELETE` for each table, which lists the keys of its rows one on each line ([Deletions](#deletions)).
+- The deletions come next, in the reverse order, as comments: one `DELETE` for each table, which lists the keys of its rows one on each line ([Deletions](#deletions)).
+- Last come the sequences, under comment lines that say what their statements do ([Sequences](#sequences)). Each sequence gets its line of the plan as a comment, and under it the statement that an apply runs: when the script runs, it reads the largest value of the column, after the inserts and updates of the script, and the sequence, and moves the sequence beyond the column with `nextval`, or with `setval` for a move of more than 100,000 values. A sequence beyond the column already, as after the application took values when the script runs later than the plan, stays where it is.
+- The script does what an apply by the role of the plan would do, and never fails on a sequence. The statement runs only for a sequence that the plan shows moving, which the role of the plan may read and move. For a role that may take values from the sequence and may not set it, the statement has no `setval`: it leaves a sequence that needs more than 100,000 values where it is, and its row says so in the column `how`: `left: it needs setval, which the role of the plan may not run`. Under every other line that calls for a move, or of a sequence that the plan could not read, the statement is a comment, for a role that may run it, and the line above it gives the reason, as the plan does. A sequence that cycles, or whose limit comes first, gets its comment line and no statement.
 - Every name is in double quotes, because a name that is plain on one version of PostgreSQL can be a keyword on another. An ordinary table has `ONLY`, as in an apply, and a partitioned table does not.
 - A table that waits for a schema change has no statement, and a column that waits for one is left out of the statements of its table.
 - The `INSERT` of a table with values of `on_insert` names their columns after the declared ones and gives every row the values, under two comment lines:
@@ -527,11 +683,13 @@ A plan with nothing to do gives one line:
 -- No changes: the database matches the declaration, so there is nothing to do.
 ```
 
-When the plan has a table of mode `insert`, it gives the lines of the empty plan as comments instead:
+When the plan has a table of mode `insert`, or a table that holds stored rows that the declaration lacks, it gives the lines of the empty plan as comments instead:
 
 ```sql
 -- No changes: there is nothing to do.
 -- A table of mode insert is compared by its key only, not by its values: notification.mail_templates.
+-- geo.currency: 1 stored row is not declared, which mode upsert does not delete
+-- Not declared: 1 stored row in 1 table, which mode upsert does not delete.
 ```
 
 A plan in which only tables and columns wait for a schema change gives the header and this line:
@@ -559,7 +717,8 @@ A tool of versioned migrations usually runs each file in a transaction of its ow
 The `SET LOCAL` statements need the transaction: outside one, they only warn.
 `SET LOCAL client_encoding` applies to the statements that the client sends after it as messages of their own, as `psql` does. A client that sends the whole script as one message has had it read in its own encoding already, so it must connect with `client_encoding` set to UTF8, as database drivers usually do.
 
-After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, the values that a trigger or a rule made other than the declaration says, or nothing.
+After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, and the values that a trigger or a rule made other than the declaration says.
+It also counts again the stored rows that the declaration lacks, which give no status of their own ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
 
 ### Deletions
 
@@ -630,7 +789,7 @@ kortopi checks in this order:
 
 1. It reads `kortopi.toml` and the files of the declaration, and narrows the plan with `--schema`. A mistake here is reported before kortopi connects to a database, and the first mistake stops the plan.
 2. It connects, reads the catalogs, and checks the match key, the declared columns, and the mode of every table, that no partition is declared together with a partitioned table above it, that no declared name differs from a name of the database only in white space or case, and that no table has a rule that would rewrite the statements of an apply ([Declaration files](declaration.md#a-table-with-a-rule)). With `--no-pending`, it also checks that the database has every declared table and column. It checks the columns of `on_insert` too, and lets PostgreSQL read their values. Every mistake of every table is reported together. A unique key that exists but cannot match rows, because its index uses another collation or operator class than its column, is named in the error with the reason ([Declaration files](declaration.md#a-key-that-cannot-match-rows)).
-3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, or another error of the database.
+3. It loads and compares the tables one at a time. The first error stops the plan: a missing privilege, row-level security, a value that its column rejects, a key that two rows hold, NULL in a key or in a NOT NULL column, a word for the current time in a date or time column, a table that another session changed after the plan began ([A schema change during a run](#a-schema-change-during-a-run)), or another error of the database.
 4. It checks that the rows to insert of each table get a value for every column that is `NOT NULL` and has no default. A column that neither the declaration nor `on_insert` names is a mistake, and the mistakes of all tables are reported together, before an error of step 3 if one stopped the plan.
 5. When rows are to be deleted, it follows the foreign keys that reference them. A declared row that the deletions would delete, or whose declared column they would set to NULL or to its default, is a mistake, reported with those of step 4 ([kortopi apply](apply.md#declared-rows-in-the-way)).
 6. With `--format sql`, it reads the foreign keys and writes the script. An error here starts with `write the plan as SQL:`.
@@ -641,8 +800,8 @@ kortopi checks in this order:
 
 | Status | Meaning |
 |---|---|
-| 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare. |
-| 1 | The plan failed: a wrong flag, a mistake in the declaration, a table or a column that the database lacks with `--no-pending`, a database error, or an interrupt. |
+| 0 | The plan was made. With `--exit-code`, there is also nothing to apply: the database matches the declaration, but for the values of the tables of mode `insert`, which a plan does not compare, and for the stored rows that tables of mode `upsert` and `insert` hold beyond the declaration, which a plan counts and their modes do not delete. |
+| 1 | The plan failed: a wrong flag, a mistake in the declaration, a table or a column that the database lacks with `--no-pending`, a table that another session changed during the plan, a database error, or an interrupt. |
 | 2 | Only with `--exit-code`: the plan is not empty. |
 
 Without `--exit-code`, a plan that shows changes exits with 0, so a pull request that changes master data does not fail on its own plan.
@@ -650,18 +809,25 @@ Without `--exit-code`, a plan that shows changes exits with 0, so a pull request
 With `--exit-code`, a plan detects drift: any row to insert, update, or delete, and any table or column that waits for a schema change, gives status 2.
 With `--no-pending` too, such a table or column gives status 1 instead.
 It works the same with `--format sql`.
-A scheduled job that compares the database with the declaration of its main branch tells the three outcomes apart:
+The stored rows that a table of mode `upsert` or `insert` holds and the declaration lacks are no drift for the status: their mode deletes none of them, so they are no change of the plan, and the plan counts them on its lines instead ([Stored rows that the declaration lacks](#stored-rows-that-the-declaration-lacks)).
+The status is the same when the plan could not count them.
+A scheduled job that compares the database with the declaration of its main branch prints the plan to its log, tells the three outcomes apart, and can look for the line that sums up those rows too:
 
 ```sh
 status=0
-kortopi plan --dir data --exit-code || status=$?
+kortopi plan --dir data --exit-code > plan.txt || status=$?
+cat plan.txt
 case "$status" in
-  0) echo "the database matches the declaration" ;;
+  0) echo "there is nothing to apply" ;;
   2) echo "the database has drifted from the declaration" ;;
   *) echo "the check failed" ;;
 esac
+if grep -q '^Not declared:' plan.txt; then
+  echo "tables of mode upsert or insert hold stored rows that the declaration lacks"
+fi
 ```
 
-The `|| status=$?` keeps a shell with `set -e` from stopping on status 2.
+The `|| status=$?` keeps a shell with `set -e` from stopping on status 2, and a `grep` that finds no line does not stop it either, because it is the condition of the `if`.
+A plan that fails prints its error on standard error, which the job prints to its log as it comes.
 
-The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md), and [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md).
+The reasons for this behavior are in [ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.md), [ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.md), [ADR-0021](../adr/ADR-0021-cli-with-subcommands.md), [ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.md), [ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.md), [ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.md), [ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), and [ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.md).
