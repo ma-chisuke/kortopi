@@ -50,7 +50,11 @@ test-go:
 # containers, so they need Docker, and they fail without it (ADR-0019). They
 # take a minute or more, so they run in check-all. There, other checks run at
 # the same time and slow them down, so the time limit of `go test` is raised.
-GO_INTEGRATION := -tags integration -timeout 20m
+# The packages run one at a time (-p 1): each package with integration tests
+# starts four servers of its own and runs its tests in parallel, and two such
+# packages at once made a machine of 8 GB swap until runs of the command took
+# longer than the bounds of the tests (ADR-0052).
+GO_INTEGRATION := -tags integration -timeout 20m -p 1
 
 test-go-integration:
 	@$(TASK) $@ '$(call go-each,go test $(GO_INTEGRATION) -race -shuffle=on ./...)'

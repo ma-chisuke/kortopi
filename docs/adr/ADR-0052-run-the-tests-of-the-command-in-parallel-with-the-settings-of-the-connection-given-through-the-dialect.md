@@ -29,6 +29,7 @@ How do the tests of the command run in parallel, when the command reads its sett
 - The reading of the environment stays tested.
 - No test checks less, and no test depends on timing more than before.
 - The tests run only against the servers that they start (ADR-0019).
+- The tests that run at the same time fit in the memory of a laptop of 8 GB and in the connections of the servers.
 - The CI workflows keep calling `make` alone (ADR-0004, ADR-0005).
 
 ## Considered Options
@@ -50,7 +51,8 @@ The rules are as follows.
 - A test whose subject is the reading of the environment sets the environment, and stays serial: `TestSettingsFromTheEnvironment`, which also connects with the password of the environment, and `TestPlanCommandConnectionErrors`. Go runs the serial tests of a package before it lets the parallel ones go on, so no test in parallel sees their environment.
 - `pgtest.DB.Objects` lists the objects that the database got after its creation, with an OID of 16384 or more, by name, as before, and the objects of the template database in one line: their number and a digest of the columns that name them. A change to any object of the template, added, removed, or renamed, changes that line, as it changed the line of its name before. The test `TestObjectsSeeEveryChange` confirms it on each version.
 - A session that a test of `internal/postgres` opens with the helpers `session` and `applySession` runs with the context of the test without its cancellation (`runContext`). Go cancels the context of a test before its cleanups, and a session whose run was cancelled closes as an interrupted one, which waits at most 5 seconds for the server to roll back: on the busy laptop, two tests failed in that close after their checks had passed. The tests of an interrupt cancel contexts of their own.
-- The number of tests that run at the same time is the default of `go test`, `GOMAXPROCS`, for each package: 8 on the laptop and 4 on the runner of CI. The packages `cmd/kortopi` and `internal/postgres` run at the same time, each with its own four servers. A test holds a few connections, the superuser's, the command's one or two, and a lock holder at times, so the servers stay far below their 300 connections. A higher limit would not help on the laptop: there, a test of the command in parallel took four to five times as long as alone, so the servers and the memory of the machine set the pace, not the number of slots.
+- The number of tests that run at the same time within a package is the default of `go test`, `GOMAXPROCS`: 8 on the laptop and 4 on the runner of CI. A test holds a few connections, the superuser's, the command's one or two, and a lock holder at times: on one server, no more than 15 were open at once, far below its 300. A higher limit would not help on the laptop: there, a test of the command in parallel took four to five times as long as alone, so the servers and the memory of the machine set the pace, not the number of slots.
+- The integration tests of the packages run one package at a time (`go test -p 1` in `make/go.mk`). Each of `cmd/kortopi` and `internal/postgres` starts four servers of its own, and its test binary, with the race detector and its tests in parallel, takes 1.1 to 1.4 GB. Both at once, on the laptop of 8 GB whose memory other programs already filled, made it swap so much that `cmd/kortopi` took 933 seconds instead of 85, and runs of the command took longer than the bounds of their tests: `TestLockTimeoutCommand` saw a run of 12 seconds where it allows 10. One at a time, the two packages took 85 and 264 seconds, 368 for the target, and passed. The limit of 20 minutes stays for each test binary.
 
 Measurements that decided against other changes:
 
@@ -67,11 +69,13 @@ Measurements that decided against other changes:
 - Bad, because the dialect of PostgreSQL carries a field that only the tests set, and the connection string of a test differs from that of a user in the settings that come before the flags.
 - Bad, because a change to an object of the template database shows as a changed digest, which names neither the object nor its kind; the test then has to find it with a query of its own.
 - Bad, because tests that run at the same time share the servers and the machine, so each test takes longer than alone, and the gain on a busy machine is less than the number of tests at a time.
+- Bad, because the two packages no longer overlap: on a machine with memory to spare, such as the runner of CI, the target takes about the sum of the two packages instead of the longer of them.
 
 ### Confirmation
 
 - Go fails a test that calls `t.Setenv` when it, or a test above it, runs in parallel, so a test of the command that sets the environment fails unless it stays serial. Review keeps such tests to those whose subject is the environment.
 - `TestOptionsConnString` and `TestOptionsConnConfig` in `internal/postgres` confirm that the settings come before the flags, override the environment, and give way to the flags; `TestDialectOpen` confirms that `Open` passes them on.
+- `GO_INTEGRATION` in `make/go.mk` holds `-p 1`, for `make test-go-integration` and `make coverage`.
 - `TestObjectsSeeEveryChange` in `internal/postgres` confirms, on each version, that the list of objects changes with each kind of change, among the objects of the test and among those of the template database, in `make check-all`.
 
 ## Pros and Cons of the Options
@@ -97,7 +101,7 @@ Measurements that decided against other changes:
 ### Leave the tests of the command serial, and run them in a make target of their own
 
 - Good, because the tests would not change.
-- Bad, because the packages already run at the same time within `go test ./...`, so another target adds no parallelism, and the tests of the command stay one chain as long as before.
+- Bad, because the tests of the command stay one chain, as long as before, and a target of their own, run beside that of `internal/postgres`, keeps two packages with their servers on the machine at once.
 
 ## More Information
 
