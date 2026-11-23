@@ -49,7 +49,8 @@ const unplannedTrigger = `CREATE TRIGGER forget_category AFTER DELETE ON shop.ca
 // deletions that the database counts beyond the plan count against
 // --max-delete, after the deletions. The comparison before the commit still
 // decides for a named table that is declared, and a name that the database
-// has no table of is no error. Every error is compared whole.
+// has no table of is no error. Every error is compared whole, so that the
+// advice to name a table shows only where naming it helps.
 func TestApplyUnplannedChanges(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
@@ -209,6 +210,13 @@ func TestApplyUnplannedChanges(t *testing.T) {
 						"which its counts cannot tell from a row that a trigger deletes and another that it inserts, so the apply holds it to the plan"),
 				},
 				{
+					// Without the setting, naming the table would not help, and
+					// the error does not advise it.
+					name:    "rows that SET NULL moves between partitions, without the setting",
+					setUp:   shelves,
+					wantErr: counts(shelvesCounted, "shop.shelves", ""),
+				},
+				{
 					// Rows that the plan counted, and that a trigger keeps
 					// unchanged, stop the apply in a named table too: that is not
 					// beyond the plan.
@@ -251,6 +259,18 @@ func TestApplyUnplannedChanges(t *testing.T) {
 						CREATE TRIGGER "A_drop_reviews" AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.drop_reviews();`,
 					unplanned: []string{"shop.reviews"},
 					wantErr:   counts("0 updates in table shop.reviews for the transaction, and the plan allows 1", "shop.reviews", named("shop.reviews")),
+				},
+				{
+					// The settings file cannot name a table whose name holds a
+					// dot, so the error does not advise it.
+					name: "a table whose name holds a dot",
+					setUp: `CREATE TABLE shop."my.log" (code text);
+						INSERT INTO shop."my.log" VALUES ('games');
+						CREATE FUNCTION shop.forget_log() RETURNS trigger LANGUAGE plpgsql AS $$
+						BEGIN DELETE FROM shop."my.log" WHERE code = OLD.code; RETURN OLD; END $$;
+						CREATE TRIGGER forget_log AFTER DELETE ON shop.categories FOR EACH ROW EXECUTE FUNCTION shop.forget_log();`,
+					wantErr: counts("1 deletion in table shop.my.log for the transaction, and the plan counted 0", "shop.my.log",
+						", which allow_unplanned_changes of {settings} cannot name, since its name holds a dot"),
 				},
 				{
 					// A named table that is declared is compared again before

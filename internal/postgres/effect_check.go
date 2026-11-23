@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -465,7 +466,11 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 		case named:
 			setting = fmt.Sprintf(": %s of %s names table %s, which lets the database count more deletions, updates, and insertions in it than the plan counted, but not fewer",
 				config.UnplannedKey, settingsFile, name)
-		case !short && !s.effectMoves[oid]:
+		case short || s.effectMoves[oid]:
+			// Naming the table would not let the apply pass.
+		case strings.Contains(name.Schema, ".") || strings.Contains(name.Name, "."):
+			setting = fmt.Sprintf(", which %s of %s cannot name, since its name holds a dot", config.UnplannedKey, settingsFile)
+		default:
 			setting = fmt.Sprintf(", or, if it changes table %s on purpose, name the table in %s of %s", name, config.UnplannedKey, settingsFile)
 		}
 		return nil, fmt.Errorf("after its first deletion, the database counted %s: a trigger or a rule of a table that the deletions reach, "+
