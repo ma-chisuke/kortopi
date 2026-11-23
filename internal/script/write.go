@@ -235,13 +235,13 @@ const onInsertNote = "The database reads the values of on_insert when the script
 	"a value such as now is the time of the transaction that runs the script."
 
 // unplannedNote follows the lines of the tables of allow_unplanned_changes in
-// the header of a script (ADR-0049). The script runs in a transaction that
+// the header of a script (ADR-0051). The script runs in a transaction that
 // kortopi does not hold, so nothing checks what its deletions change.
 const unplannedNote = "The script does not check or report what the deletions change beyond the plan; " +
 	"an apply counts it against --max-delete and reports it."
 
 // writeHeader writes the header comment: where the plan comes from, its
-// counts, the lines of the tables of allow_unplanned_changes (ADR-0049), the
+// counts, the lines of the tables of allow_unplanned_changes (ADR-0051), the
 // line that sums up the stored rows that the declaration lacks
 // in tables whose modes delete no row (ADR-0046), how to run the script, the
 // tables and columns that wait for the schema change, and, after them, the

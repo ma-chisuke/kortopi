@@ -78,7 +78,7 @@ func TestBuildEffects(t *testing.T) {
 
 // Build asks the database about the tables of allow_unplanned_changes once,
 // in the order of the settings, for a plan with rows to delete, and keeps
-// what it learns in the plan (ADR-0049). A plan without rows to delete asks
+// what it learns in the plan (ADR-0051). A plan without rows to delete asks
 // nothing: no check that the setting lifts runs then.
 func TestBuildUnplanned(t *testing.T) {
 	t.Parallel()
@@ -129,7 +129,7 @@ func TestBuildUnplanned(t *testing.T) {
 
 // The lines of the tables of allow_unplanned_changes agree with the number
 // of the rows to delete and of the tables, and name the one partitioned
-// table to name instead (ADR-0049).
+// table to name instead (ADR-0051).
 func TestUnplannedLines(t *testing.T) {
 	t.Parallel()
 

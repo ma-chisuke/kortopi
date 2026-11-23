@@ -64,7 +64,7 @@ type Database interface {
 
 	// Unplanned reports what the database knows about each table that the
 	// settings name in allow_unplanned_changes, in the order of names
-	// (ADR-0049): whether it has a table of the name, and, for a partition,
+	// (ADR-0051): whether it has a table of the name, and, for a partition,
 	// the partitioned table at the top of its tree, with which an apply
 	// checks the counts of the partition. Build calls it once, after Effects,
 	// for a plan with rows to delete. An implementation reads the catalogs,
@@ -73,7 +73,7 @@ type Database interface {
 }
 
 // UnplannedTable is a table that the settings name in
-// allow_unplanned_changes, as the database knows it (ADR-0049).
+// allow_unplanned_changes, as the database knows it (ADR-0051).
 type UnplannedTable struct {
 	Name declaration.TableName
 	// Missing is true when the database has no table of the name: none at
@@ -327,7 +327,7 @@ type Plan struct {
 	Tables []Table
 	// Unplanned holds the tables that the settings name in
 	// allow_unplanned_changes, as the database knows them, sorted by schema
-	// and then by name, for a plan with rows to delete (ADR-0049). It is
+	// and then by name, for a plan with rows to delete (ADR-0051). It is
 	// empty for a plan without them: only the check after the deletions of an
 	// apply lets such tables change beyond the plan.
 	Unplanned []UnplannedTable

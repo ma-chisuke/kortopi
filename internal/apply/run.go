@@ -33,7 +33,7 @@ import (
 // The tables that the settings name in allow_unplanned_changes may change
 // beyond the plan there, and Result.Unplanned says how: the rows that the
 // deletions delete beyond the plan count against Options.MaxDelete, which
-// Run checks again then (ADR-0049).
+// Run checks again then (ADR-0051).
 //
 // Last, before the commit, Run lets the database compare every declared
 // table again, and stops when a difference is left that the run does not
@@ -354,7 +354,7 @@ func checkDeletes(p *plan.Plan, limit int) error {
 // checkDeletesAfter checks the limit on the rows that an apply deletes again
 // after its deletions, before its commit, with the rows that they deleted
 // beyond the plan in the tables of allow_unplanned_changes, which the plan
-// cannot count (ADR-0049). The rows that the plan counts passed the limit
+// cannot count (ADR-0051). The rows that the plan counts passed the limit
 // before the first write already. Updates beyond the plan do not count: the
 // database counts updates, which can change one row more than once, and
 // not the rows that they change.

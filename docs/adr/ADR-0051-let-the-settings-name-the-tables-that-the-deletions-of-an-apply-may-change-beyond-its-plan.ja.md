@@ -3,7 +3,7 @@ status: accepted
 date: 2026-11-23
 ---
 
-# ADR-0049: apply の削除が計画を超えて変えてよいテーブルを設定で挙げられるようにし、そこでしたことを報告し、上限に数える
+# ADR-0051: apply の削除が計画を超えて変えてよいテーブルを設定で挙げられるようにし、そこでしたことを報告し、上限に数える
 
 ## 背景と課題
 
@@ -212,4 +212,4 @@ apply が報告するもの：
 - [Overview of trigger behavior](https://www.postgresql.org/docs/current/trigger-definition.html)：ほかのテーブルに書くトリガーについて
 - 利用者向けのリファレンス：[docs/reference/declaration.ja.md](../reference/declaration.ja.md#kortopitoml) と [docs/reference/apply.ja.md](../reference/apply.ja.md#計画を超えて変わってよいテーブル)
 
-<!-- i18n-source: ADR-0049-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.md sha256:d234b14f62f9f477c037443e58984c25f6711949052e8f45db2505c6f41572a3 -->
+<!-- i18n-source: ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.md sha256:2e016920b10c572d4f3c3687c18a36a90356e526410586a3f9f0d2b03bf49029 -->

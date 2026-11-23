@@ -37,7 +37,7 @@ import (
 // database where the sequences stand and where an apply would move them
 // (ADR-0045). For a plan with rows to delete, Build asks the database last
 // about the tables that the settings name in allow_unplanned_changes
-// (ADR-0049). An error of the database stops the
+// (ADR-0051). An error of the database stops the
 // build at once. The contract does not tie such an error to one table, so
 // Build cannot tell an error in the rows of one table, after which the next
 // table could still be compared, from an error of the session, such as a
@@ -156,7 +156,7 @@ func Build(ctx context.Context, decl *declaration.Declaration, settings *config.
 }
 
 // unplanned asks the database about the tables that the settings name in
-// allow_unplanned_changes, for a plan with rows to delete (ADR-0049). A plan
+// allow_unplanned_changes, for a plan with rows to delete (ADR-0051). A plan
 // without them asks nothing: no check of an apply that the setting lifts runs
 // then.
 func unplanned(ctx context.Context, db Database, settings *config.Settings, tables []Table) ([]UnplannedTable, error) {

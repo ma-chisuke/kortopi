@@ -212,7 +212,7 @@ func TestLoadNamesAreSorted(t *testing.T) {
 
 // The tables of allow_unplanned_changes come sorted by schema and then by
 // name, whatever the order of the file, with the case of their names. They
-// need no file that declares them, and no section of their own (ADR-0049).
+// need no file that declares them, and no section of their own (ADR-0051).
 func TestLoadUnplannedChanges(t *testing.T) {
 	t.Parallel()
 

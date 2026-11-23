@@ -101,7 +101,7 @@ const planOfGoldAndOld = "app.plans (sync, key: id)\n" +
 var (
 	// labels and totals are tables that the trigger of a deletion changes,
 	// and unplannedPlans names them in allow_unplanned_changes, with
-	// shop.archive, which the database does not have (ADR-0049).
+	// shop.archive, which the database does not have (ADR-0051).
 	labels, totals = declaration.TableName{Schema: "shop", Name: "labels"}, declaration.TableName{Schema: "shop", Name: "totals"}
 	noArchive      = map[declaration.TableName]bool{{Schema: "shop", Name: "archive"}: true}
 	unplannedPlans = map[string]string{
@@ -248,7 +248,7 @@ func TestRunApply(t *testing.T) {
 		{
 			// The plan names the tables of allow_unplanned_changes, and the
 			// apply says what the deletions did beyond the plan there
-			// (ADR-0049).
+			// (ADR-0051).
 			name:     "deletions with unplanned changes",
 			files:    with(twoTables, unplannedPlans),
 			args:     []string{"--allow-delete"},

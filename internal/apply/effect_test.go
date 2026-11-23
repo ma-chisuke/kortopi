@@ -116,7 +116,7 @@ func TestRunEffectAgain(t *testing.T) {
 // that the plan found as tables of their own, and the apply keeps what the
 // deletions did beyond the plan there. The rows that they deleted beyond the
 // plan count against --max-delete, which the apply checks again before its
-// commit (ADR-0049).
+// commit (ADR-0051).
 func TestRunUnplannedChanges(t *testing.T) {
 	t.Parallel()
 

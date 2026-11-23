@@ -9,7 +9,7 @@ import (
 
 // UnplannedNames returns the tables of allow_unplanned_changes whose rows
 // the check after the deletions of an apply lets change beyond the plan
-// (ADR-0049): those that the database has and that are no partitions. The
+// (ADR-0051): those that the database has and that are no partitions. The
 // check counts the rows of a partitioned table with those of its partitions,
 // so a partition is covered through the partitioned table at the top of its
 // tree, and not on its own.
@@ -27,7 +27,7 @@ func (p *Plan) UnplannedNames() []declaration.TableName {
 }
 
 // UnplannedLines returns the lines of a plan with rows to delete about the
-// tables of allow_unplanned_changes (ADR-0049), each a sentence, at most
+// tables of allow_unplanned_changes (ADR-0051), each a sentence, at most
 // three:
 //
 //   - the tables whose rows the deletions may delete, update, or insert

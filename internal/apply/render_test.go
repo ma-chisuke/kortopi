@@ -144,7 +144,7 @@ func TestRenderSummary(t *testing.T) {
 		// Each table of allow_unplanned_changes that the deletions changed
 		// beyond the plan gets a line, after the line of the foreign keys.
 		// The updates count as updates, and beyond the most that SET NULL and
-		// SET DEFAULT can make alone (ADR-0049).
+		// SET DEFAULT can make alone (ADR-0051).
 		{name: "unplanned", result: &Result{
 			Plan: &plan.Plan{
 				Tables: []plan.Table{plansTable},

@@ -86,7 +86,7 @@ type Database interface {
 	// (plan.Plan.UnplannedNames). Their rows may be deleted, updated, and
 	// inserted beyond what the plan counted, never fewer than it counted,
 	// and CheckEffect returns what the deletions did to each of them beyond
-	// the plan, for each table where they did something (ADR-0049).
+	// the plan, for each table where they did something (ADR-0051).
 	CheckEffect(ctx context.Context, unplanned []declaration.TableName) ([]Unplanned, error)
 
 	// DiffAgain compares the declared rows that Diff loaded for the table of
@@ -173,7 +173,7 @@ type Options struct {
 	// The rows that the deletions delete beyond the plan in the tables of
 	// allow_unplanned_changes count too: the apply counts them after the
 	// deletions, and stops before its commit when they pass the limit
-	// (ADR-0049).
+	// (ADR-0051).
 	MaxDelete int
 	// Planned, when it is not nil, gets the plan as soon as it is computed
 	// and every declared table and column exists: before the guards and the
@@ -207,7 +207,7 @@ type Result struct {
 	Uneven []Uneven
 	// Unplanned holds what the deletions did beyond the plan to the tables
 	// of allow_unplanned_changes, sorted by schema and then by name, for each
-	// table where they did something (ADR-0049).
+	// table where they did something (ADR-0051).
 	Unplanned []Unplanned
 	// Sequences holds each sequence that the plan shows, in the order of
 	// the plan, and what the apply did with it: moved it, or left it where
@@ -276,7 +276,7 @@ type Count struct {
 // allow_unplanned_changes beyond what its plan counted, by the counts that
 // the database keeps of the rows of the transaction since its first
 // deletion, which hold what the constraints deferred to the commit did too
-// (ADR-0049). The partitions of a partitioned table count with it.
+// (ADR-0051). The partitions of a partitioned table count with it.
 type Unplanned struct {
 	Table declaration.TableName
 	// Deleted counts the rows that the transaction deleted from the table

@@ -47,7 +47,7 @@ type InsertValue struct {
 
 // UnplannedKey is the key of kortopi.toml that names the tables whose rows
 // the deletions of an apply may delete, update, or insert beyond what its
-// plan counts (ADR-0049).
+// plan counts (ADR-0051).
 const UnplannedKey = "allow_unplanned_changes"
 
 // Settings is the content of kortopi.toml.
@@ -61,7 +61,7 @@ type Settings struct {
 }
 
 // UnplannedChanges returns the tables that the file names in
-// allow_unplanned_changes, sorted by schema and then by name (ADR-0049): an
+// allow_unplanned_changes, sorted by schema and then by name (ADR-0051): an
 // apply that deletes does not stop on the rows of such a table that its
 // transaction deletes, updates, or inserts beyond what its plan counted, and
 // reports them. A table there needs neither a file that declares it nor a

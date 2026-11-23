@@ -134,7 +134,7 @@ const unplannedExample = `as in ` + UnplannedKey + ` = ["audit.events"]`
 
 // parseUnplanned checks the tables of allow_unplanned_changes, each named as
 // <schema>.<table> once, and returns them sorted by schema and then by name
-// (ADR-0049). An empty array names no table, as a file without the key does.
+// (ADR-0051). An empty array names no table, as a file without the key does.
 func parseUnplanned(raw any) ([]declaration.TableName, error) {
 	items, ok := raw.([]any)
 	if !ok {

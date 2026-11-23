@@ -3,7 +3,7 @@ status: accepted
 date: 2026-11-23
 ---
 
-# ADR-0049: Let the settings name the tables that the deletions of an apply may change beyond its plan, and report and limit what they do there
+# ADR-0051: Let the settings name the tables that the deletions of an apply may change beyond its plan, and report and limit what they do there
 
 ## Context and Problem Statement
 

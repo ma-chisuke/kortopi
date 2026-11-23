@@ -15,7 +15,7 @@ import (
 // TestApplyUnplannedChangesCommand runs the case of issue 51 as the binary
 // does, against each version: a trigger of the deletion of a category
 // deletes its labels, which no foreign key links, and updates a count of
-// categories (ADR-0049).
+// categories (ADR-0051).
 //
 //   - Without allow_unplanned_changes, the apply stops on the labels, with an
 //     error that names the table and the setting, and nothing changes.

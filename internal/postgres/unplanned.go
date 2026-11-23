@@ -9,7 +9,7 @@ import (
 )
 
 // unplannedRelation is a table of allow_unplanned_changes as the catalogs of
-// the snapshot show it (ADR-0049): its OID, 0 when the database has no table
+// the snapshot show it (ADR-0051): its OID, 0 when the database has no table
 // of the name, and, for a partition, the partitioned table at the top of its
 // tree.
 type unplannedRelation struct {

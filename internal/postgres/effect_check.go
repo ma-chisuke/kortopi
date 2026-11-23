@@ -94,7 +94,7 @@ func (s *Session) writtenRows(ctx context.Context, byTop bool) (map[uint32]writt
 //
 // A table of unplanned, which the settings name in allow_unplanned_changes,
 // may lose, gain, and change rows beyond what the plan counted, and its
-// partitions with it (ADR-0049): the third check holds it only to the least
+// partitions with it (ADR-0051): the third check holds it only to the least
 // that the plan counted, the rows that it deletes and the rows that SET NULL
 // and SET DEFAULT change. CheckEffect returns what the deletions did beyond
 // the plan to each such table, sorted by name. The first two checks hold for
@@ -296,7 +296,7 @@ func (s *Session) checkReachedRows(ctx context.Context) error {
 // in each table, by the counters of the transaction, with the rows that the
 // plan deletes and that Effects counted, and returns what they did beyond
 // the plan to the tables of tops, by their OIDs, which allow_unplanned_changes
-// names (ADR-0049).
+// names (ADR-0051).
 func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declaration.TableName) ([]apply.Unplanned, error) {
 	now, err := s.writtenRows(ctx, true)
 	if err != nil {
@@ -385,7 +385,7 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 		}
 		changes := got.updated + moved
 		// A table of allow_unplanned_changes may lose, gain, and change rows
-		// beyond the plan, but not fewer than the plan counted (ADR-0049). In
+		// beyond the plan, but not fewer than the plan counted (ADR-0051). In
 		// a table where a change can move a row to another partition, the
 		// counts cannot tell such a move from a row that a trigger deleted and
 		// another that it inserted, so the table is held to the plan.
@@ -448,7 +448,7 @@ func (s *Session) checkWrittenRows(ctx context.Context, tops map[uint32]declarat
 		// runDeferred ran them first. The trigger or the rule that changed the
 		// table can belong to another table, so the advice names where to
 		// look for it, and, for rows beyond the plan, names the setting that
-		// lets them be (ADR-0049).
+		// lets them be (ADR-0051).
 		settingsFile := filepath.Join(s.dir, config.FileName)
 		var setting string
 		switch {

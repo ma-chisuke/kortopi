@@ -275,7 +275,7 @@ func TestWrite(t *testing.T) {
 		{
 			// The lines of the tables of allow_unplanned_changes stand in the
 			// header, with the note that the script neither checks nor reports
-			// what they say (ADR-0049).
+			// what they say (ADR-0051).
 			name: "unplanned",
 			plan: &plan.Plan{
 				Tables: []plan.Table{table(regions, config.ModeSync, plan.TableDiff{Deletes: deletes("1")})},

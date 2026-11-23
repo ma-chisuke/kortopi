@@ -42,7 +42,7 @@ const unplannedTrigger = `CREATE TRIGGER forget_category AFTER DELETE ON shop.ca
 
 // An apply that deletes stops on rows of a table that a trigger deletes or
 // changes beyond the plan, unless allow_unplanned_changes names the table
-// (ADR-0049). A named table may lose, gain, and change rows beyond the
+// (ADR-0051). A named table may lose, gain, and change rows beyond the
 // plan, and the apply returns what happened there; the rows that the plan
 // counted still must go, and a table that the setting does not name, or a
 // partition whose partitioned table it does not name, still stops the apply.

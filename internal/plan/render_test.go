@@ -467,7 +467,7 @@ func TestRender(t *testing.T) {
 			// effect: at most five of them, the names that the database has
 			// no table of, and the partitions whose partitioned table at the
 			// top the setting does not name. A partition whose partitioned
-			// table it names gets no line (ADR-0049).
+			// table it names gets no line (ADR-0051).
 			name: "unplanned",
 			plan: &Plan{
 				Tables: []Table{{
