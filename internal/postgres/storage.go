@@ -24,9 +24,12 @@ import (
 
 // readTable is a table that a session read: by the OID that the catalogs of
 // its snapshot give it, and by the name with which its statements named it.
+// For the table that a foreign key references (readReferences), notEnforced
+// says that the catalogs of the snapshot show the key NOT ENFORCED.
 type readTable struct {
-	oid  uint32
-	name declaration.TableName
+	oid         uint32
+	name        declaration.TableName
+	notEnforced bool
 }
 
 // storageSQL reads, for each table of $1 and $2, the relations that hold its
@@ -195,7 +198,7 @@ type constraintKey struct {
 //
 //   - kind "key": a foreign key, by the schema and the name of its table and
 //     its name, with the OID, the schema, and the name of the table that it
-//     references;
+//     references, and, from PostgreSQL 18, whether it is NOT ENFORCED;
 //   - kind "storage": a relation with storage of a referenced table, the
 //     table itself or a partition of it at every depth, by pg_inherits, with
 //     the OID of the referenced table, its own OID, the relfilenode of
@@ -204,14 +207,20 @@ type constraintKey struct {
 // It reads the catalogs alone, with no function that needs a privilege: the
 // role of an apply need not use the schema of a referenced table, whose key
 // PostgreSQL checks as the owner of the table.
-const referencesSQL = `WITH RECURSIVE t(relid) AS (
+func referencesSQL(major int) string {
+	notEnforced := "false"
+	if major >= enforcedSince {
+		notEnforced = "NOT co.conenforced"
+	}
+	return `WITH RECURSIVE t(relid) AS (
 		SELECT g.oid FROM pg_catalog.unnest($1::pg_catalog.oid[]) AS g(oid)
 		UNION
 		SELECT h.inhrelid FROM t
 		JOIN pg_catalog.pg_class AS p ON p.oid = t.relid AND p.relkind = 'p'
 		JOIN pg_catalog.pg_inherits AS h ON h.inhparent = t.relid
 	), k AS (
-		SELECT n.nspname::pg_catalog.text AS schema, c.relname::pg_catalog.text AS name, co.conname::pg_catalog.text AS conname, co.confrelid
+		SELECT n.nspname::pg_catalog.text AS schema, c.relname::pg_catalog.text AS name, co.conname::pg_catalog.text AS conname, co.confrelid,
+			` + notEnforced + ` AS not_enforced
 		FROM t
 		JOIN pg_catalog.pg_constraint AS co ON co.conrelid = t.relid AND co.contype = 'f'
 		JOIN pg_catalog.pg_class AS c ON c.oid = co.conrelid
@@ -224,16 +233,17 @@ const referencesSQL = `WITH RECURSIVE t(relid) AS (
 		JOIN pg_catalog.pg_inherits AS h ON h.inhparent = s.relid
 	)
 	SELECT 'key', k.schema, k.name, k.conname, k.confrelid, 0::pg_catalog.oid, 0::pg_catalog.oid,
-		fn.nspname::pg_catalog.text, fc.relname::pg_catalog.text
+		fn.nspname::pg_catalog.text, fc.relname::pg_catalog.text, k.not_enforced
 	FROM k
 	JOIN pg_catalog.pg_class AS fc ON fc.oid = k.confrelid
 	JOIN pg_catalog.pg_namespace AS fn ON fn.oid = fc.relnamespace
 	UNION ALL
-	SELECT 'storage', '', '', '', s.top, c.oid, c.relfilenode, n.nspname::pg_catalog.text, c.relname::pg_catalog.text
+	SELECT 'storage', '', '', '', s.top, c.oid, c.relfilenode, n.nspname::pg_catalog.text, c.relname::pg_catalog.text, false
 	FROM s
 	JOIN pg_catalog.pg_class AS c ON c.oid = s.relid
 	JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
 	WHERE c.relkind = 'r'`
+}
 
 // currentStorageSQL reads the relation $1 and its partitions at every depth,
 // each with its file, from the newest catalogs, once the transaction of the
@@ -253,7 +263,9 @@ const currentStorageSQL = `SELECT l.relid, pg_catalog.pg_relation_filenode(l.rel
 // after the snapshot looks empty to it, and the key refuses a reference to a
 // row that the table holds. Once a write failed, the transaction can no
 // longer read its snapshot, so referencedChange compares with what this
-// read (ADR-0047).
+// read (ADR-0047). It also reads which of the keys the snapshot shows NOT
+// ENFORCED: such a key refuses a write only when another session made it
+// enforced after the snapshot (ADR-0049).
 func (s *Session) readReferences(ctx context.Context) error {
 	if s.references != nil {
 		return nil
@@ -262,7 +274,7 @@ func (s *Session) readReferences(ctx context.Context) error {
 	for _, name := range sortedNames(s.loaded) {
 		oids = append(oids, s.loaded[name].meta.oid)
 	}
-	rows, err := s.tx.Query(ctx, referencesSQL, oids)
+	rows, err := s.tx.Query(ctx, referencesSQL(s.major), oids)
 	if err != nil {
 		return fmt.Errorf("read the tables that the foreign keys of the declared tables reference: %w", err)
 	}
@@ -274,13 +286,14 @@ func (s *Session) readReferences(ctx context.Context) error {
 		var k constraintKey
 		var top, relid, filenode uint32
 		var schema, name string
-		if err := rows.Scan(&kind, &k.schema, &k.table, &k.name, &top, &relid, &filenode, &schema, &name); err != nil {
+		var notEnforced bool
+		if err := rows.Scan(&kind, &k.schema, &k.table, &k.name, &top, &relid, &filenode, &schema, &name, &notEnforced); err != nil {
 			return fmt.Errorf("read the tables that the foreign keys of the declared tables reference: %w", err)
 		}
 		table := declaration.TableName{Schema: schema, Name: name}
 		switch kind {
 		case "key":
-			references[k] = readTable{oid: top, name: table}
+			references[k] = readTable{oid: top, name: table, notEnforced: notEnforced}
 		case "storage":
 			if referenced[top] == nil {
 				referenced[top] = make(map[uint32]storedRelation)
@@ -295,16 +308,19 @@ func (s *Session) readReferences(ctx context.Context) error {
 	return nil
 }
 
-// referencedChange returns err, the error of a write or of the commit of an
-// apply, or, when a foreign key refused the write and another session
-// changed the table that the key references after the snapshot, an error
-// that names that change before err: the check of the key may not have seen
-// the rows of the table (ADR-0047). The transaction cannot read its snapshot
-// once a statement of it failed, so the change is found from what
-// readReferences read in the snapshot and what the catalogs hold now, which
-// a query reads once the transaction has ended: ended says whether it has,
-// and otherwise referencedChange rolls it back first. The apply stops on err
-// either way, and nothing was changed.
+// referencedChange returns err, the error of a write, of the check of the
+// constraints deferred to the commit before it, or of the commit of an
+// apply, or, when a foreign key refused it, an error that names what another
+// session changed after the snapshot of the apply, before err: the table that
+// the key references, whose rows the check of the key may not have seen
+// (ADR-0047), or the key itself, when the snapshot shows it NOT ENFORCED: such
+// a key refuses a write only once another session made it enforced, after
+// the apply ordered its writes without it (ADR-0049). The transaction cannot
+// read its snapshot once a statement of it failed, so the change of the table
+// is found from what readReferences read in the snapshot and what the
+// catalogs hold now, which a query reads once the transaction has ended:
+// ended says whether it has, and otherwise referencedChange rolls it back
+// first. The apply stops on err either way, and nothing was changed.
 //
 // The key checks the relation that it references by its OID, so the change
 // is one of that relation: its storage, or its partitions, or a relation
@@ -318,14 +334,30 @@ func (s *Session) referencedChange(ctx context.Context, err error, ended bool) e
 	if !ok {
 		return err
 	}
+	cause := s.referencedStorageChange(ctx, ref, ended)
+	table := declaration.TableName{Schema: we.err.SchemaName, Name: we.err.TableName}
+	switch {
+	case ref.notEnforced:
+		return &enforcedError{cause: cause, key: we.err.ConstraintName, table: table, referenced: ref.name, err: we}
+	case cause == "":
+		return err
+	}
+	return &referenceError{cause: cause, key: we.err.ConstraintName, table: table, referenced: ref.name, err: we}
+}
+
+// referencedStorageChange says what another session did to table ref, which
+// a foreign key references, after the snapshot (storageChange), or returns
+// nothing when the table is as the snapshot shows it, or when the session
+// cannot tell. It rolls the transaction back first unless it has ended.
+func (s *Session) referencedStorageChange(ctx context.Context, ref readTable, ended bool) string {
 	if !ended {
-		if rerr := s.tx.Rollback(ctx); rerr != nil {
-			return err
+		if err := s.tx.Rollback(ctx); err != nil {
+			return ""
 		}
 	}
-	rows, qerr := s.conn.Query(ctx, currentStorageSQL, ref.oid)
-	if qerr != nil {
-		return err
+	rows, err := s.conn.Query(ctx, currentStorageSQL, ref.oid)
+	if err != nil {
+		return ""
 	}
 	defer rows.Close()
 	st := storage{snapshot: s.referenced[ref.oid], current: make(map[uint32]uint32)}
@@ -335,8 +367,8 @@ func (s *Session) referencedChange(ctx context.Context, err error, ended bool) e
 	for rows.Next() {
 		var relid uint32
 		var filenode *uint32
-		if serr := rows.Scan(&relid, &filenode); serr != nil {
-			return err
+		if err := rows.Scan(&relid, &filenode); err != nil {
+			return ""
 		}
 		if relid == ref.oid {
 			st.now = relid
@@ -346,16 +378,9 @@ func (s *Session) referencedChange(ctx context.Context, err error, ended bool) e
 		}
 	}
 	if rows.Err() != nil {
-		return err
+		return ""
 	}
-	cause := storageChange(ref, st)
-	if cause == "" {
-		return err
-	}
-	return &referenceError{
-		cause: cause, key: we.err.ConstraintName, table: declaration.TableName{Schema: we.err.SchemaName, Name: we.err.TableName},
-		referenced: ref.name, err: we,
-	}
+	return storageChange(ref, st)
 }
 
 // storageChange says what another session did to table t after the
@@ -469,5 +494,39 @@ func (e *referenceError) Error() string {
 
 // Unwrap returns the error of the write.
 func (e *referenceError) Unwrap() error {
+	return e.err
+}
+
+// enforcedError is the error of a write of an apply that a foreign key
+// refused, which the catalogs of the snapshot of the apply show NOT
+// ENFORCED: another session made the key enforced after the snapshot, or
+// replaced it with a key of the same name that is enforced, and the apply
+// planned and ordered its writes without the key (referencedChange,
+// ADR-0049).
+type enforcedError struct {
+	// cause is what another session did to the table that the key
+	// references, as storageChange says it, or nothing; key, table, and
+	// referenced are as for referenceError.
+	cause             string
+	key               string
+	table, referenced declaration.TableName
+	err               *writeError
+}
+
+// Error names the change, and the error of PostgreSQL after it, without the
+// advice of the error, which assumes that the declaration is wrong.
+func (e *enforcedError) Error() string {
+	also := ""
+	if e.cause != "" {
+		also = fmt.Sprintf(", and it also %s after the apply began, so the check of the key may not have seen the rows of table %s", e.cause, e.referenced)
+	}
+	return fmt.Sprintf("another session made foreign key %q of table %s, which references table %s, enforced after the apply began, "+
+		"or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, "+
+		"which its snapshot shows NOT ENFORCED%s: run the apply again, and make schema changes before a run of kortopi, not during one: %s",
+		e.key, e.table, e.referenced, also, (&writeError{statement: e.err.statement, err: e.err.err}).Error())
+}
+
+// Unwrap returns the error of the write.
+func (e *enforcedError) Unwrap() error {
 	return e.err
 }

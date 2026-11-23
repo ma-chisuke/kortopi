@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/ma-chisuke/kortopi/internal/apply"
 	"github.com/ma-chisuke/kortopi/internal/config"
 	"github.com/ma-chisuke/kortopi/internal/declaration"
@@ -196,44 +198,149 @@ func TestOrderLeavesOutKeysNotEnforced(t *testing.T) {
 	}
 }
 
-// Another session that makes a key enforced after the snapshot of an apply,
-// and before the apply reads the referencing table, which keeps the change
-// out after it, commits a key that the catalogs of the snapshot show NOT
-// ENFORCED, while PostgreSQL runs the newest triggers. The apply orders the
-// tables without the key, and PostgreSQL refuses the insert into app.teams,
-// whose lead the apply inserts later: the apply stops with the error of a
-// row that refers to a row that does not exist, and nothing is written. The
-// next apply orders by the key, and refuses the cycle (ADR-0049).
+// enforcedLater is the beginning of the error of an apply whose write a
+// foreign key refused that the catalogs of its snapshot show NOT ENFORCED:
+// another session made the key enforced after the apply began (ADR-0049).
+const enforcedLater = `another session made foreign key "teams_lead_id_fkey" of table app.teams, which references table app.members, enforced ` +
+	`after the apply began, or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, ` +
+	`which its snapshot shows NOT ENFORCED: run the apply again, and make schema changes before a run of kortopi, not during one: `
+
+// Another session that makes a key enforced and commits after the snapshot
+// of an apply, also one that holds its lock on the referencing table when
+// the apply begins, so that the apply waits for it at its first read of the
+// table, leaves the catalogs of the snapshot showing the key NOT ENFORCED,
+// while PostgreSQL runs the newest triggers. The apply orders the tables
+// without the key, and PostgreSQL refuses the insert into app.teams, whose
+// lead the apply inserts later, or, for a key deferred to the commit, a lead
+// that the declaration lacks at the commit. The error names the change, and
+// not the advice of a row that refers to a row that does not exist, and
+// nothing is written. The next apply orders by the key, and refuses the
+// cycle (ADR-0049).
 func TestApplyAfterAnotherSessionEnforcesAKey(t *testing.T) {
+	refused := `insert into table app.teams: insert or update on table "teams" violates foreign key constraint "teams_lead_id_fkey" ` +
+		`(detail: Key (lead_id)=(10) is not present in table "members".) (constraint: teams_lead_id_fkey)`
+	for _, srv := range eachServer(t) {
+		t.Run(srv.Name, func(t *testing.T) {
+			if srv.Major < enforcedSince {
+				t.Skip("NOT ENFORCED came in PostgreSQL 18")
+			}
+			for _, tt := range []struct {
+				name, clauses string
+				files         map[string]string
+				// holding makes the other session hold its lock when the
+				// apply begins, and commit while the apply waits for it.
+				holding bool
+				want    string
+			}{
+				{name: "a change after the snapshot", clauses: "NOT ENFORCED", files: teamsAndMembersFiles, want: enforcedLater + refused},
+				{name: "a change that holds its lock when the apply begins", clauses: "NOT ENFORCED", files: teamsAndMembersFiles, holding: true, want: enforcedLater + refused},
+				{
+					name: "a key deferred to the commit", clauses: "DEFERRABLE INITIALLY DEFERRED NOT ENFORCED",
+					files: map[string]string{"app/teams.csv": "id,name,lead_id\n1,Core,99\n", "app/members.csv": "id,name,team_id\n10,Ada,1\n"},
+					want: enforcedLater + `commit: insert or update on table "teams" violates foreign key constraint "teams_lead_id_fkey" ` +
+						`(detail: Key (lead_id)=(99) is not present in table "members".) (constraint: teams_lead_id_fkey)`,
+				},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					db := database(t, srv)
+					db.Exec(t, strings.ReplaceAll(teamsAndMembers, "%s", tt.clauses)+"DELETE FROM app.members; DELETE FROM app.teams;")
+					dir := writeFiles(t, tt.files)
+					decl, settings := teamsAndMembersDeclaration(dir)
+					var other *pgx.Conn
+					if tt.holding {
+						var err error
+						if other, err = pgx.ConnectConfig(t.Context(), db.Config); err != nil {
+							t.Fatal(err)
+						}
+						defer func() { _ = other.Close(context.Background()) }()
+						if _, err := other.Exec(t.Context(), "BEGIN; ALTER TABLE app.teams ALTER CONSTRAINT teams_lead_id_fkey ENFORCED"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true})
+					if err != nil {
+						t.Fatal(err)
+					}
+					done := make(chan error, 1)
+					if tt.holding {
+						go func() {
+							_, err := apply.Run(t.Context(), decl, settings, s, apply.Options{})
+							done <- err
+						}()
+						waitForBackend(t, db, "wait_event_type = 'Lock'")
+						if _, err := other.Exec(t.Context(), "COMMIT"); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						db.Exec(t, "ALTER TABLE app.teams ALTER CONSTRAINT teams_lead_id_fkey ENFORCED")
+						_, err := apply.Run(t.Context(), decl, settings, s, apply.Options{})
+						done <- err
+					}
+					err = <-done
+					if closeErr := s.Close(context.Background()); closeErr != nil {
+						t.Fatal(closeErr)
+					}
+					if err == nil || err.Error() != tt.want {
+						t.Errorf("apply: %v\nwant %s", err, tt.want)
+					}
+					if rows := dump(t, db, "app.members", "app.teams"); len(rows) > 0 {
+						t.Errorf("rows after the failed apply = %v, want none", rows)
+					}
+					if tt.files["app/teams.csv"] == teamsAndMembersFiles["app/teams.csv"] {
+						if _, err := runApply(t, db, decl, settings); err == nil || !strings.HasPrefix(err.Error(), "tables app.members and app.teams reference each other") {
+							t.Errorf("the next apply: %v, want the error of the cycle", err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+// Another session that makes a key to a table outside the run enforced
+// after the snapshot of an apply, and rewrites that table, which the
+// apply does not read, makes the check of the key look for the referenced
+// row in storage that the snapshot sees empty. The error names both changes
+// (ADR-0047, ADR-0049).
+func TestApplyAfterAnotherSessionEnforcesAKeyAndRewritesItsTable(t *testing.T) {
 	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
 			if srv.Major < enforcedSince {
 				t.Skip("NOT ENFORCED came in PostgreSQL 18")
 			}
 			db := database(t, srv)
-			db.Exec(t, strings.ReplaceAll(teamsAndMembers, "%s", "NOT ENFORCED")+"DELETE FROM app.members; DELETE FROM app.teams;")
-			dir := writeFiles(t, teamsAndMembersFiles)
-			decl, settings := teamsAndMembersDeclaration(dir)
+			db.Exec(t, `
+				CREATE SCHEMA app;
+				CREATE TABLE app.regions (id integer PRIMARY KEY);
+				INSERT INTO app.regions VALUES (5);
+				CREATE TABLE app.offices (id integer PRIMARY KEY, region_id integer);
+				ALTER TABLE app.offices ADD CONSTRAINT offices_region_id_fkey FOREIGN KEY (region_id) REFERENCES app.regions NOT ENFORCED;
+			`)
+			dir := writeFiles(t, map[string]string{"app/offices.csv": "id,region_id\n1,5\n"})
+			offices := csvTable("app", "offices", "id", "region_id")
+			decl := &declaration.Declaration{Dir: dir, Tables: []declaration.Table{offices}}
+			settings := config.New(map[declaration.TableName]config.Table{offices.Name: {Mode: config.ModeUpsert}})
 			s, err := ConnectConfig(t.Context(), db.Config, Options{Dir: dir, Apply: true})
 			if err != nil {
 				t.Fatal(err)
 			}
-			db.Exec(t, "ALTER TABLE app.teams ALTER CONSTRAINT teams_lead_id_fkey ENFORCED")
+			db.Exec(t, "ALTER TABLE app.offices ALTER CONSTRAINT offices_region_id_fkey ENFORCED")
+			db.Exec(t, "ALTER TABLE app.regions ADD COLUMN noted float8 DEFAULT random()")
 			_, err = apply.Run(t.Context(), decl, settings, s, apply.Options{})
 			if closeErr := s.Close(context.Background()); closeErr != nil {
 				t.Fatal(closeErr)
 			}
-			want := `insert into table app.teams: insert or update on table "teams" violates foreign key constraint "teams_lead_id_fkey" ` +
-				`(detail: Key (lead_id)=(10) is not present in table "members".) (constraint: teams_lead_id_fkey): ` +
-				`a row refers to a row that does not exist: declare the referenced row too, or correct the reference`
+			want := `another session made foreign key "offices_region_id_fkey" of table app.offices, which references table app.regions, enforced ` +
+				`after the apply began, or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, ` +
+				`which its snapshot shows NOT ENFORCED, and it also rewrote or truncated table app.regions after the apply began, ` +
+				`so the check of the key may not have seen the rows of table app.regions: run the apply again, and make schema changes before a run of kortopi, ` +
+				`not during one: insert into table app.offices: insert or update on table "offices" violates foreign key constraint "offices_region_id_fkey" ` +
+				`(detail: Key (region_id)=(5) is not present in table "regions".) (constraint: offices_region_id_fkey)`
 			if err == nil || err.Error() != want {
 				t.Errorf("apply: %v\nwant %s", err, want)
 			}
-			if rows := dump(t, db, "app.members", "app.teams"); len(rows) > 0 {
+			if rows := dump(t, db, "app.offices"); len(rows) > 0 {
 				t.Errorf("rows after the failed apply = %v, want none", rows)
-			}
-			if _, err := runApply(t, db, decl, settings); err == nil || !strings.HasPrefix(err.Error(), "tables app.members and app.teams reference each other") {
-				t.Errorf("the next apply: %v, want the error of the cycle", err)
 			}
 		})
 	}

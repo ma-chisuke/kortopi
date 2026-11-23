@@ -574,8 +574,10 @@ func (s *Session) checkDeferred(ctx context.Context) error {
 	if _, err := s.tx.Conn().PgConn().ExecBatch(ctx, b).ReadAll(); err != nil {
 		var pgErr *pgconn.PgError
 		if ctx.Err() == nil && errors.As(err, &pgErr) && pgErr.SeverityUnlocalized != "FATAL" && pgErr.SeverityUnlocalized != "PANIC" {
-			return &writeError{statement: "check the deferred constraints before the moves of the sequences", err: pgErr,
-				advice: adviceFor(pgErr, checkDeferredVerb, declaration.TableName{}), conflict: conflict(pgErr)}
+			// A foreign key that fails is held to what another session
+			// changed after the snapshot, as at the commit.
+			return s.referencedChange(ctx, &writeError{statement: "check the deferred constraints before the moves of the sequences", err: pgErr,
+				advice: adviceFor(pgErr, checkDeferredVerb, declaration.TableName{}), conflict: conflict(pgErr)}, false)
 		}
 		return fmt.Errorf("check the deferred constraints before the moves of the sequences: %w", err)
 	}
