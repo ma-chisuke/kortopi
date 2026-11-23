@@ -57,5 +57,6 @@
 | [ADR-0049](ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md) | `NOT ENFORCED` の外部キーを、apply の順序から除く | accepted | 2026-11-23 |
 | [ADR-0050](ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) | 同じ外部キーを繰り返す段を、計画の1行にまとめる | accepted | 2026-11-23 |
 | [ADR-0051](ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) | apply の削除が計画を超えて変えてよいテーブルを設定で挙げられるようにし、そこでしたことを報告し、上限に数える | accepted | 2026-11-23 |
+| [ADR-0052](ADR-0052-run-the-tests-of-the-command-in-parallel-with-the-settings-of-the-connection-given-through-the-dialect.ja.md) | コマンドのテストを並列に実行し、接続の設定は DB ごとの部品を通して渡す | accepted | 2026-11-23 |
 
-<!-- i18n-source: README.md sha256:99714539534108f9fb7c0704c396ba29340afd21c0757824a77855bc046d80d4 -->
+<!-- i18n-source: README.md sha256:233bc9e3a8bb601b491d7663011f2c674025c693f913f045e8986f7bd6d6dfb6 -->

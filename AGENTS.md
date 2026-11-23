@@ -40,6 +40,7 @@ The reason for a rule is in the decision record that the rule cites ([docs/adr/]
 - **Decision records.** Record a new or changed decision in `docs/adr/ADR-NNNN-<slug>.md`. Do not rewrite what an accepted record decided: write a record that supersedes it. (ADR-0001)
 - **Generated files and lockfiles.** Do not edit them by hand. Change the source and run `make gen`, or use the package manager.
 - **Databases.** Tests run against PostgreSQL servers that the tests start in containers, and nothing else. Never connect to a database of a real environment, whatever credentials the machine holds. (ADR-0019)
+- **Tests of the command.** They run in parallel, and give the command its connection settings through their `e2e` (`connect`, `connectAs`, `withOptions`), not with `t.Setenv`. Only a test of the reading of the environment sets it, and stays serial. (ADR-0052)
 - **The database stays clean.** kortopi creates temporary tables of the session and nothing else: no table, schema, function, or extension of its own. (ADR-0010)
 - **Commits.** Conventional Commits, one purpose per commit. Do not skip hooks.
 - **GitHub Actions.** After checkout and the setup of mise, a workflow step calls `make` and nothing else. Actions are pinned to a commit SHA. (ADR-0004, ADR-0005)

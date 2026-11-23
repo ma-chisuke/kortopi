@@ -122,6 +122,10 @@
 | self-test（`make selftest`） | 自己テスト |
 | integration test | 結合テスト |
 | unit test | 単体テスト |
+| run（テストを） in parallel、serial | 並列に動かす、順に動かす |
+| checkpoint（PostgreSQL の） | チェックポイント |
+| template database（PostgreSQL の） | テンプレートデータベース |
+| digest（一覧を代表するハッシュ） | ダイジェスト |
 | idempotent | 冪等 |
 | breaking change | 互換性を壊す変更 |
 | local environment | 手元の環境 |
@@ -279,4 +283,4 @@
 | materialized view | マテリアライズドビュー |
 | refresh（マテリアライズドビューを） | リフレッシュする |
 
-<!-- i18n-source: translation.md sha256:15e088b54dd2005b12d17359619677fc3a8dea8efd9b724a1440fa686431bb57 -->
+<!-- i18n-source: translation.md sha256:962a2ca25702d13e1b76d1e0628c5ed4a0c67ff8f7210f241db0f1db888103eb -->
