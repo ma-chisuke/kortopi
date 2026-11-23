@@ -315,9 +315,9 @@ apply はデータベースの中で、次のことをこの順に行い、そ�
 
 - 自分自身を参照するテーブルには、何も要らない。PostgreSQL は、そのキーを各文の終わりに検査する。
 - 2つ以上のテーブルが循環して互いを参照し、そのうち2つ以上に書く行があるときは、kortopi は循環の外部キーのうち `DEFERRABLE` なものをコミットまで遅らせる。遅らせられるキーのない循環は、そのとき、どの書き込みよりも前のエラーになる。エラーはテーブルとキーを挙げ、どれか1つを `DEFERRABLE` と宣言するよう伝える。
-- キーを遅らせる `SET CONSTRAINTS` は、制約をスキーマと名前で指す。そのスキーマの別のテーブルに、同じ名前で遅らせられない制約があれば、apply は止まり、どちらかの名前を変えるよう求める。`NOT ENFORCED` の制約も数える。`SET CONSTRAINTS` はそれも断るからである。
+- キーを遅らせる `SET CONSTRAINTS` は、制約をスキーマと名前で指す。そのスキーマの別のテーブルに、同じ名前で遅らせられない制約があれば、apply は止まり、どちらかの名前を変えるよう求める。遅らせられない `NOT ENFORCED` の制約も数える。`SET CONSTRAINTS` はそれも断るからである。
 - PostgreSQL 18 が許す `NOT ENFORCED` の外部キーには、トリガーがない。PostgreSQL はそれを検査せず、その動作も働かせない。そのため、そのキーはテーブルの順番を決めず、`DEFERRABLE` であっても遅らせず、循環を作らない。一方は PostgreSQL が検査するキーで、もう一方は `NOT ENFORCED` のキーで互いを参照する2つのテーブルは、前者のキーの順に書き、何も要らない。
-- apply の実行中に、ほかのセッションがそうしたキーを検査するキーに変えたとき、apply が参照する側のテーブルを読んだあとなら、その変更は apply を待ち、そのあとで apply がコミットした行を検査する。その読み取りより前なら、apply のスナップショットのカタログがキーをまだ `NOT ENFORCED` と見せている間に、変更がコミットしうる。そのとき PostgreSQL は書き込みでキーを検査し、apply があとで書く行を参照する行は、[存在しない行を参照する行](#存在しない行を参照する行)のエラーで失敗し、何も変わらない。次の apply はそのキーでテーブルを順序づけるか、循環を断る。そうした変更は、apply の実行中ではなく、その前にする（[デプロイでの使い方](#デプロイでの使い方)）。
+- ほかのセッションが apply の実行中にそうしたキーを検査するキーへ変えたとき、apply が参照する側のテーブルを読む時点でコミットしていない変更は apply を待ち、そのあとで apply がコミットした行を検査する。apply のスナップショットからその読み取りまでの間にコミットした変更では、スナップショットのカタログはキーを `NOT ENFORCED` と見せたまま、PostgreSQL は書き込みでキーを検査する。apply の始まりにロックを持っている変更も同じである。apply は、その読み取りでそのロックを待つからである。そのキーが書き込みを拒むと、apply はその変更を挙げるエラーで止まり（[検査が途中で始まったキー](#検査が途中で始まったキー)）、何も変わらない。次の apply はそのキーでテーブルを順序づけるか、循環を断る。そうした変更は、apply の実行中ではなく、その前にする（[デプロイでの使い方](#デプロイでの使い方)）。
 - `--schema` を使うと、実行の外のテーブルは順番に影響しない。行がそうしたテーブルへの外部キーを破れば、PostgreSQL のエラーがテーブルと制約を示す。
 
 ## 削除の安全策
@@ -762,6 +762,17 @@ kortopi: nothing was changed
 kortopi: foreign key "link" of table app.x cannot be deferred: table app.other has a constraint of the same name in schema "app" that is not DEFERRABLE, and SET CONSTRAINTS names a constraint by its schema and name only: rename one of the two constraints
 ```
 
+### 検査が途中で始まったキー
+
+```text
+kortopi: another session made foreign key "teams_lead_id_fkey" of table app.teams, which references table app.members, enforced after the apply began, or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, which its snapshot shows NOT ENFORCED: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table app.teams: insert or update on table "teams" violates foreign key constraint "teams_lead_id_fkey" (detail: Key (lead_id)=(10) is not present in table "members".) (constraint: teams_lead_id_fkey)
+kortopi: nothing was changed
+```
+
+apply のスナップショットが `NOT ENFORCED` と見せる外部キーが、書き込みか、コミットまで遅らせた制約の検査か、コミットを拒んだ。ほかのセッションがスナップショットのあとでそのキーを検査するキーに変えたので、apply はそのキーを除いて書き込みを順序づけた（[外部キーと循環](#外部キーと循環)）。
+宣言が誤っているとは限らないので、エラーは宣言を変える助言を付けない。apply をもう一度実行すれば、そのキーでテーブルを順序づけるか、そのキーが作る循環を伝える。
+ほかのセッションがそのキーの参照するテーブルも書き直したときは、エラーは `NOT ENFORCED` のあとでそれも挙げる。
+
 ### 同時の変更
 
 ```text
@@ -966,4 +977,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md)・[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:8735235c7606569dea613dfbdbefd6a48e6b454eeb8b93f71abb6a768772952c -->
+<!-- i18n-source: apply.md sha256:c702c7049a3fb7448940d9f7d303841cf6349ca3118030d0d2fdb8ddea4ec871 -->
