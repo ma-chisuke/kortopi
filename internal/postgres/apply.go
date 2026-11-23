@@ -52,8 +52,10 @@ var errNotApply = errors.New("the session is for a plan, which writes nothing: o
 
 // ForeignKeys returns the foreign keys from one named table to another named
 // table, also from a table to itself, sorted by the referencing table and
-// then by the name of the constraint. A foreign key of a partitioned table
-// is read once, from the partitioned table. A key NOT ENFORCED, of
+// then by the name of the constraint. It reads only the keys that a table
+// defines itself (conparentid = 0): a key that a partition holds because its
+// partitioned table defines it is not read, so it orders nothing when the
+// partition is declared without its partitioned table. A key NOT ENFORCED, of
 // PostgreSQL 18 and later, has no triggers, so PostgreSQL neither checks it
 // nor runs its action: it comes marked NotEnforced, and the order of an
 // apply leaves it out (ADR-0049). Servers before enforcedSince have no such
@@ -130,8 +132,8 @@ func (s *Session) Defer(ctx context.Context, keys []apply.ForeignKey) (err error
 // checkConstraintNames returns an error when a constraint of another table
 // in the schema of a key has the name of the key and is not deferrable. SET
 // CONSTRAINTS names constraints by schema and name only, so it would try to
-// defer that constraint too, and fail: also a constraint NOT ENFORCED, which
-// it refuses as one that is not deferrable, as a test shows on PostgreSQL 18.
+// defer that constraint too, and fail: also when that constraint is NOT
+// ENFORCED and not deferrable, as a test shows on PostgreSQL 18.
 func (s *Session) checkConstraintNames(ctx context.Context, keys []apply.ForeignKey) error {
 	schemas := make([]string, len(keys))
 	names := make([]string, len(keys))
