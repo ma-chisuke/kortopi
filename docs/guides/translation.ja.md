@@ -276,5 +276,7 @@
 | impact（不具合の） | 影響 |
 | notification（GitHub の） | 通知 |
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
+| materialized view | マテリアライズドビュー |
+| refresh（マテリアライズドビューを） | リフレッシュする |
 
-<!-- i18n-source: translation.md sha256:10f4b05185fb903d57c3831f6f74cc44264a6d7f28b540f4f9d8565dc4b579a9 -->
+<!-- i18n-source: translation.md sha256:15e088b54dd2005b12d17359619677fc3a8dea8efd9b724a1440fa686431bb57 -->
