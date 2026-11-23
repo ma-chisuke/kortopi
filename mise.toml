@@ -20,7 +20,7 @@ python = "3.14.10"
 
 # Package managers
 pnpm = "12.21.0"
-uv = "0.13.8"
+uv = "0.13.9"
 
 # Go
 golangci-lint = "2.15.0"

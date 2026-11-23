@@ -54,6 +54,7 @@
 | [ADR-0046](ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md) | 行を削除しないモードのテーブルで宣言にない保存された行を数え、それがある間は一致を主張しない | accepted | 2026-11-22 |
 | [ADR-0047](ADR-0047-stop-a-run-that-read-a-table-that-another-session-changed-after-its-snapshot.ja.md) | スナップショットのあとにほかのセッションが書き換え、置き換え、パーティションを変えたテーブルを読んだ実行は止める | accepted | 2026-11-22 |
 | [ADR-0048](ADR-0048-compare-the-schema-that-decides-what-the-deletions-do-after-the-deletions-of-an-apply.ja.md) | apply の削除のあとに、削除のすることを決めるスキーマを、スナップショットが見たものと今のものとで比べる | accepted | 2026-11-22 |
+| [ADR-0049](ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md) | `NOT ENFORCED` の外部キーを、apply の順序から除く | accepted | 2026-11-23 |
 | [ADR-0050](ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md) | 同じ外部キーを繰り返す段を、計画の1行にまとめる | accepted | 2026-11-23 |
 
-<!-- i18n-source: README.md sha256:d40a174d0756e34cd2f34149e72988c179d6393cb99d818ff170124d3bf70208 -->
+<!-- i18n-source: README.md sha256:e1960f9683281b69fd964a38bcf367c3612eaf1afc7bd787c5f0821cb194cff8 -->

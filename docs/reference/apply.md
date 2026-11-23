@@ -313,7 +313,9 @@ The order of the tables comes from the foreign keys in the catalogs, so a new fo
 
 - A table that references itself needs nothing: PostgreSQL checks the key at the end of each statement.
 - When two or more tables reference each other in a cycle, and two or more of them have rows to write, kortopi defers the cycle's foreign keys that are `DEFERRABLE` until the commit. A cycle with no deferrable key is then an error before any write, which names the tables and the keys and says to declare one of them `DEFERRABLE`.
-- `SET CONSTRAINTS`, which defers the keys, names a constraint by its schema and name. When another table in that schema has a constraint of the same name that is not deferrable, the apply stops and asks you to rename one of them.
+- `SET CONSTRAINTS`, which defers the keys, names a constraint by its schema and name. When another table in that schema has a constraint of the same name that is not deferrable, the apply stops and asks you to rename one of them. A constraint `NOT ENFORCED` that is not deferrable counts too: `SET CONSTRAINTS` refuses it as well.
+- A foreign key `NOT ENFORCED`, which PostgreSQL 18 allows, has no triggers: PostgreSQL neither checks it nor runs its action. So it does not order the tables, it is never deferred, also when it is `DEFERRABLE`, and it closes no cycle. Two tables that reference each other, through a key that PostgreSQL enforces one way and a key `NOT ENFORCED` the other way, are written in the order of the first key, and need nothing.
+- When another session makes such a key enforced while an apply runs, a change that has not committed when the apply reads the referencing table waits for the apply, and then checks the rows that the apply committed. A change that commits between the snapshot of the apply and that read leaves the catalogs of the snapshot showing the key `NOT ENFORCED`, while PostgreSQL checks it on the writes: so does a change that holds its lock when the apply begins, since the apply waits for it at that read. A write that the key then refuses stops the apply with an error that names the change ([A key made enforced during the apply](#a-key-made-enforced-during-the-apply)), and nothing is changed. The next apply orders the tables by the key, or refuses the cycle. Make such changes before an apply, not while it runs ([In a deployment](#in-a-deployment)).
 - With `--schema`, a table outside the run does not change the order. If a row breaks a foreign key to such a table, the error of PostgreSQL names the table and the constraint.
 
 ## The guards on deletions
@@ -737,6 +739,8 @@ Declare the column, give it a value with `on_insert` ([Declaration files](declar
 kortopi: tables a.a and a.b reference each other through foreign keys that are not deferrable, "a_b" of a.a and "b_a" of a.b, and tables a.a and a.b have rows to write, so no order of these tables can write their changes: declare one of these foreign keys DEFERRABLE
 ```
 
+The keys of the error are keys that PostgreSQL enforces: a foreign key `NOT ENFORCED` closes no cycle ([Foreign keys and cycles](#foreign-keys-and-cycles)).
+
 ### A deferred foreign key that fails at the commit
 
 ```text
@@ -756,6 +760,17 @@ kortopi: nothing was changed
 ```text
 kortopi: foreign key "link" of table app.x cannot be deferred: table app.other has a constraint of the same name in schema "app" that is not DEFERRABLE, and SET CONSTRAINTS names a constraint by its schema and name only: rename one of the two constraints
 ```
+
+### A key made enforced during the apply
+
+```text
+kortopi: another session made foreign key "teams_lead_id_fkey" of table app.teams, which references table app.members, enforced after the apply began, or replaced it with a key of the same name that PostgreSQL enforces, and the apply planned its writes without the key, which its snapshot shows NOT ENFORCED: run the apply again, and make schema changes before a run of kortopi, not during one: insert into table app.teams: insert or update on table "teams" violates foreign key constraint "teams_lead_id_fkey" (detail: Key (lead_id)=(10) is not present in table "members".) (constraint: teams_lead_id_fkey)
+kortopi: nothing was changed
+```
+
+A foreign key that the snapshot of the apply shows `NOT ENFORCED` refused a write, the check of the constraints deferred to the commit, or the commit: another session made it enforced after the snapshot, so the apply ordered its writes without it ([Foreign keys and cycles](#foreign-keys-and-cycles)).
+The declaration need not be wrong, so the error gives no advice to change it: run the apply again, which orders the tables by the key, or reports the cycle that it closes.
+When another session also rewrote the table that the key references, the error names that too, after `NOT ENFORCED`.
 
 ### A concurrent change
 
@@ -953,4 +968,4 @@ An apply needs no counts when no table of mode `sync` has rows to delete, as wit
 kortopi: an apply needs session_replication_role = origin, but the session has "replica": the triggers of foreign keys do not fire then, and the apply could commit rows that break them: apply in a session that leaves session_replication_role at origin
 ```
 
-The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md), [ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md), [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md), [ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md), and [ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.md).
+The reasons for this behavior are in [ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.md), [ADR-0018](../adr/ADR-0018-guard-deletions.md), [ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.md), [ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.md), [ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.md), [ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.md), and [ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.md). The later decisions about it are in [ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.md), [ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.md), [ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.md), [ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.md), and [ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.md).

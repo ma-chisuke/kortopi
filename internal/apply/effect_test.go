@@ -189,6 +189,13 @@ func TestDeletionOrder(t *testing.T) {
 			tables:   []plan.Table{withReaches("z.tag", "a.x")},
 			want:     []string{"a.x", "z.tag"},
 		},
+		{
+			name:   "a key that is not enforced does not order the deletions",
+			sorted: []string{"a.x", "z.tag"},
+			keys:   []ForeignKey{notEnforced(fk("tag_x", "z.tag", "a.x"))},
+			tables: []plan.Table{withReaches("z.tag", "a.x")},
+			want:   []string{"a.x", "z.tag"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
