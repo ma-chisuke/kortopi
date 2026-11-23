@@ -281,5 +281,9 @@
 | line break, end of a line | 改行、行の終わり |
 | string constant（SQL の） | 文字列定数 |
 | checkout（Git の）, check out | チェックアウト、チェックアウトする |
+| revert（Git のコミットを） | revert する |
+| base（プルリクエストの）, merge | ベース、マージ |
+| event trigger（PostgreSQL の） | イベントトリガー |
+| superuser（PostgreSQL の） | スーパーユーザー |
 
-<!-- i18n-source: translation.md sha256:ed6ae71a1ce2587d179906477f491d49a27398c2ad6db6316593a84cedf6f06e -->
+<!-- i18n-source: translation.md sha256:c42b7fb5bd9ab6ac3e944309fa6bbe23a9fd64cf2e639a735515caa259325081 -->

@@ -90,7 +90,7 @@ Each following line is one row, in the CSV format of PostgreSQL's COPY:
 - White space is part of the value: in `1, one`, the second value starts with a space, and differs from the value in `1,one`.
 - Lines may end in LF or in CRLF, and the last line needs no line break.
 - A line break inside a value in quotes is part of the value, with the bytes that the file holds there, so a conversion of the ends of lines changes the value ([Line ends and Git](#line-ends-and-git)).
-- On PostgreSQL before 18, a line that is exactly `\.` is an error. COPY on those versions takes it for the end of the data and drops the rest of the file without an error. Write the value in quotes, as `"\."`, which is data on every version.
+- On PostgreSQL before 18, a line that is exactly `\.` is an error. COPY on those versions takes it for the end of the data and drops the rest of the file without an error. Write the value in quotes, as `"\."`, which is data on every version. On PostgreSQL 18 the line is data, so a check against 18 passes a file that a server before 18 refuses: quote the value wherever a server before 18 may read the file.
 
 ### NULL and the empty string
 
@@ -255,6 +255,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   | `sync` | yes | yes | yes |
 
   In mode `insert`, a plan compares the declared rows with the stored rows by their keys only: a changed value of a row that exists is not shown, and an empty plan names the tables of mode `insert` instead of saying that the database matches the declaration ([kortopi plan](plan.md#read-the-output)).
+  Every apply inserts each declared row that the table lacks, also a row that someone deleted from the table on purpose: to keep a row deleted, remove it from the declaration too.
 
   Modes `insert` and `upsert` delete none of the stored rows that the declaration lacks, and a plan counts them on a line of the table ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). Mode `sync` shows each of them as a row to delete.
 

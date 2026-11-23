@@ -117,7 +117,7 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 | `PGPASSFILE` | パスワードファイル。既定は `~/.pgpass` で、ホスト・ポート・データベース・ユーザーごとに1行を持つ。 |
 | `PGSERVICE`、`PGSERVICEFILE` | サービスファイルのサービス。サービスファイルの既定は `~/.pg_service.conf` で、接続のすべての設定を持てる。 |
 | `PGSSLMODE` | `disable`・`allow`・`prefer`（既定）・`require`・`verify-ca`・`verify-full` のどれか。 |
-| `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。 |
+| `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。`verify-ca` か `verify-full` で、`PGSSLROOTCERT` も `~/.postgresql/root.crt` もないとき、kortopi はシステムの認証局を信頼する。libpq は、このとき接続を拒む。自分の認証局だけを信頼するには、その証明書を `PGSSLROOTCERT` に与える。`PGSSLROOTCERT=system` は、libpq と同じくシステムの認証局を信頼する。 |
 | `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。ある試験では、何も応答しないアドレスへの試みは約 150 秒で終わった。macOS でも Linux のコンテナでも同じだった。誰も見ていない実行では、10 などに設定する。 |
 | `PGTARGETSESSIONATTRS` | ホストの一覧のうち、残すサーバーの種類。計画と apply が要するプライマリには `read-write` か `primary`、スタンバイには `standby` か `prefer-standby` を使い、libpq と同じく `read-only` もある。既定の `any` は、接続を受け付けた最初のサーバーを残す。 |
 | `PGAPPNAME` | セッションの `application_name`。`pg_stat_activity` に表示される。既定は `kortopi` である。 |
@@ -294,6 +294,16 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
 - 挿入する行か更新する行が値を書く、シーケンスを持つ列については、列の最大の値と、シーケンスの位置を読む。`nextval` も `setval` も呼ばない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
+
+PostgreSQL は、一時テーブルの作成のそれぞれを DDL のコマンドとみなす。テーブル `pg_temp.kortopi_1` の `CREATE TABLE AS` などである。そのため、`ON ddl_command_end` のような DDL のコマンドのイベントトリガーが、計画のセッションの中で、そのロールで、作成ごとに動く。
+そうしたトリガーの関数がロールにできないことをすれば、計画は PostgreSQL のエラーで失敗する。
+
+```text
+kortopi: create the temporary table of table billing.payment_methods: ERROR: permission denied for table ddl_log (SQLSTATE 42501)
+```
+
+関数が書いたものは、計画とともにロールバックされる。apply も同じように一時テーブルを作り、関数が書いたものはそのコミットとともに残る。
+関数のすることをロールに許すか、セッションの一時テーブルを関数の対象から外す。
 
 計画を止めるには Ctrl-C を押すか、SIGTERM を送る。
 kortopi は動いている文のキャンセルをサーバーに求め、トランザクションをロールバックし、接続を閉じ、終了コード 1 で終わる。
@@ -887,4 +897,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:5663f21795c1d355c6f9e14e8b1a3b9fadded9210e3a947583fbc5371fc16f81 -->
+<!-- i18n-source: plan.md sha256:529fbc7acd8edf988d1f19b96ad570e43c514ac11e60bdb41023f300e1518e0a -->

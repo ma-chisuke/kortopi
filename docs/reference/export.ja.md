@@ -193,6 +193,24 @@ SQL ファイルでは、各 `INSERT` の列の一覧とその行の値が一致
 自然キーで照合するのは、外部キーなしで ID を持つ行がないときか、自然キーが決して変わらないときである。
 そうでなければ、宣言に ID を残してそれで照合する。そうすれば、自然キーの変更は行の更新になり、行は ID を保つ。
 
+行の自然キーを変えて ID を保つには、ファイルの変更と同じデプロイで、apply の前に、スキーマの変更の文でデータベースのキーを変える。
+
+```sql
+UPDATE inv.bed_types SET code = 'twin_standard' WHERE code = 'twin';
+```
+
+すると apply は、新しいキーでその行を ID ごと見つけ、そこでは何も変えない。
+その文がなければ、計画は新しいキーを挿入する行として示し、モード `upsert` では古い行がその隣に残る。
+
+2つの宣言したテーブルの間の外部キーは、その列の値で宣言する。そのため、外部キーがどの環境でも成り立つのは、宣言が値を持つ列を参照するときに限る。参照されるテーブルの自然キーがそれにあたり、環境ごとに振られる ID はあたらない。
+振られる ID への宣言した参照は1つの環境の ID を持つので、別の環境での apply は、参照される行を宣言していても、外部キーで失敗する。
+
+```text
+kortopi: insert into table m.room: insert or update on table "room" violates foreign key constraint "room_room_type_id_fkey" (detail: Key (room_type_id)=(0b9d3c62-6f1e-4c55-9d0e-5a1f2b3c4d5e) is not present in table "room_type".) (constraint: room_room_type_id_fkey): a row refers to a row that does not exist: declare the referenced row too, or correct the reference
+```
+
+マスタテーブルどうしが参照し合い、振られる ID が環境ごとに違うときは、`room_type_code text REFERENCES m.room_type (code)` のように、外部キーに自然キーを参照させる。
+
 ### 主キーのないテーブル
 
 主キーがなく、`kortopi.toml` に `key` もないテーブルも書き出せる。そのときは、すべての列で行を並べ、標準エラー出力に注記を出す。
@@ -236,6 +254,18 @@ twin,3
 
 ファイルが行のほかに持っていたもの、たとえば SQL ファイルのコメントや体裁は残らない。
 置き換えたファイルは、そのモードを保つ。
+
+書き出し直しは、宣言すべき行を持つデータベースから行う。
+ある環境から書き出し直すと、試験の行のように、その環境だけが持つ行も書き、それについて何も言わない。
+
+```text
+$ kortopi export --dir data --overwrite --table billing.fees
+wrote data/billing/fees.csv (2 rows)
+Exported 1 table with 2 rows.
+```
+
+書き出し直す前にその環境に対して計画を立てると、モード `upsert` か `insert` のテーブルではそうした行を数え（[kortopi plan](plan.ja.md#宣言にない保存された行)）、モード `sync` のテーブルでは削除する行として示す。
+ファイルの変更は、コミットする前に見直す。
 
 書き出し直しは、ファイルを書いたあとにテーブルへ加わった列を足さない。その列は手でファイルに書き足し、もう一度書き出す。
 
@@ -386,7 +416,9 @@ kortopi は次の順に進み、最後の手順の前までがすべて通るま
 3. 各テーブルの行を、そのファイルのそばの一時ファイルに書く。一時ファイルの名前はドットで始まるので、計画が読むことはない。SQL ファイルを得る行のないテーブルは、ここでエラーになる。
 4. すべてのテーブルを書き終えたら、一時ファイルを1つずつ所定の場所へ移す。
 
-手順 4 より前の失敗では、データのディレクトリは元のままである。一時ファイルと、書き出しが作ったディレクトリは消し、最後の行は `kortopi: no file was written` になる。
+手順 4 より前の失敗では、データのディレクトリは元のままである。
+手順 1 か 2 の誤りでは、書き出しは何も作らないうちに、そのエラーだけを出して終わる。
+手順 3 の失敗では、一時ファイルと、書き出しが作ったディレクトリを消し、最後の行は `kortopi: no file was written` になる。
 一部のファイルが置き換わったまま残りうるのは、手順 4 での失敗だけである。そのときは、エラーが所定の場所にあるファイルを示す。
 新しいファイルはその名前へリンクするので、書き出しの間にその場所へ現れたファイルは置き換えない。
 
@@ -476,4 +508,4 @@ kortopi: invalid value for flag --format: give csv or sql
 
 この振る舞いの理由は、[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0028](../adr/ADR-0028-export-named-tables-into-a-file-each.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md) にある。
 
-<!-- i18n-source: export.md sha256:40005713965d3ecaa69fd68851b16e6ff7cf80100875de8f0bd2977c5f2ff756 -->
+<!-- i18n-source: export.md sha256:3f0a7eb52fe2e59b3debd2a73a091e4791e1b0d0517bc49decc8fbbe0b87275d -->

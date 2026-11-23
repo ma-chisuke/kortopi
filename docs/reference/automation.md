@@ -24,6 +24,7 @@ A pipeline tells the outcomes apart by the status and the last line of standard 
 - 1, with `kortopi: nothing was changed` last, or that line with the sequences that it names: fix what the error names, and run again.
 - 1, with the message that the outcome of the commit is not known: run `kortopi plan` to see whether the commit was made, and apply again if it was not ([kortopi apply](apply.md#read-the-output)).
 - 1, with the usage of the command last: correct the flags.
+- 1, from `kortopi export`: the error names the files that the export wrote, or says that it wrote none, or is a mistake that the export found before it wrote anything ([kortopi export](export.md#output-and-errors)).
 - A status above 128, as 137 for SIGKILL: a signal ended kortopi before it could end its session, which can stay on the server and hold its locks ([A run that breaks off](#a-run-that-breaks-off)). kortopi catches SIGINT and SIGTERM, and exits with 1 after them.
 
 ## At deploy time
@@ -37,7 +38,7 @@ kortopi apply --dir data --lock-timeout 10s
 ```
 
 - Start the apply once the schema change of the deployment has committed. A change that rewrites, truncates, or replaces a declared table, or attaches or detaches one of its partitions, after the apply began stops the apply before it writes anything, with exit status 1: run it again then ([kortopi plan](plan.md#a-schema-change-during-a-run)).
-- Run the apply as the role that owns the declared tables, or as a role that has [what an apply needs](apply.md#what-an-apply-needs). With one owner role for each schema, run one apply for each schema, with `--schema` ([kortopi apply](apply.md#one-apply-for-each-schema)).
+- Run the apply as the role that owns the declared tables, or as a role that has [what an apply needs](apply.md#what-an-apply-needs). With one owner role for each schema, run one apply for each schema, with `--schema`. Two schemas whose tables reference each other in both directions then take new rows that need each other only in one apply, as a role that may write both, or in two deployments ([kortopi apply](apply.md#one-apply-for-each-schema)).
 - Give the apply a lock timeout with `--lock-timeout`. Without one, an apply waits without limit while another session holds a lock on a declared table, or on the rows that it writes, and the deployment waits with it. With one, the apply stops with an error that says so, and changes nothing ([kortopi plan](plan.md#wait-for-a-lock)). Use the flag, not `PGOPTIONS`: behind a connection pooler in transaction mode, `PGOPTIONS` does not reach the server, and the run fails to connect or waits without the limit ([Connection settings](plan.md#connection-settings)).
 - A runner that cancels a job sends kortopi SIGTERM, or SIGINT. Before the commit, kortopi asks the server to cancel its statement, rolls back, and exits with status 1 within 5 seconds, or within 10 seconds during the check after the deletions, which ends a second session too, with `kortopi: nothing was changed` last; when the server did not confirm the end of the session in that time, a line before it says how to find the session in `pg_stat_activity` and end it. Once the commit has started, kortopi says that it waits for the answer, and a second signal gives up the wait with the message of the unknown outcome: run `kortopi plan` then. A runner that kills the process before that leaves the outcome to the server ([kortopi apply](apply.md#interrupt-an-apply)), and the session too, until the server ends it ([A run that breaks off](#a-run-that-breaks-off)).
 - Exit status 1 means that the apply changed nothing, unless its error says that the outcome of the commit is not known. The deployment can run the apply again after a fix.
@@ -51,6 +52,35 @@ kortopi apply --dir data --lock-timeout 10s
   The values of a table of mode `insert` beyond its key are compared by neither the apply nor the plan.
 - An apply that writes explicit values into an identity or `serial` column moves the sequence of the column beyond them, last before its commit, so that the application does not take one of them next, and says so after `Applied:` ([kortopi apply](apply.md#sequences)). `SELECT` and `UPDATE` on the sequence allow every move; without the privileges that a move needs, it writes the rows, leaves the sequence, and says what to grant in a note on standard error, with exit status 0. So it does when another session holds a lock on the sequence for more than 5 seconds. An apply that moves a sequence runs the constraints deferred to the commit right before its first move, so that one that fails stops it before any sequence moves.
 - A declared table or column that the schema does not have stops the apply, which then changes nothing ([kortopi apply](apply.md#a-table-or-a-column-that-the-database-lacks)). A plan with `--no-pending` before the apply stops on the same names, with the files that declare them, but adds no check that the apply lacks.
+
+## Take a change back
+
+To take a change of the declaration back, revert its commit, and apply the files of the revert, with `--allow-delete` when the change added rows to a table of mode `sync`.
+The apply brings the declared rows back to the earlier declaration, which is not the earlier database:
+
+- A value that the change updated comes back.
+- A row that the change deleted comes back as a new row: the database gives it a new generated ID and the defaults of the columns that the declaration does not name, such as the time of its creation, and the apply gives it the values of `on_insert` anew. A row that holds its old ID without a foreign key points at nothing ([kortopi export](export.md#a-natural-key-in-place-of-a-generated-id)).
+- The rows of other tables that the deletion changed or deleted through foreign keys stay as it left them, such as a reference that `ON DELETE SET NULL` set to NULL: the plan of the revert does not show them.
+- A row that the change inserted into a table of mode `upsert` or `insert` stays, and the plan counts it as a stored row that the declaration lacks ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)).
+
+In a test, a change renamed the policy `flexible`, deleted the policy `strict`, whose deletion set the references of two reservations to NULL, and added the amenity `spa` to a table of mode `upsert`. The apply of the revert printed:
+
+```text
+bk.policies (sync, key: code)
+  + code=strict  name=Strict
+  ~ code=flexible  name: "Flexible (no fee)" -> Flexible
+  1 to insert, 1 to update, 0 to delete
+
+bk.amenities: 1 stored row is not declared, which mode upsert does not delete
+
+Plan: 1 to insert, 1 to update, 0 to delete in 2 tables.
+Not declared: 1 stored row in 1 table, which mode upsert does not delete.
+
+Applied: 1 inserted, 1 updated, 0 deleted.
+```
+
+`strict` came back with the ID 3 instead of 2 and a new `created_at`, both reservations kept NULL, and `spa` stayed.
+kortopi brings back what the declaration holds, and nothing else.
 
 ## In a pull request
 
@@ -70,6 +100,13 @@ kortopi plan --dir data --exit-code
 - The apply writes the rows, as a deployment would. It fails on what a plan does not check: a value that a constraint refuses, such as a `CHECK` constraint or a foreign key to a row that the declaration lacks, and a value or a row that a trigger makes other than the declaration says, which it finds when it compares the tables again before its commit.
 - The last plan must exit with 0: anything else means that the apply did not bring the database to the declaration, as a constraint trigger deferred to the commit can make it in an apply without deletions, where it fires after that comparison. Run it without `--schema`, so that it reads every declared table.
 - `--allow-delete` costs nothing here, since the scratch database holds nothing worth keeping.
+- Run the check as the roles of the deployment, created on the scratch database with the privileges that the schema of the pull request grants them: the apply as the role that the deployment applies with, one for each schema with `--schema` where the deployment does so, and a plan as the role of the drift check. A check that runs as a superuser, or as the owner of every table, passes a declaration that the deployment refuses for a missing privilege:
+
+  ```text
+  kortopi: an apply needs SELECT on table billing.currencies, and the role "deployer" lacks it: grant the role SELECT on the table
+  ```
+
+- Check the result of the merge. Two pull requests that each add a row with the same key pass their checks, and Git merges them without a conflict when the rows stand apart in the file: the plan of the merge then stops on the key that two rows hold ([Declaration files](declaration.md#a-key-that-two-rows-hold)). Run the check on the merge of the pull request into its base, and again when the base has moved before the merge.
 
 A plan against a real environment, to show a reviewer what the merge will change, belongs in a run that you trust, such as one that a maintainer starts, as a role that has [what the session of a plan needs](plan.md#what-the-session-needs) and no privilege to change the declared tables, such as `UPDATE`.
 
@@ -112,6 +149,7 @@ psql --single-transaction -v ON_ERROR_STOP=1 -f rows.sql
 - Its deletions are comments, which run only when someone removes the comment marks.
 - It ends with the sequences of the columns that it writes explicit values into: a statement that moves a sequence beyond them when the script runs, as an apply by the role of the plan does, and, for a sequence that this role may not read or move, the statement as a comment under the reason. Run the script as the role that planned it, and it never fails on a sequence ([kortopi plan](plan.md#read-the-script)).
 - `--exit-code` works with `--format sql` as with the text: status 2 when the plan is not empty.
+- The script updates one row in each statement, where an apply updates the rows of a table in one. A change that holds only once every row of the table has changed, such as two rows that swap the values of a unique key, works in an apply and fails in the script ([kortopi plan](plan.md#what-the-script-does-not-do)).
 - The script does not compare the tables again before the commit, as an apply does, so a trigger that rewrites a declared value commits what it wrote. After the script, `kortopi plan --exit-code` shows the deletions that stayed comments, and such values. It also counts again the stored rows that the declaration lacks, which give no status of their own.
 
 ## The job and the server
@@ -138,6 +176,15 @@ A plan of each declaration below ran in a container with the memory limit of the
 | one SQL file of 200,000 rows, 25 MB | 4 GiB | the plan, exit status 0, with a peak of 1.8 GiB |
 
 - Give a job that reads SQL files at least 300 MiB, and more for large SQL files, or declare the tables in CSV files, which kortopi never parses.
+- A plan and an apply keep the rows of the plan in memory, so their memory grows with the number of rows that change. With the binary for macOS on arm64, against PostgreSQL 18.7, on a machine that other work loaded, a table whose rows were declared in a CSV file gave these largest resident sets:
+
+  | Run | 100,000 rows | 1,000,000 rows |
+  |---|---|---|
+  | a plan, no row changed | 14 MiB | 13 MiB |
+  | a plan, every row changed | 78 MiB | 375 MiB |
+  | an apply, every row changed | 75 MiB | 455 MiB |
+
+  Give a job that applies a large change memory for it, besides the parser.
 - A run that the system kills for its memory prints nothing, because it gets no chance to, and a shell reports the exit status 137, which stands for the signal SIGKILL. Look at the memory of a job that ends so.
 
 ### Connections

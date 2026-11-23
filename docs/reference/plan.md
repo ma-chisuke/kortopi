@@ -117,7 +117,7 @@ Besides the host, the port, the user, the database, and the password, kortopi ta
 | `PGPASSFILE` | The password file, `~/.pgpass` by default, with a line for each host, port, database, and user. |
 | `PGSERVICE`, `PGSERVICEFILE` | A service of the service file, `~/.pg_service.conf` by default, which may hold every setting of the connection. |
 | `PGSSLMODE` | `disable`, `allow`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. |
-| `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. |
+| `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. With `verify-ca` or `verify-full`, and neither `PGSSLROOTCERT` nor `~/.postgresql/root.crt`, kortopi trusts the authorities of the system, where libpq refuses to connect: give `PGSSLROOTCERT` the certificate of your authority, to trust it alone. `PGSSLROOTCERT=system` trusts the authorities of the system, as in libpq. |
 | `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it: an attempt to an address that answered nothing ended after about 150 seconds in a test, on macOS and in a Linux container alike. Set it for a run that no one watches, such as to 10. |
 | `PGTARGETSESSIONATTRS` | The kind of server to keep, among the hosts of a list: `read-write` or `primary` for the primary, which a plan and an apply need, `standby` or `prefer-standby` for a standby, and `read-only`, as in libpq. `any`, the default, keeps the first server that accepts the connection. |
 | `PGAPPNAME` | The `application_name` of the session, which `pg_stat_activity` shows: `kortopi` by default. |
@@ -294,6 +294,16 @@ In the database, a plan does the following and nothing else:
 - When rows are to be deleted, it follows the foreign keys that reference them with queries, and keeps the rows that it reaches, by their identities, in one more temporary table. It deletes no row.
 - For a column with a sequence that its rows to insert or to update write values into, it reads the largest value of the column and where the sequence stands. It calls neither `nextval` nor `setval`.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
+
+PostgreSQL takes the creation of each temporary table for a DDL command, such as `CREATE TABLE AS` of a table `pg_temp.kortopi_1`, so an event trigger on DDL commands, such as one `ON ddl_command_end`, fires for it, in the session of the plan, with its role.
+A function of such a trigger that does what the role may not do fails the plan, with the error of PostgreSQL:
+
+```text
+kortopi: create the temporary table of table billing.payment_methods: ERROR: permission denied for table ddl_log (SQLSTATE 42501)
+```
+
+What the function writes is rolled back with the plan, and commits with an apply, which creates its temporary tables in the same way.
+Let the role do what the function does, or let the function leave the temporary tables of the session alone.
 
 Press Ctrl-C to stop a plan, or send it SIGTERM.
 kortopi asks the server to cancel the statement that runs, rolls the transaction back, closes the connection, and exits with status 1:

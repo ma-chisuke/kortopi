@@ -669,6 +669,14 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 
 - Each apply is a transaction of its own: when the second fails, the first stays committed. Run them again after a fix; an apply of rows that are applied already changes nothing.
 - When a table of one schema references a table of another, apply the referenced schema first. A row that breaks a foreign key to a table outside the run fails with the error of PostgreSQL ([Foreign keys and cycles](#foreign-keys-and-cycles)).
+- Two schemas whose tables reference each other in both directions have no such order. When `inv.room_types` references `bill.tax_rates`, and `bill.rate_plans` references `inv.room_types`, a declaration that adds a tax rate, a room type that uses it, and a rate plan that uses the room type fails in the run of either schema first, on the foreign key to the rows that the other run would insert:
+
+  ```text
+  kortopi: insert into table inv.room_types: insert or update on table "room_types" violates foreign key constraint "room_types_tax_rate_name_fkey" (detail: Key (tax_rate_name)=(standard) is not present in table "tax_rates".) (constraint: room_types_tax_rate_name_fkey): a row refers to a row that does not exist: declare the referenced row too, or correct the reference
+  kortopi: nothing was changed
+  ```
+
+  Apply such a change in one run without `--schema`, as a role that may write both schemas, or in two deployments: the first adds the tax rate, and the second the room type and the rate plan, with the run of `inv` before the run of `bill`.
 - Deletions run in the reverse order: delete the referencing rows in the run of their schema before the run that deletes the rows that they reference.
 
 ## Known limits
