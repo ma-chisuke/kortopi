@@ -8,7 +8,7 @@ require (
 	github.com/pganalyze/pg_query_go/v6 v6.2.5
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.45.0
-	github.com/wasilibs/go-pgquery v0.0.0-20261106060434-4301e51f8dbf
+	github.com/wasilibs/go-pgquery v0.0.0-20261117022153-47142ee672c1
 	golang.org/x/text v0.44.0
 )
 
