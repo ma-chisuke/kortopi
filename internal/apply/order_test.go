@@ -36,6 +36,12 @@ func deferrable(k ForeignKey) ForeignKey {
 	return k
 }
 
+// notEnforced returns k as a key that the database does not enforce.
+func notEnforced(k ForeignKey) ForeignKey {
+	k.NotEnforced = true
+	return k
+}
+
 // writing returns the set of names.
 func writing(names ...string) map[declaration.TableName]bool {
 	m := make(map[declaration.TableName]bool, len(names))
@@ -221,6 +227,62 @@ func TestOrder(t *testing.T) {
 			wantDeferred: []ForeignKey{deferrable(fk("a_b", "a.a", "a.b"))},
 		},
 		{
+			name:   "a key that is not enforced does not order the tables",
+			tables: []string{"a.b", "a.a"},
+			keys:   []ForeignKey{notEnforced(fk("a_b", "a.a", "a.b"))},
+			writes: []string{"a.a", "a.b"},
+			want:   []string{"a.a", "a.b"},
+		},
+		{
+			// Issue 57: the key that PostgreSQL enforces orders the tables
+			// against the order of their names.
+			name:   "cycle of two closed by a key that is not enforced",
+			tables: []string{"app.members", "app.teams"},
+			keys:   []ForeignKey{fk("members_team_id_fkey", "app.members", "app.teams"), notEnforced(fk("teams_lead_id_fkey", "app.teams", "app.members"))},
+			writes: []string{"app.members", "app.teams"},
+			want:   []string{"app.teams", "app.members"},
+		},
+		{
+			name:   "cycle of two closed by a deferrable key that is not enforced, which is not deferred",
+			tables: []string{"app.members", "app.teams"},
+			keys: []ForeignKey{
+				fk("members_team_id_fkey", "app.members", "app.teams"),
+				notEnforced(deferrable(fk("teams_lead_id_fkey", "app.teams", "app.members"))),
+			},
+			writes: []string{"app.members", "app.teams"},
+			want:   []string{"app.teams", "app.members"},
+		},
+		{
+			name:   "cycle of two whose keys are not enforced",
+			tables: []string{"a.b", "a.a"},
+			keys:   []ForeignKey{notEnforced(fk("a_b", "a.a", "a.b")), notEnforced(deferrable(fk("b_a", "a.b", "a.a")))},
+			writes: []string{"a.a", "a.b"},
+			want:   []string{"a.a", "a.b"},
+		},
+		{
+			name:   "cycle of three closed by a key that is not enforced",
+			tables: []string{"a.a", "a.b", "a.c"},
+			keys:   []ForeignKey{fk("a_b", "a.a", "a.b"), fk("b_c", "a.b", "a.c"), notEnforced(fk("c_a", "a.c", "a.a"))},
+			writes: []string{"a.a", "a.b", "a.c"},
+			want:   []string{"a.c", "a.b", "a.a"},
+		},
+		{
+			name:         "cycle of three with a deferrable key and a key that is not enforced",
+			tables:       []string{"a.a", "a.b", "a.c"},
+			keys:         []ForeignKey{deferrable(fk("a_b", "a.a", "a.b")), fk("b_c", "a.b", "a.c"), fk("c_a", "a.c", "a.a"), notEnforced(fk("a_b_old", "a.a", "a.b"))},
+			writes:       []string{"a.a", "a.b", "a.c"},
+			want:         []string{"a.a", "a.c", "a.b"},
+			wantDeferred: []ForeignKey{deferrable(fk("a_b", "a.a", "a.b"))},
+		},
+		{
+			name:   "cycle of two enforced keys beside a key that is not enforced",
+			tables: []string{"a.a", "a.b"},
+			keys:   []ForeignKey{fk("a_b", "a.a", "a.b"), fk("b_a", "a.b", "a.a"), notEnforced(fk("b_a_old", "a.b", "a.a"))},
+			writes: []string{"a.a", "a.b"},
+			wantErr: `tables a.a and a.b reference each other through foreign keys that are not deferrable, "a_b" of a.a and "b_a" of a.b, and tables a.a and a.b have rows to write, ` +
+				`so no order of these tables can write their changes: declare one of these foreign keys DEFERRABLE`,
+		},
+		{
 			name:   "two cycles without a deferrable key",
 			tables: []string{"a.a", "a.b", "b.a", "b.b"},
 			keys: []ForeignKey{
@@ -258,11 +320,12 @@ func TestOrder(t *testing.T) {
 }
 
 // checkOrder fails the test when a key that is not deferrable runs backward
-// between two tables of the order that both have rows to write.
+// between two tables of the order that both have rows to write. A key that
+// the database does not enforce may run either way.
 func checkOrder(t *testing.T, sorted []declaration.TableName, keys []ForeignKey, writes map[declaration.TableName]bool) {
 	t.Helper()
 	for _, k := range keys {
-		if !writes[k.Table] || !writes[k.References] {
+		if !writes[k.Table] || !writes[k.References] || k.NotEnforced {
 			continue
 		}
 		from, to := slices.Index(sorted, k.References), slices.Index(sorted, k.Table)
@@ -281,7 +344,7 @@ func TestOrderIsDeterministic(t *testing.T) {
 	keys := []ForeignKey{
 		fk("1", "a.c", "a.a"), fk("2", "b.b", "a.c"), deferrable(fk("3", "a.a", "b.b")),
 		deferrable(fk("4", "c.a", "c.a")), fk("5", "c.b", "b.a"), deferrable(fk("6", "a.b", "a.c")),
-		fk("7", "a.c", "a.b"),
+		fk("7", "a.c", "a.b"), notEnforced(fk("8", "b.a", "c.b")),
 	}
 	writes := writing("a.a", "c.a", "c.b", "a.b")
 	want, wantDeferred, err := order(tables, keys, writes)
@@ -327,12 +390,15 @@ func TestArrangeCycles(t *testing.T) {
 
 	keys := []ForeignKey{
 		fk("a_b", "a.a", "a.b"), fk("b_a", "a.b", "a.a"),
-		fk("c_a", "a.c", "a.a"),
+		fk("c_a", "a.c", "a.a"), notEnforced(fk("a_c", "a.a", "a.c")),
 		deferrable(fk("x_y", "x.x", "x.y")), fk("y_x", "x.y", "x.x"),
+		notEnforced(fk("y_z", "x.y", "x.z")), fk("z_y", "x.z", "x.y"),
 	}
-	o := Arrange(tns("a.c", "a.b", "a.a", "x.y", "x.x"), keys, writing("a.a", "a.b", "a.c", "x.x", "x.y"))
+	o := Arrange(tns("a.c", "a.b", "a.a", "x.z", "x.y", "x.x"), keys, writing("a.a", "a.b", "a.c", "x.x", "x.y", "x.z"))
+	// The keys that are not enforced make no cycle of a.a and a.c, nor of
+	// x.y and x.z, and are neither deferred nor named in a cycle.
 	want := Order{
-		Tables:   tns("a.a", "a.b", "a.c", "x.x", "x.y"),
+		Tables:   tns("a.a", "a.b", "a.c", "x.x", "x.y", "x.z"),
 		Deferred: []ForeignKey{deferrable(fk("x_y", "x.x", "x.y"))},
 		Cycles: []Cycle{{
 			Tables:  tns("a.a", "a.b"),

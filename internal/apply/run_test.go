@@ -633,6 +633,17 @@ func TestRun(t *testing.T) {
 			wantErr:  `tables a.child and z.parent reference each other through foreign keys that are not deferrable`,
 		},
 		{
+			// The key that is not enforced defers nothing and orders
+			// nothing: the writes follow the key that the database enforces.
+			name:     "a cycle closed by a key that is not enforced",
+			settings: sync,
+			db:       &fakeDB{diffs: full, keys: []ForeignKey{childOfParent, notEnforced(deferrable(fk("parent_child", "z.parent", "a.child")))}},
+			opts:     all,
+			want: append(diffs, "PrepareDeletes", "ForeignKeys a.child z.parent",
+				"Insert z.parent", "Update z.parent", "Insert a.child", "Delete a.child", "Delete z.parent", "CheckEffect", "DiffAgain a.child", "DiffAgain z.parent", "Commit"),
+			wantResult: Result{Inserted: 3, Updated: 1, Deleted: 3},
+		},
+		{
 			name:     "the foreign keys fail",
 			settings: sync,
 			db:       &fakeDB{diffs: full, fail: map[string]error{"ForeignKeys a.child z.parent": errDB}},
