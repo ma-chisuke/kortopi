@@ -282,5 +282,14 @@
 | private vulnerability reporting, security advisory（GitHub の） | 脆弱性の非公開報告、セキュリティアドバイザリ |
 | materialized view | マテリアライズドビュー |
 | refresh（マテリアライズドビューを） | リフレッシュする |
+| line break, end of a line | 改行、行の終わり |
+| string constant（SQL の） | 文字列定数 |
+| checkout（Git の）, check out | チェックアウト、チェックアウトする |
+| revert（Git のコミットを） | revert する |
+| base（プルリクエストの）, merge | ベース、マージ |
+| event trigger（PostgreSQL の） | イベントトリガー |
+| superuser（PostgreSQL の） | スーパーユーザー |
+| replay（スタンバイでのプライマリの変更の）, lag（スタンバイの） | 再生、遅れ |
+| conflict（スタンバイでの再生と読み込みの） | 競合 |
 
-<!-- i18n-source: translation.md sha256:962a2ca25702d13e1b76d1e0628c5ed4a0c67ff8f7210f241db0f1db888103eb -->
+<!-- i18n-source: translation.md sha256:d8951ba1d0c85396cf41bd6b537660258bc3943bcb9104006d5988739c261f2d -->

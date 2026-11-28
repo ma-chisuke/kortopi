@@ -282,3 +282,12 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | private vulnerability reporting, security advisory (on GitHub) | 脆弱性の非公開報告、セキュリティアドバイザリ |
 | materialized view | マテリアライズドビュー |
 | refresh (a materialized view) | リフレッシュする |
+| line break, end of a line | 改行、行の終わり |
+| string constant (in SQL) | 文字列定数 |
+| checkout (in Git), check out | チェックアウト、チェックアウトする |
+| revert (a commit, in Git) | revert する |
+| base (of a pull request), merge | ベース、マージ |
+| event trigger (of PostgreSQL) | イベントトリガー |
+| superuser (of PostgreSQL) | スーパーユーザー |
+| replay (of the changes of the primary on a standby), lag (of a standby) | 再生、遅れ |
+| conflict (of the replay with a read on a standby) | 競合 |

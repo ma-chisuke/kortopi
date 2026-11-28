@@ -117,14 +117,27 @@ Besides the host, the port, the user, the database, and the password, kortopi ta
 | `PGPASSFILE` | The password file, `~/.pgpass` by default, with a line for each host, port, database, and user. |
 | `PGSERVICE`, `PGSERVICEFILE` | A service of the service file, `~/.pg_service.conf` by default, which may hold every setting of the connection. |
 | `PGSSLMODE` | `disable`, `allow`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. |
-| `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. |
-| `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it. |
+| `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` | The certificate of the authority that must have signed the certificate of the server, and the certificate and the key of the client. With `verify-ca` or `verify-full`, and neither `PGSSLROOTCERT` nor `~/.postgresql/root.crt`, kortopi trusts the authorities of the system, where libpq refuses to connect: give `PGSSLROOTCERT` the certificate of your authority, to trust it alone. `PGSSLROOTCERT=system` trusts the authorities of the system, as in libpq. |
+| `PGCONNECT_TIMEOUT` | The longest time, in seconds, that an attempt to connect may take. Without it, an attempt waits as long as the operating system lets it: an attempt to an address that answered nothing ended after about 150 seconds in a test, on macOS and in a Linux container alike. Set it for a run that no one watches, such as to 10. |
+| `PGTARGETSESSIONATTRS` | The kind of server to keep, among the hosts of a list: `read-write` or `primary` for the primary, which a plan and an apply need, `standby` or `prefer-standby` for a standby, which an export can read ([kortopi export](export.md#export-from-a-standby)), and `read-only`, as in libpq. `any`, the default, keeps the first server that accepts the connection. |
 | `PGAPPNAME` | The `application_name` of the session, which `pg_stat_activity` shows: `kortopi` by default. |
 | `PGOPTIONS` | Settings of the session, written as `-c name=value`, such as `-c statement_timeout=5min`. Not behind a connection pooler in transaction mode, as below. |
 
 A setting in `PGOPTIONS` does not change a setting that kortopi pins ([How values are compared](comparison.md#the-settings-of-the-session)).
 kortopi pins them inside its transaction, after the session has started, so `-c TimeZone=Asia/Tokyo` or `-c search_path=app` changes nothing in a plan.
 An apply reads and compares in the pinned settings too, but writes with the settings of the session, those of `PGOPTIONS` included ([kortopi apply](apply.md#the-settings-of-the-writes)).
+
+`PGHOST` may name several hosts, separated by commas, and `PGPORT` one port for all of them, or one for each, in the same order.
+kortopi tries the hosts in turn, and keeps the first server that accepts the connection and is of the kind that `PGTARGETSESSIONATTRS` names:
+
+```sh
+export PGHOST=db1.example.test,db2.example.test PGTARGETSESSIONATTRS=read-write PGCONNECT_TIMEOUT=10
+kortopi apply --dir data
+```
+
+- A host that answers nothing holds up the hosts after it until `PGCONNECT_TIMEOUT` ends the attempt, or, without it, as long as the operating system lets the attempt wait.
+- A server of another kind fails its attempt, and the error of a run that finds none names the reason for each host, such as `ValidateConnect failed: server is not in hot standby mode`.
+- The password file gives the password of the first host of the list, which goes to every host: unlike libpq, which takes the line of each host, kortopi uses no line of a later host. Write the line of the first host, or give the password in `PGPASSWORD`.
 
 Behind a connection pooler in transaction mode, the start-up parameters of a connection, such as `PGOPTIONS`, do not reach the server: the pooler refuses them, and the run cannot connect, or drops them without a word.
 The settings of a session in general do not hold there, because each transaction may run on another server connection.
@@ -134,6 +147,7 @@ A setting of the role, `ALTER ROLE ... SET`, reaches the server connections that
 kortopi probes an idle connection after 10 seconds, every 5 seconds, and drops it after 4 probes without an answer, so it notices a server that no longer answers after about 30 seconds of silence, also while it waits for the answer of a commit.
 The probes go only on a connection with no data that waits for the server to acknowledge it: when the cut comes just after kortopi sent a statement or `COMMIT`, before the server acknowledged it, the wait is left to the retransmissions of TCP, which can take many minutes. The second interrupt ends that wait too.
 A service file can change this with the settings of libpq for it, which have no environment variables: `keepalives=0` turns the probes off, and `keepalives_idle`, `keepalives_interval`, and `keepalives_count` set the idle time in seconds, the interval in seconds, and the number of probes, where 0, or a negative value, keeps the value of the system, as in libpq.
+These probes tell kortopi that the server is gone. What the server keeps of a session whose client is gone is in [Run kortopi from scripts](automation.md#a-run-that-breaks-off).
 
 ### Wait for a lock
 
@@ -260,7 +274,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 ```
 
 The first error says "because the server is a standby" or "because the transaction is read-only" when that is the reason.
-A plan cannot run against a read replica.
+A plan cannot run against a read replica, and an apply cannot either; an export can ([kortopi export](export.md#export-from-a-standby)).
 
 Row-level security is an error because a plan would see only the rows that the policies allow.
 The rows that they hide would look missing: the plan would show them as rows to insert, and never as rows to update or to delete.
@@ -280,6 +294,16 @@ In the database, a plan does the following and nothing else:
 - When rows are to be deleted, it follows the foreign keys that reference them with queries, and keeps the rows that it reaches, by their identities, in one more temporary table. It deletes no row.
 - For a column with a sequence that its rows to insert or to update write values into, it reads the largest value of the column and where the sequence stands. It calls neither `nextval` nor `setval`.
 - It reads an ordinary table with `ONLY`, so the rows of a table that inherits from it are not counted, and a partitioned table as a whole. A view, a foreign table, or a sequence under a declared name is an error.
+
+PostgreSQL takes the creation of each temporary table for a DDL command, such as `CREATE TABLE AS` of a table `pg_temp.kortopi_1`, so an event trigger on DDL commands, such as one `ON ddl_command_end`, fires for it, in the session of the plan, with its role.
+A function of such a trigger that does what the role may not do fails the plan, with the error of PostgreSQL:
+
+```text
+kortopi: create the temporary table of table billing.payment_methods: ERROR: permission denied for table ddl_log (SQLSTATE 42501)
+```
+
+What the function writes is rolled back with the plan, and commits with an apply, which creates its temporary tables in the same way.
+Let the role do what the function does, or let the function leave the temporary tables of the session alone.
 
 Press Ctrl-C to stop a plan, or send it SIGTERM.
 kortopi asks the server to cancel the statement that runs, rolls the transaction back, closes the connection, and exits with status 1:

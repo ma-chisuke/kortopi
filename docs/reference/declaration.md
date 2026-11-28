@@ -44,6 +44,28 @@ A new row gets the default of every column that the file does not name, or the v
 kortopi reads the files in the sorted order of their paths and stops at the first mistake.
 Fix it, and run the plan again.
 
+### Line ends and Git
+
+A line break inside a CSV value in quotes, or inside a SQL string constant, is part of the value, with the bytes that the file holds there: LF, or CRLF.
+Git can convert the ends of lines as it checks files out, as it does with `core.autocrlf=true`, and it then converts those line breaks too.
+A checkout of a file that was committed with LF then declares CRLF in such a value, and its plan shows a change of the value:
+
+```text
+catalog.notices (upsert, key: code)
+  ~ code=shipping  body: "Orders ship within 2 days.\nHolidays excluded." -> "Orders ship within 2 days.\r\nHolidays excluded."
+  0 to insert, 1 to update
+```
+
+The `\r` is easy to miss in a long value, and an apply from that checkout writes it into the database.
+Keep the files of the data directory out of the conversion, with these lines in a `.gitattributes` at the root of the repository:
+
+```text
+*.csv -text
+*.sql -text
+```
+
+Git then checks out each such file with the bytes that were committed, whatever the settings of the checkout, and commits it with the bytes that it holds, so a value holds the line breaks that its file was committed with.
+
 ## CSV files
 
 ```csv
@@ -67,7 +89,8 @@ Each following line is one row, in the CSV format of PostgreSQL's COPY:
 - A field in double quotes may hold commas and line breaks. A double quote inside it is written twice: `"say ""hi"""`.
 - White space is part of the value: in `1, one`, the second value starts with a space, and differs from the value in `1,one`.
 - Lines may end in LF or in CRLF, and the last line needs no line break.
-- On PostgreSQL before 18, a line that is exactly `\.` is an error. COPY on those versions takes it for the end of the data and drops the rest of the file without an error. Write the value in quotes, as `"\."`, which is data on every version.
+- A line break inside a value in quotes is part of the value, with the bytes that the file holds there, so a conversion of the ends of lines changes the value ([Line ends and Git](#line-ends-and-git)).
+- On PostgreSQL before 18, a line that is exactly `\.` is an error. COPY on those versions takes it for the end of the data and drops the rest of the file without an error. Write the value in quotes, as `"\."`, which is data on every version. On PostgreSQL 18 the line is data, so a check against 18 passes a file that a server before 18 refuses: quote the value wherever a server before 18 may read the file.
 
 ### NULL and the empty string
 
@@ -143,6 +166,8 @@ A value is one of these:
 - a sign before a number: `-1`, `+2`;
 - an `ARRAY[...]` or a `ROW(...)` of such values: `ARRAY[1, 2, 3]`, `ROW(1, 'a')`.
 
+A string constant that spans lines holds the line breaks of the file, LF or CRLF, as the file holds them ([Line ends and Git](#line-ends-and-git)).
+
 Without a cast, PostgreSQL reads a constant as the type of its column, so a cast is rarely needed.
 A cast to a type outside `pg_catalog` names the schema of the type, as `pg_dump` writes it: `'ok'::facility.mood` works, and `'ok'::mood` does not.
 Built-in types such as `text`, `integer`, `date`, and `numeric(10,2)` need no schema.
@@ -200,9 +225,12 @@ Every other statement is an error that names its kind: `UPDATE`, `DELETE`, `MERG
 A SQL file is UTF-8 and holds no NUL byte.
 A byte order mark at its start is accepted.
 
-kortopi reads SQL with the parser of PostgreSQL, compiled to WebAssembly.
-Its first use in a run takes up to about a second, and a SQL file of 25 MB took about 10 seconds and about 1 GB of memory in a measurement.
+kortopi reads SQL with the parser of PostgreSQL, compiled to WebAssembly, which it starts at the first SQL file of a run.
+The start takes up to about a second, and memory whatever the size of the file: in a measurement, a plan of a SQL file of three rows needed about 280 MiB, where a plan of the same rows in a CSV file passed in 16 MiB.
+The memory grows with the SQL files: a plan of a SQL file of 25 MB, 200,000 rows as `pg_dump --column-inserts` writes them, took 1.8 GiB at its peak.
+A run that reads no SQL file does not start the parser.
 Declare large tables in CSV files: PostgreSQL reads them with COPY, and kortopi never parses them.
+[Run kortopi from scripts](automation.md#memory) gives the conditions of the measurement, and says what memory to give a job.
 
 ## kortopi.toml
 
@@ -227,6 +255,7 @@ A table that the file does not name uses mode `upsert` and matches rows by its p
   | `sync` | yes | yes | yes |
 
   In mode `insert`, a plan compares the declared rows with the stored rows by their keys only: a changed value of a row that exists is not shown, and an empty plan names the tables of mode `insert` instead of saying that the database matches the declaration ([kortopi plan](plan.md#read-the-output)).
+  Every apply inserts each declared row that the table lacks, also a row that someone deleted from the table on purpose: to keep a row deleted, remove it from the declaration too.
 
   Modes `insert` and `upsert` delete none of the stored rows that the declaration lacks, and a plan counts them on a line of the table ([kortopi plan](plan.md#stored-rows-that-the-declaration-lacks)). Mode `sync` shows each of them as a row to delete.
 
