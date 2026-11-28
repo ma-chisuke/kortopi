@@ -289,13 +289,31 @@ func (db *DB) Query(t *testing.T, sql string) [][]string {
 
 // objectsSQL lists the objects that the catalogs of a database hold:
 // schemas, relations, functions, types, operators, and extensions.
+//
+// An object made after the database, such as by the test or by kortopi, has
+// an OID of 16384 or more, FirstNormalObjectId of PostgreSQL, and gets a
+// line of its name. The objects of the template, some 5,000 with OIDs below
+// it, get one line together: their number and a digest of the columns that
+// name them, by OID, which changes when one of them is added, removed, or
+// renamed, as a line of its name would. Writing the names of all of them
+// with regprocedure and regoperator took most of the time of the query, and
+// made it one of the slowest queries of the tests on the servers.
 const objectsSQL = `
-SELECT 'schema ' || nspname FROM pg_namespace
-UNION ALL SELECT 'relation ' || oid::regclass::text || ' ' || relkind::text FROM pg_class
-UNION ALL SELECT 'function ' || oid::regprocedure::text FROM pg_proc
-UNION ALL SELECT 'type ' || oid::regtype::text FROM pg_type
-UNION ALL SELECT 'operator ' || oid::regoperator::text FROM pg_operator
-UNION ALL SELECT 'extension ' || extname FROM pg_extension
+WITH template(o) AS (
+	SELECT 'schema ' || oid || ' ' || nspname FROM pg_namespace WHERE oid < 16384
+	UNION ALL SELECT 'relation ' || oid || ' ' || relnamespace || ' ' || relname || ' ' || relkind::text FROM pg_class WHERE oid < 16384
+	UNION ALL SELECT 'function ' || oid || ' ' || pronamespace || ' ' || proname || '(' || proargtypes::text || ')' FROM pg_proc WHERE oid < 16384
+	UNION ALL SELECT 'type ' || oid || ' ' || typnamespace || ' ' || typname FROM pg_type WHERE oid < 16384
+	UNION ALL SELECT 'operator ' || oid || ' ' || oprnamespace || ' ' || oprname || '(' || oprleft || ', ' || oprright || ')' FROM pg_operator WHERE oid < 16384
+	UNION ALL SELECT 'extension ' || oid || ' ' || extname FROM pg_extension WHERE oid < 16384
+)
+SELECT 'schema ' || nspname FROM pg_namespace WHERE oid >= 16384
+UNION ALL SELECT 'relation ' || oid::regclass::text || ' ' || relkind::text FROM pg_class WHERE oid >= 16384
+UNION ALL SELECT 'function ' || oid::regprocedure::text FROM pg_proc WHERE oid >= 16384
+UNION ALL SELECT 'type ' || oid::regtype::text FROM pg_type WHERE oid >= 16384
+UNION ALL SELECT 'operator ' || oid::regoperator::text FROM pg_operator WHERE oid >= 16384
+UNION ALL SELECT 'extension ' || extname FROM pg_extension WHERE oid >= 16384
+UNION ALL SELECT 'objects of the template: ' || count(*) || ', digest ' || md5(string_agg(o, E'\n' ORDER BY o)) FROM template
 ORDER BY 1`
 
 // temporarySchema matches the temporary schemas of PostgreSQL itself,
@@ -307,7 +325,9 @@ var temporarySchema = regexp.MustCompile(`^schema pg_(toast_)?temp_\d+$`)
 
 // Objects lists the objects that the catalogs of the database hold, sorted,
 // so that a test can show that a plan or an apply left none behind
-// (ADR-0010). It leaves out the temporary schemas of PostgreSQL itself.
+// (ADR-0010). It leaves out the temporary schemas of PostgreSQL itself. The
+// objects of the template database are one line, which changes when any of
+// them changes (objectsSQL).
 func (db *DB) Objects(t *testing.T) []string {
 	t.Helper()
 	rows := db.Query(t, objectsSQL)

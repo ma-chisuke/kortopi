@@ -6,8 +6,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // orderSchema is the reproduction of issue 59: a deletion of app.plans
@@ -49,11 +47,11 @@ UNION ALL SELECT 'orders ' || string_agg(format('%s/%s/%s/%s', id, plan_code, co
 // commit; without it, it stopped on the counts with a list of causes. Both
 // now stop on the comparison of the schema after the deletions, with an
 // error that names the key, and change nothing. An apply after it plans with
-// the new key and commits (ADR-0048). It sets the environment, so it does not
-// run in parallel with other tests.
+// the new key and commits (ADR-0048).
 func TestSchemaChangedDuringTheDeletionsCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			for _, tt := range []struct {
 				name   string
 				schema string
@@ -96,6 +94,7 @@ func TestSchemaChangedDuringTheDeletionsCommand(t *testing.T) {
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, orderSchema+tt.schema)
 					e := connect(t, db)

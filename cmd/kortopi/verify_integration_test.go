@@ -5,7 +5,6 @@ package main
 import (
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -67,10 +66,9 @@ func currencyPlan(price string) string {
 // commits when the tables are as declared, also when a write wrote fewer rows
 // than the plan shows. After each apply, a plain connection reads the tables.
 func TestApplyChecksTheResultCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
+			t.Parallel()
 			for _, tt := range []struct {
 				name   string
 				schema string
@@ -488,16 +486,15 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, tt.schema)
-					user, password := db.Config.User, db.Config.Password
+					applier := db.Config
 					if tt.role != "" {
-						role := db.Role(t, "applier")
-						db.Exec(t, strings.ReplaceAll(tt.role, "{role}", role.User)+"; GRANT TEMPORARY ON DATABASE "+db.Name+" TO "+role.User)
-						user, password = role.User, role.Password
+						applier = db.Role(t, "applier")
+						db.Exec(t, strings.ReplaceAll(tt.role, "{role}", applier.User)+"; GRANT TEMPORARY ON DATABASE "+db.Name+" TO "+applier.User)
 					}
-					t.Setenv("PGPASSWORD", password)
-					t.Setenv("PGOPTIONS", tt.options)
+					e := connectAs(db, applier).withOptions(tt.options)
 					read := func() []string {
 						var got []string
 						for _, r := range db.Query(t, tt.rows) {
@@ -507,8 +504,8 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 					}
 					before, objects := read(), db.Objects(t)
 					dir := writeFiles(t, tt.files)
-					conn := []string{"--dir", dir, "--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", user, "--dbname", db.Name}
-					code, stdout, stderr := runTest(t, slices.Concat([]string{"apply"}, tt.args, conn), buildDialects(t))
+					conn := slices.Concat([]string{"--dir", dir}, e.conn)
+					code, stdout, stderr := runTest(t, slices.Concat([]string{"apply"}, tt.args, conn), e.dialects(t))
 					if got := db.Objects(t); !slices.Equal(got, objects) {
 						t.Errorf("the apply left the catalogs changed:\n%s", pgtest.Difference(objects, got))
 					}
@@ -534,7 +531,7 @@ func TestApplyChecksTheResultCommand(t *testing.T) {
 					if strings.HasPrefix(wantPlan, "No changes.") {
 						wantPlanCode = exitOK
 					}
-					code, stdout, stderr = runTest(t, slices.Concat([]string{"plan", "--exit-code"}, conn), buildDialects(t))
+					code, stdout, stderr = runTest(t, slices.Concat([]string{"plan", "--exit-code"}, conn), e.dialects(t))
 					if code != wantPlanCode || stderr != "" || stdout != wantPlan {
 						t.Errorf("plan after the apply: exit status %d, stdout:\n%s\nstderr:\n%s\nwant %d, stdout:\n%s", code, stdout, stderr, wantPlanCode, wantPlan)
 					}
@@ -569,12 +566,12 @@ func keyCascadeError(table string) string {
 // referenced key alone stops too, an UPDATE of the referenced row by hand
 // does, after which an apply finds nothing to change.
 func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
+			t.Parallel()
 			for _, price := range []string{"sales", "m"} {
 				t.Run("price in schema "+price, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, strings.ReplaceAll(`CREATE SCHEMA m; CREATE SCHEMA IF NOT EXISTS {p};
 						CREATE TABLE m.currency (id int PRIMARY KEY, iso text NOT NULL UNIQUE, name text);
@@ -582,12 +579,12 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 							product text NOT NULL, amount numeric(10,2), PRIMARY KEY (currency_iso, product));
 						INSERT INTO m.currency VALUES (1, 'JPY', 'Yen'), (2, 'USD', 'Dollar');
 						INSERT INTO {p}.price VALUES ('USD', 'p2', 1.50), ('JPY', 'p1', 100);`, "{p}", price))
-					t.Setenv("PGPASSWORD", db.Config.Password)
+					e := connect(t, db)
 					dir := writeFiles(t, map[string]string{
 						"m/currency.csv":     "id,iso,name\n1,JPN,Yen\n2,USD,Dollar\n",
 						price + "/price.csv": "currency_iso,product,amount\nJPN,p1,100\nUSD,p2,1.50\n",
 					})
-					conn := []string{"--dir", dir, "--host", db.Config.Host, "--port", strconv.Itoa(int(db.Config.Port)), "--user", db.Config.User, "--dbname", db.Name}
+					conn := slices.Concat([]string{"--dir", dir}, e.conn)
 					rows := func() []string {
 						var got []string
 						for _, r := range db.Query(t, `SELECT 'currency ' || string_agg(iso, ' ' ORDER BY id) FROM m.currency
@@ -597,7 +594,7 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 						return got
 					}
 
-					code, stdout, stderr := runTest(t, slices.Concat([]string{"apply"}, conn), buildDialects(t))
+					code, stdout, stderr := runTest(t, slices.Concat([]string{"apply"}, conn), e.dialects(t))
 					checkRun(t, code, stdout, stderr, exitError, lines(
 						"m.currency (upsert, key: id)",
 						"  ~ id=1  iso: JPY -> JPN",
@@ -624,7 +621,7 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 							"m/currency.csv": "id,iso,name\n1,JPN,Yen\n2,USD,Dollar\n",
 							"m/price.csv":    "currency_iso,product,amount\nJPY,p1,100\nUSD,p2,1.50\n",
 						})
-						code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--dir", first}, conn[2:]), buildDialects(t))
+						code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--dir", first}, conn[2:]), e.dialects(t))
 						checkRun(t, code, stdout, stderr, exitError, lines(
 							"m.currency (upsert, key: id)",
 							"  ~ id=1  iso: JPY -> JPN",
@@ -641,7 +638,7 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 						// cascade follows.
 						db.Exec(t, "UPDATE m.currency SET iso = 'JPN' WHERE id = 1")
 					} else {
-						code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--schema", "m"}, conn), buildDialects(t))
+						code, stdout, stderr = runTest(t, slices.Concat([]string{"apply", "--schema", "m"}, conn), e.dialects(t))
 						checkRun(t, code, stdout, stderr, exitOK, lines(
 							"m.currency (upsert, key: id)",
 							"  ~ id=1  iso: JPY -> JPN",
@@ -652,7 +649,7 @@ func TestApplyCascadeIntoTheMatchKey(t *testing.T) {
 							"Applied: 0 inserted, 1 updated, 0 deleted.",
 						))
 					}
-					code, stdout, stderr = runTest(t, slices.Concat([]string{"apply"}, conn), buildDialects(t))
+					code, stdout, stderr = runTest(t, slices.Concat([]string{"apply"}, conn), e.dialects(t))
 					checkRun(t, code, stdout, stderr, exitOK, "No changes. The database matches the declaration.\n")
 					if got := rows(); !slices.Equal(got, []string{"currency JPN USD", "price JPN/p1 USD/p2"}) {
 						t.Errorf("rows after the change of the key: %v", got)

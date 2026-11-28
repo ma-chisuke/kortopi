@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -20,22 +19,11 @@ func (e *e2e) command(t *testing.T, args ...string) (code int, stdout, stderr st
 	t.Helper()
 	before := e.db.Objects(t)
 	args = append(args, e.conn...)
-	code, stdout, stderr = runTest(t, args, buildDialects(t))
+	code, stdout, stderr = runTest(t, args, e.dialects(t))
 	if got := e.db.Objects(t); !slices.Equal(got, before) {
 		t.Errorf("kortopi %s left the catalogs changed:\n%s", strings.Join(args, " "), pgtest.Difference(before, got))
 	}
 	return code, stdout, stderr
-}
-
-// connect returns the e2e of a database, with the environment that the
-// command reads the password from.
-func connect(t *testing.T, db *pgtest.DB) *e2e {
-	t.Helper()
-	t.Setenv("PGPASSWORD", db.Config.Password)
-	t.Setenv("PGSSLMODE", "disable")
-	t.Setenv("PGCONNECT_TIMEOUT", "10")
-	port := strconv.Itoa(int(db.Config.Port))
-	return &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
 }
 
 // readFile returns the content of a file that the test wrote, or fails.
@@ -51,11 +39,11 @@ func readFile(t *testing.T, dir, name string) string {
 // TestExportCommand exports the tables of a database into an empty
 // directory, in each format, and a plan of that directory finds no
 // difference. A refresh needs --overwrite, keeps the declared columns, and
-// follows a change of the rows. It sets the environment, so it does not run
-// in parallel with other tests.
+// follows a change of the rows.
 func TestExportCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, e2eSchema)
 			e := connect(t, db)
@@ -161,11 +149,11 @@ func TestExportCommand(t *testing.T) {
 // TestPlanSQLCommand runs the plan as SQL through a plain connection of the
 // test, without kortopi: the deletions stay as comments, so a plan after it
 // shows them alone, and with them uncommented the database matches the
-// declaration. It sets the environment, so it does not run in parallel with
-// other tests.
+// declaration.
 func TestPlanSQLCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			dir := writeFiles(t, e2eFiles)
 			var script string
 			for _, uncomment := range []bool{false, true} {

@@ -122,6 +122,10 @@
 | self-test（`make selftest`） | 自己テスト |
 | integration test | 結合テスト |
 | unit test | 単体テスト |
+| run（テストを） in parallel、serial | 並列に動かす、順に動かす |
+| checkpoint（PostgreSQL の） | チェックポイント |
+| template database（PostgreSQL の） | テンプレートデータベース |
+| digest（一覧を代表するハッシュ） | ダイジェスト |
 | idempotent | 冪等 |
 | breaking change | 互換性を壊す変更 |
 | local environment | 手元の環境 |
@@ -288,4 +292,4 @@
 | replay（スタンバイでのプライマリの変更の）, lag（スタンバイの） | 再生、遅れ |
 | conflict（スタンバイでの再生と読み込みの） | 競合 |
 
-<!-- i18n-source: translation.md sha256:2e9c92ffac2a6bbfa31155169aec099d5afe035f511e26735b17b4d673ac0491 -->
+<!-- i18n-source: translation.md sha256:d8951ba1d0c85396cf41bd6b537660258bc3943bcb9104006d5988739c261f2d -->

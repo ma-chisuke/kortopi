@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // partitionSchema has a partitioned table with a partition, and a table that
@@ -37,11 +35,11 @@ UNION ALL SELECT 'derived ' || string_agg(format('%s/%s/%s', id, name, extra), '
 // twice: a plan and an apply stop before any comparison and name both tables
 // and both files, and an export that names both writes nothing. A partition
 // alone is planned. A table and a table that inherits from it are two sets
-// of rows, which plan and apply keep apart. It sets the environment, so it
-// does not run in parallel with other tests.
+// of rows, which plan and apply keep apart.
 func TestPartitionsAndInheritance(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, partitionSchema)
 			e := connect(t, db)

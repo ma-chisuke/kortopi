@@ -5,19 +5,17 @@ package main
 import (
 	"fmt"
 	"testing"
-
-	"github.com/ma-chisuke/kortopi/internal/postgres/pgtest"
 )
 
 // TestUndeclaredRowsCommand runs issue 30 as the binary does, against each
 // version (ADR-0046): a table of mode upsert, and of mode insert, holds a
 // row that the declaration lacks. The plan claims no match, shows the row in
 // its count, and exits with 0 with --exit-code; the plan as SQL holds the
-// lines as comments; and the apply prints them and leaves the row. It sets
-// the environment, so it does not run in parallel with other tests.
+// lines as comments; and the apply prints them and leaves the row.
 func TestUndeclaredRowsCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, `CREATE SCHEMA geo;
 				CREATE TABLE geo.currency (code text PRIMARY KEY, name text NOT NULL);
@@ -75,11 +73,11 @@ func TestUndeclaredRowsCommand(t *testing.T) {
 // upsert that the declaration lacks. The line of that table says only that
 // its mode deletes none of its rows, the effect of the deletion says that it
 // deletes the row, and an apply with --allow-delete does (ADR-0039,
-// ADR-0046). It sets the environment, so it does not run in parallel with
-// other tests.
+// ADR-0046).
 func TestUndeclaredRowsThatADeletionReaches(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, `CREATE SCHEMA app;
 				CREATE TABLE app.parent (id int PRIMARY KEY, name text NOT NULL);

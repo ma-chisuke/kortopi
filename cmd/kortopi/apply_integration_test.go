@@ -5,7 +5,6 @@ package main
 import (
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -87,7 +86,7 @@ func (e *e2e) run(t *testing.T, args ...string) (code int, stdout, stderr string
 	t.Helper()
 	before := e.db.Objects(t)
 	args = append(args, e.conn...)
-	code, stdout, stderr = runTest(t, args, buildDialects(t))
+	code, stdout, stderr = runTest(t, args, e.dialects(t))
 	if got := e.db.Objects(t); !slices.Equal(got, before) {
 		t.Errorf("kortopi %s left the catalogs changed:\n%s", strings.Join(args, " "), pgtest.Difference(before, got))
 	}
@@ -106,18 +105,14 @@ func checkRows(t *testing.T, got, want [][]string) {
 // version: the apply brings the database to the declared state, leaves the
 // deletions out without --allow-delete, stops at the limit, refuses a table
 // that waits for the schema change, and changes nothing when a statement
-// fails. It sets the environment, so it does not run in parallel with other
-// tests.
+// fails.
 func TestApplyCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, e2eSchema+applySchema)
-			t.Setenv("PGPASSWORD", db.Config.Password)
-			t.Setenv("PGSSLMODE", "disable")
-			t.Setenv("PGCONNECT_TIMEOUT", "10")
-			port := strconv.Itoa(int(db.Config.Port))
-			e := &e2e{db: db, conn: []string{"--host", db.Config.Host, "--port", port, "--user", db.Config.User, "--dbname", db.Name}}
+			e := connect(t, db)
 			dir := writeFiles(t, e2eFiles)
 			checkRows(t, db.Query(t, applyRows), rowsBefore)
 

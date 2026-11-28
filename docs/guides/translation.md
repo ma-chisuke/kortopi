@@ -122,6 +122,10 @@ Use these Japanese terms. The table grows when a new term appears; add the term 
 | self-test (`make selftest`) | 自己テスト |
 | integration test | 結合テスト |
 | unit test | 単体テスト |
+| run (tests) in parallel, serial | 並列に動かす、順に動かす |
+| checkpoint (of PostgreSQL) | チェックポイント |
+| template database (of PostgreSQL) | テンプレートデータベース |
+| digest (a hash that stands for a list) | ダイジェスト |
 | idempotent | 冪等 |
 | breaking change | 互換性を壊す変更 |
 | local environment | 手元の環境 |

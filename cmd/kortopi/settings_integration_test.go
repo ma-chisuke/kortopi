@@ -24,14 +24,17 @@ INSERT INTO ev.times VALUES (1, '2026-01-02 03:04:05+00', '2026-02-03'), (2, '20
 // PGOPTIONS. A setting that kortopi pins, such as TimeZone, DateStyle, or
 // search_path, changes nothing in a plan. lock_timeout and statement_timeout
 // end the wait for a lock that another session holds, and the error says so
-// in the words of kortopi. It sets the environment, so it does not run in
-// parallel with other tests.
+// in the words of kortopi. The command reads the password, the other
+// settings of the connection, and PGOPTIONS from the environment of the
+// process, as the binary does, which the tests that run in parallel leave
+// alone (ADR-0052). It sets the environment, so it does not run in parallel
+// with other tests.
 func TestSettingsFromTheEnvironment(t *testing.T) {
 	for _, srv := range pgtest.Servers() {
 		t.Run(srv.Name, func(t *testing.T) {
 			db := srv.Database(t)
 			db.Exec(t, timesSchema)
-			e := connect(t, db)
+			e := connectFromEnvironment(t, db)
 			// The instant of row 2 has no offset, and its date is ISO: the
 			// pinned TimeZone UTC and DateStyle ISO read them as stored.
 			dir := writeFiles(t, map[string]string{"ev/times.csv": "id,at,day\n1,2026-01-02 03:04:05+00,2026-02-03\n2,2026-01-02 03:04:05,2026-02-03\n"})

@@ -115,7 +115,7 @@ func (e *e2e) start(t *testing.T, again <-chan struct{}, args ...string) (*start
 	ctx, interrupt := context.WithCancel(t.Context())
 	r := &started{code: make(chan int, 1)}
 	args = append(args, e.conn...)
-	dialects := buildDialects(t)
+	dialects := e.dialects(t)
 	go func() {
 		r.code <- run(ctx, args, env{stdout: &r.stdout, stderr: &r.stderr, dialects: dialects, again: again})
 	}()
@@ -139,11 +139,11 @@ func (r *started) wait(t *testing.T) int {
 // runs, while it waits for a row that another session holds, and while it
 // waits for another apply. kortopi says that nothing was changed, and it is
 // true at once: its process on the server holds no lock and goes, and no row
-// changed (ADR-0043). It sets the environment, so it does not run in
-// parallel with other tests.
+// changed (ADR-0043).
 func TestInterruptedApplyCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			for _, tt := range []struct {
 				name string
 				// file is the one table that the declaration changes, lock
@@ -157,6 +157,7 @@ func TestInterruptedApplyCommand(t *testing.T) {
 				{name: "a wait for another apply", file: "m/status.csv", lock: fmt.Sprintf("SELECT pg_advisory_xact_lock(%d)", kortopiLock), state: "wait_event = 'advisory'", wait: true},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, statusSchema+slowItemSchema)
 					e := connect(t, db)
@@ -191,14 +192,15 @@ func TestInterruptedApplyCommand(t *testing.T) {
 // waits. kortopi says at once that the commit goes on. Then either the commit
 // gets its answer, and the apply succeeds, or the second interrupt gives up
 // the wait, and the apply says that the outcome is not known; the server
-// finishes the commit all the same (ADR-0043). It sets the environment, so
-// it does not run in parallel with other tests.
+// finishes the commit all the same (ADR-0043).
 func TestInterruptedCommitCommand(t *testing.T) {
 	notice := "kortopi: " + errCommitStarted.Error() + "\n"
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			for _, gaveUp := range []bool{false, true} {
 				t.Run(fmt.Sprintf("second interrupt %v", gaveUp), func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, statusSchema+atCommitTrigger)
 					e := connect(t, db)
@@ -244,12 +246,12 @@ func TestInterruptedCommitCommand(t *testing.T) {
 // --lock-timeout 2s` while its commit waits in a deferred trigger for a lock
 // that another session holds. The interrupt does not stop the commit, which
 // the lock timeout then ends: kortopi prints that error, and not that the
-// apply was stopped, and that nothing was changed. It sets the environment,
-// so it does not run in parallel with other tests.
+// apply was stopped, and that nothing was changed.
 func TestCommitRejectedAfterAnInterruptCommand(t *testing.T) {
 	notice := "kortopi: " + errCommitStarted.Error() + "\n"
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			db := srv.Database(t)
 			db.Exec(t, statusSchema+atCommitTrigger)
 			e := connect(t, db)
@@ -275,11 +277,11 @@ func TestCommitRejectedAfterAnInterruptCommand(t *testing.T) {
 // TestLockTimeoutCommand gives each command --lock-timeout 200ms, and the
 // session a lock_timeout of 20s of its own in PGOPTIONS. The run stops after
 // the time of the flag in each phase where it waits for a lock that another
-// session holds, says so, and names the flag (ADR-0044). It sets the
-// environment, so it does not run in parallel with other tests.
+// session holds, says so, and names the flag (ADR-0044).
 func TestLockTimeoutCommand(t *testing.T) {
-	for _, srv := range pgtest.Servers() {
+	for _, srv := range eachServer(t) {
 		t.Run(srv.Name, func(t *testing.T) {
+			t.Parallel()
 			tableLock := "LOCK TABLE m.status IN ACCESS EXCLUSIVE MODE"
 			for _, tt := range []struct {
 				name     string
@@ -319,10 +321,10 @@ func TestLockTimeoutCommand(t *testing.T) {
 				},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					db := srv.Database(t)
 					db.Exec(t, statusSchema+tt.schema)
-					e := connect(t, db)
-					t.Setenv("PGOPTIONS", "-c lock_timeout=20s")
+					e := connect(t, db).withOptions("-c lock_timeout=20s")
 					dir := writeFiles(t, map[string]string{"m/status.csv": interruptFiles["m/status.csv"]})
 					args := []string{tt.command, "--dir", dir, "--lock-timeout", "200ms"}
 					if tt.command == "export" {
