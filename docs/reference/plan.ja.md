@@ -117,14 +117,27 @@ kortopi:   127.0.0.1:5432 (127.0.0.1): failed SASL auth: FATAL: password authent
 | `PGPASSFILE` | パスワードファイル。既定は `~/.pgpass` で、ホスト・ポート・データベース・ユーザーごとに1行を持つ。 |
 | `PGSERVICE`、`PGSERVICEFILE` | サービスファイルのサービス。サービスファイルの既定は `~/.pg_service.conf` で、接続のすべての設定を持てる。 |
 | `PGSSLMODE` | `disable`・`allow`・`prefer`（既定）・`require`・`verify-ca`・`verify-full` のどれか。 |
-| `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。 |
-| `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。 |
+| `PGSSLROOTCERT`、`PGSSLCERT`、`PGSSLKEY` | サーバーの証明書に署名しているべき認証局の証明書と、クライアントの証明書と鍵。`verify-ca` か `verify-full` で、`PGSSLROOTCERT` も `~/.postgresql/root.crt` もないとき、kortopi はシステムの認証局を信頼する。libpq は、このとき接続を拒む。自分の認証局だけを信頼するには、その証明書を `PGSSLROOTCERT` に与える。`PGSSLROOTCERT=system` は、libpq と同じくシステムの認証局を信頼する。 |
+| `PGCONNECT_TIMEOUT` | 接続の1回の試みにかけてよい最長の秒数。ないときは、オペレーティングシステムが許すだけ待つ。ある試験では、何も応答しないアドレスへの試みは約 150 秒で終わった。macOS でも Linux のコンテナでも同じだった。誰も見ていない実行では、10 などに設定する。 |
+| `PGTARGETSESSIONATTRS` | ホストの一覧のうち、残すサーバーの種類。計画と apply が要するプライマリには `read-write` か `primary`、スタンバイには `standby` か `prefer-standby` を使う。書き出しはスタンバイを読める（[kortopi export](export.ja.md#スタンバイからの書き出し)）。libpq と同じく `read-only` もある。既定の `any` は、接続を受け付けた最初のサーバーを残す。 |
 | `PGAPPNAME` | セッションの `application_name`。`pg_stat_activity` に表示される。既定は `kortopi` である。 |
 | `PGOPTIONS` | セッションの設定。`-c statement_timeout=5min` のように `-c name=value` の形で書く。後で述べるとおり、トランザクションモードのコネクションプーラーの後ろでは届かない。 |
 
 `PGOPTIONS` の設定は、kortopi が固定する設定を変えない（[値の比べ方](comparison.ja.md#セッションの設定)）。
 kortopi は、セッションが始まったあとで、自分のトランザクションの中でそれらを固定する。そのため、`-c TimeZone=Asia/Tokyo` や `-c search_path=app` は計画の何も変えない。
 apply も固定した設定で読み、比べる。ただし書き込みは、`PGOPTIONS` の設定も含めたセッションの設定で行う（[kortopi apply](apply.ja.md#書き込みの設定)）。
+
+`PGHOST` はコンマで区切って複数のホストを挙げられる。`PGPORT` は、すべてに共通の1つのポートか、同じ順に各ホストのポートを挙げる。
+kortopi はホストを順に試し、接続を受け付け、かつ `PGTARGETSESSIONATTRS` の示す種類である最初のサーバーを残す。
+
+```sh
+export PGHOST=db1.example.test,db2.example.test PGTARGETSESSIONATTRS=read-write PGCONNECT_TIMEOUT=10
+kortopi apply --dir data
+```
+
+- 何も応答しないホストは、`PGCONNECT_TIMEOUT` が試みを終えるまで、それがなければオペレーティングシステムが許すだけ、後のホストを待たせる。
+- 種類の違うサーバーへの試みは失敗する。どれも見つからなかった実行のエラーは、ホストごとに理由を挙げる。`ValidateConnect failed: server is not in hot standby mode` などである。
+- パスワードファイルからは一覧の最初のホストのパスワードを取り、それをすべてのホストに使う。libpq はホストごとの行を使うが、kortopi は後のホストの行を使わない。最初のホストの行を書くか、`PGPASSWORD` でパスワードを与える。
 
 トランザクションモードのコネクションプーラーの後ろでは、`PGOPTIONS` のような接続の起動パラメータはサーバーに届かない。プーラーはそれを拒んで実行が接続できなくなるか、何も言わずに捨てる。
 セッションの設定も、全般にそこでは保たれない。トランザクションごとに、別のサーバーとの接続で動くことがあるからである。
@@ -134,6 +147,7 @@ kortopi が自分で設定するものは、どれも自分のトランザクシ
 kortopi は、通信のない接続に 10 秒後からプローブを送り、5 秒おきに送り、応答のないプローブが4回で接続を落とす。そのため、応答しなくなったサーバーには約 30 秒の沈黙のあとに気付く。コミットの応答を待つ間も同じである。
 プローブを送るのは、サーバーの確認応答を待つデータのない接続だけである。kortopi が文や `COMMIT` を送った直後、サーバーが確認応答する前に切れたときは、待つのは TCP の再送に委ねられ、何分もかかることがある。その待ちも、2度目の割り込みで終わらせられる。
 サービスファイルでは、そのための libpq の設定でこれを変えられる。これらの設定に環境変数はない。`keepalives=0` はプローブを止める。`keepalives_idle`・`keepalives_interval`・`keepalives_count` は、待つ秒数・間隔の秒数・プローブの回数を設定する。libpq と同じく、0 と負の値はシステムの値を保つ。
+これらのプローブは、サーバーがいなくなったことを kortopi に知らせる。クライアントのいなくなったセッションをサーバーがどう保つかは、[スクリプトから kortopi を実行する](automation.ja.md#途中で途切れた実行)にある。
 
 ### ロックを待つとき
 
@@ -260,7 +274,7 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 ```
 
 理由がスタンバイや読み取り専用のトランザクションなら、1つ目のエラーは「because the server is a standby」や「because the transaction is read-only」と示す。
-リードレプリカに対しては、計画を立てられない。
+リードレプリカに対しては、計画を立てられず、apply もできない。書き出しはできる（[kortopi export](export.ja.md#スタンバイからの書き出し)）。
 
 行単位セキュリティをエラーにするのは、計画にはポリシーが許す行しか見えないからである。
 ポリシーが隠す行は、存在しないように見える。計画はそれらを挿入する行として示し、更新する行や削除する行としては決して示さない。
@@ -280,6 +294,16 @@ kortopi: table facility.room_types has row-level security, so the role "planner"
 - 削除する行があるときは、それを参照する外部キーを問い合わせでたどり、たどり着いた行を識別子でもう1つの一時テーブルに控える。行は削除しない。
 - 挿入する行か更新する行が値を書く、シーケンスを持つ列については、列の最大の値と、シーケンスの位置を読む。`nextval` も `setval` も呼ばない。
 - ふつうのテーブルは `ONLY` を付けて読むので、そのテーブルを継承するテーブルの行は数えない。パーティションテーブルは全体を読む。宣言した名前がビュー・外部テーブル・シーケンスを指していればエラーである。
+
+PostgreSQL は、一時テーブルの作成のそれぞれを DDL のコマンドとみなす。テーブル `pg_temp.kortopi_1` の `CREATE TABLE AS` などである。そのため、`ON ddl_command_end` のような DDL のコマンドのイベントトリガーが、計画のセッションの中で、そのロールで、作成ごとに動く。
+そうしたトリガーの関数がロールにできないことをすれば、計画は PostgreSQL のエラーで失敗する。
+
+```text
+kortopi: create the temporary table of table billing.payment_methods: ERROR: permission denied for table ddl_log (SQLSTATE 42501)
+```
+
+関数が書いたものは、計画とともにロールバックされる。apply も同じように一時テーブルを作り、関数が書いたものはそのコミットとともに残る。
+関数のすることをロールに許すか、セッションの一時テーブルを関数の対象から外す。
 
 計画を止めるには Ctrl-C を押すか、SIGTERM を送る。
 kortopi は動いている文のキャンセルをサーバーに求め、トランザクションをロールバックし、接続を閉じ、終了コード 1 で終わる。
@@ -873,4 +897,4 @@ fi
 
 この振る舞いの理由は、[ADR-0016](../adr/ADR-0016-plan-by-reading-the-target-database.ja.md)・[ADR-0020](../adr/ADR-0020-runnable-sql-instead-of-generated-migrations.ja.md)・[ADR-0021](../adr/ADR-0021-cli-with-subcommands.ja.md)・[ADR-0024](../adr/ADR-0024-plan-in-one-rolled-back-transaction-and-print-what-differs.ja.md)・[ADR-0029](../adr/ADR-0029-print-the-plan-as-sql-in-the-order-of-an-apply.ja.md)・[ADR-0031](../adr/ADR-0031-stop-on-rows-declared-twice-and-near-names-and-claim-only-what-was-compared.ja.md)・[ADR-0034](../adr/ADR-0034-let-a-plan-stop-on-every-name-that-the-database-lacks.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0046](../adr/ADR-0046-count-the-stored-rows-that-the-declaration-lacks-in-modes-that-delete-no-row.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: plan.md sha256:2d8c71c6cd17ef00d3fc596a653b43392efc40400472709ea0b84c12ff872c59 -->
+<!-- i18n-source: plan.md sha256:c8051b82c4bf52eedb6d36acfca57309c21f2b359cbd838e57d7f0debab01c9b -->

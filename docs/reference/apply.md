@@ -629,7 +629,7 @@ It then compares the declaration with the rows that the first one wrote.
 
 The lock belongs to the transaction, not to the connection, so it also works through a connection pooler in transaction mode, and it ends with the transaction.
 An interrupted apply ends its transaction before it exits ([Interrupt an apply](#interrupt-an-apply)).
-When kortopi is killed, or its connection is cut, the transaction ends once the server notices that the connection is gone, which can take long when the session waits or runs a statement.
+When kortopi is killed, or its connection is cut, the transaction ends once the server notices that kortopi is gone, which can take long: a statement that runs, such as a wait for a row, runs to its end first unless the server checks the connection while it runs, and a session behind a cut network then waits for its client until a setting of the server ends it ([Run kortopi from scripts](automation.md#a-run-that-breaks-off)).
 It is a lock of the server, not an object in the database.
 
 When the wait for another apply reaches the limit of `--lock-timeout`, or of `lock_timeout` of the session, the apply stops:
@@ -669,6 +669,14 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 
 - Each apply is a transaction of its own: when the second fails, the first stays committed. Run them again after a fix; an apply of rows that are applied already changes nothing.
 - When a table of one schema references a table of another, apply the referenced schema first. A row that breaks a foreign key to a table outside the run fails with the error of PostgreSQL ([Foreign keys and cycles](#foreign-keys-and-cycles)).
+- Two schemas whose tables reference each other in both directions have no such order. When `inv.room_types` references `bill.tax_rates`, and `bill.rate_plans` references `inv.room_types`, a declaration that adds a tax rate, a room type that uses it, and a rate plan that uses the room type fails in the run of either schema first, on the foreign key to the rows that the other run would insert:
+
+  ```text
+  kortopi: insert into table inv.room_types: insert or update on table "room_types" violates foreign key constraint "room_types_tax_rate_name_fkey" (detail: Key (tax_rate_name)=(standard) is not present in table "tax_rates".) (constraint: room_types_tax_rate_name_fkey): a row refers to a row that does not exist: declare the referenced row too, or correct the reference
+  kortopi: nothing was changed
+  ```
+
+  Apply such a change in one run without `--schema`, as a role that may write both schemas, or in two deployments: the first adds the tax rate, and the second the room type and the rate plan, with the run of `inv` before the run of `bill`.
 - Deletions run in the reverse order: delete the referencing rows in the run of their schema before the run that deletes the rows that they reference.
 
 ## Known limits
@@ -695,6 +703,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - An apply keeps the declared rows loaded and the changed rows locked until it commits. Each write also keeps a temporary table of the rows that it picked, and an insert with values of `on_insert` one of those values, until the commit. Each of these tables holds a lock until the commit, so an apply that writes hundreds of tables may need more locks than `max_locks_per_transaction` allows by default: it then fails with `out of shared memory` and a hint to raise the setting, and nothing is changed.
 - After a commit, PostgreSQL's own temporary schemas, `pg_temp_N` and `pg_toast_temp_N`, stay in the catalogs, empty. They are not objects of kortopi.
 - Not tested: a standby, Aurora PostgreSQL, and a real connection pooler, through which `--lock-timeout` holds and a cancel request is forwarded by design. No test cuts the network either.
+- By hand, against PostgreSQL 18.7 and its streaming standby, a plan and an apply on the standby stopped with the error that the server is a standby, and an export read it ([kortopi export](export.md#export-from-a-standby)).
 
 ## Common errors
 

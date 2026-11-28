@@ -638,7 +638,7 @@ apply が 2 で終わることはない。コミットした apply は、省い�
 
 ロックは接続ではなくトランザクションに属する。そのため、トランザクションモードのコネクションプーラーを通しても働き、トランザクションとともに終わる。
 割り込まれた apply は、終了する前にトランザクションを終える（[apply に割り込む](#apply-に割り込む)）。
-kortopi が強制終了されたときや接続が切れたときは、接続がなくなったことにサーバーが気付いたときにトランザクションが終わる。セッションが待っているか文を実行しているときは、それに長くかかることがある。
+kortopi が強制終了されたときや接続が切れたときは、kortopi がいなくなったことにサーバーが気付いたときにトランザクションが終わる。それには長くかかることがある。行を待つ文のように実行中の文は、実行中に接続をサーバーが確かめない限り、まず最後まで動く。ネットワークが切れた先のセッションは、そのあと、サーバーの設定が終わらせるまでクライアントを待つ（[スクリプトから kortopi を実行する](automation.ja.md#途中で途切れた実行)）。
 これはサーバーのロックであり、データベースのオブジェクトではない。
 
 別の apply を待つのが `--lock-timeout` かセッションの `lock_timeout` の上限に達すると、apply は止まる。
@@ -678,6 +678,14 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 
 - apply はそれぞれ別のトランザクションである。2つ目が失敗しても、1つ目のコミットは残る。直したら、もう一度実行する。適用済みの行の apply は何も変えない。
 - あるスキーマのテーブルが別のスキーマのテーブルを参照するときは、参照されるスキーマを先に適用する。実行の外にあるテーブルへの外部キーを破る行は、PostgreSQL のエラーで失敗する（[外部キーと循環](#外部キーと循環)）。
+- テーブルが両方向に参照し合う2つのスキーマには、そうした順番がない。`inv.room_types` が `bill.tax_rates` を参照し、`bill.rate_plans` が `inv.room_types` を参照するとしよう。税率と、それを使う部屋の種類と、その部屋の種類を使う料金プランを足す宣言は、どちらのスキーマの実行を先にしても失敗する。もう一方の実行が挿入するはずの行への外部キーで止まるからである。
+
+  ```text
+  kortopi: insert into table inv.room_types: insert or update on table "room_types" violates foreign key constraint "room_types_tax_rate_name_fkey" (detail: Key (tax_rate_name)=(standard) is not present in table "tax_rates".) (constraint: room_types_tax_rate_name_fkey): a row refers to a row that does not exist: declare the referenced row too, or correct the reference
+  kortopi: nothing was changed
+  ```
+
+  そうした変更は、両方のスキーマに書けるロールで `--schema` なしの1回の実行で適用するか、2回のデプロイに分ける。1回目は税率を足し、2回目は部屋の種類と料金プランを足す。2回目では、`inv` の実行を `bill` の実行より先にする。
 - 削除は逆の順番になる。参照する行をそのスキーマの実行で削除してから、参照される行を削除する実行に移る。
 
 ## 分かっている制限
@@ -705,6 +713,7 @@ PGUSER=notification_owner PGPASSWORD="$NOTIFICATION_OWNER_PASSWORD" kortopi appl
 - apply は、コミットするまで、宣言の行を読み込んだままにし、変えた行をロックし続ける。書き込みが選んだ行の一時テーブルも、書き込みごとに1つコミットまで残る。`on_insert` の値を持つ挿入では、その値の一時テーブルももう1つ残る。これらのテーブルはどれもコミットまでロックを持つ。そのため、数百のテーブルを書く apply は、`max_locks_per_transaction` の既定値が許すより多いロックを要することがある。このとき apply は `out of shared memory` とその設定を上げるヒントで失敗し、何も変わらない。
 - コミットのあと、PostgreSQL 自身の一時スキーマ `pg_temp_N` と `pg_toast_temp_N` が、空のままカタログに残る。これらは kortopi のオブジェクトではない。
 - テストしていないもの：スタンバイ、Aurora PostgreSQL、本物のコネクションプーラー。プーラーを通しても、`--lock-timeout` は効き、キャンセル要求は転送される設計である。ネットワークを切るテストもない。
+- PostgreSQL 18.7 とそのストリーミングのスタンバイに対して手で試すと、スタンバイでの計画と apply は、サーバーがスタンバイであるというエラーで止まり、書き出しはスタンバイを読んだ（[kortopi export](export.ja.md#スタンバイからの書き出し)）。
 
 ## よくあるエラー
 
@@ -1076,4 +1085,4 @@ kortopi: an apply needs session_replication_role = origin, but the session has "
 
 この振る舞いの理由は、[ADR-0017](../adr/ADR-0017-apply-in-one-transaction-in-foreign-key-order.ja.md)・[ADR-0018](../adr/ADR-0018-guard-deletions.ja.md)・[ADR-0026](../adr/ADR-0026-run-an-apply-in-one-snapshot-under-a-lock-of-the-transaction.ja.md)・[ADR-0027](../adr/ADR-0027-allow-deletions-with-a-flag-and-a-limit-of-the-run.ja.md)・[ADR-0037](../adr/ADR-0037-write-with-the-settings-of-the-session-and-decide-in-the-pinned-settings.ja.md)・[ADR-0038](../adr/ADR-0038-stop-on-a-rule-of-a-table-that-an-apply-would-write-through.ja.md)・[ADR-0039](../adr/ADR-0039-plan-and-guard-the-whole-effect-of-deletions.ja.md) にある。そのあとの決定は、[ADR-0042](../adr/ADR-0042-compare-every-declared-table-again-before-the-commit-of-an-apply.ja.md)・[ADR-0043](../adr/ADR-0043-cancel-the-statement-of-an-interrupted-run-and-give-up-a-commit-only-on-a-second-interrupt.ja.md)・[ADR-0044](../adr/ADR-0044-set-the-lock-timeout-of-a-run-with-a-flag-local-to-each-transaction.ja.md)・[ADR-0049](../adr/ADR-0049-leave-foreign-keys-not-enforced-out-of-the-order-of-an-apply.ja.md)・[ADR-0050](../adr/ADR-0050-sum-up-the-levels-that-repeat-a-foreign-key-in-one-line-of-the-plan.ja.md)・[ADR-0051](../adr/ADR-0051-let-the-settings-name-the-tables-that-the-deletions-of-an-apply-may-change-beyond-its-plan.ja.md) にある。
 
-<!-- i18n-source: apply.md sha256:e11abc9ed9fc78aac29628d3fd1b50c4b97e6205a5241a06e93b020f25f2ac0e -->
+<!-- i18n-source: apply.md sha256:c05dbcdf996a4a2008a61f9f85be2bfad19b233651e6422af0c97eb118ab4007 -->
